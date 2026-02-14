@@ -23,9 +23,9 @@ class BaseFuntionTool<T extends z.ZodType, K> {
       const parameters = await this.#schema.parseAsync(JSON.parse(json))
       const result = this.#function(parameters)
       if (result instanceof Promise) {
-        return { success: true, result: await result }
+        return await result
       } else {
-        return { success: true, result }
+        return result
       }
     } catch (e) {
       if (e instanceof Error)
