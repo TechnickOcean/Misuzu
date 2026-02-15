@@ -29,7 +29,7 @@ export type ModelWithTools = keyof typeof function_caller_models
 export type ModelWithoutTools = keyof typeof normal_models
 export type Model = ModelWithTools | ModelWithoutTools
 
-type ToolsArg<M extends Model> = M extends ModelWithTools ? [tools: ChatCompletionTool[]] : []
+type ToolsArg<M extends Model> = M extends ModelWithTools ? [tools?: ChatCompletionTool[]] : []
 
 async function requestAPI<M extends Model>(
   model: M,

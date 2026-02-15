@@ -15,6 +15,7 @@ class ToolLoopAgent {
   #model
   #tools
   #onStepEnd
+  instruction
   reasoning_flow: string[] = []
   context: ChatCompletionMessageParam[] = []
   constructor({
@@ -28,6 +29,7 @@ class ToolLoopAgent {
     tools: Tool[]
     onStepEnd?: (callInfo: stepEndCallbackResp) => void
   }) {
+    this.instruction = instruction
     this.#model = model
     this.#tools = tools
     this.context.push({ role: "system", content: instruction })
@@ -39,6 +41,7 @@ class ToolLoopAgent {
         toolcalls.map(async (toolcall) => {
           const callInfo = toolcall.type === "function" ? toolcall.function : toolcall.custom
           const targetTool = this.#tools.find((tool) => tool.name === callInfo.name)
+          console.log(`Calling ${targetTool?.name} with ${JSON.stringify(callInfo)}`)
           return {
             content:
               (await targetTool?.execute(
@@ -50,7 +53,7 @@ class ToolLoopAgent {
         })
       )
         .then((results) => {
-          this.context.concat(results)
+          this.context = this.context.concat(results)
           resolve(results)
         })
         .catch((e) => {
@@ -59,8 +62,33 @@ class ToolLoopAgent {
     })
   }
   async compact() {
-    // TODO
-    return
+    // https://github.com/anomalyco/opencode/blob/eb553f53ac9689ab2056fceea0c7b0504f642101/packages/opencode/src/agent/prompt/compaction.txt
+    const prompt = `You are a helpful AI assistant tasked with summarizing conversations.
+
+    When asked to summarize, provide a detailed but concise summary of the conversation.
+    Focus on information that would be helpful for continuing the conversation, including:
+    - What was done
+    - What is currently being worked on
+    - Which files are being modified
+    - What needs to be done next
+    - Key user requests, constraints, or preferences that should persist
+    - Important technical decisions and why they were made
+    
+    Your summary should be comprehensive enough to provide context but concise enough to be quickly understood.
+    
+    Do not respond to any questions in the conversation, only output the summary.`
+    const nr = await requestAPI(this.#model, [
+      {
+        role: "system",
+        content: prompt
+      },
+      ...this.context.slice(1)
+    ])
+    if (!nr.choices) return
+    this.context = [
+      { role: "system", content: this.instruction },
+      { role: "user", content: nr.choices[0]?.message.content ?? "" }
+    ]
   }
   async step() {
     let nextStepFlag = true
@@ -83,8 +111,11 @@ class ToolLoopAgent {
           break
         case "content_filter":
           nextStepFlag = false
+          this.context.splice(
+            this.context.findLastIndex((i) => i.role === "user"),
+            1
+          )
           console.log("filtered")
-          // pop last user input here
           break
         case "length":
           console.log(choice.message.content)
