@@ -1,6 +1,6 @@
 import { $ } from "bun"
 import * as z from "zod"
-import BaseFuntionTool from "../base/FunctionTool"
+import BaseFunctionTool from "../base/FunctionTool"
 import "dotenv/config"
 
 //? ddg for now, https://serper.dev/ is better
@@ -24,7 +24,7 @@ async function call_search(keywords: string) {
   return result.data
 }
 
-async function url2markdown(url: string) {
+async function url2markdown({ url }: { url: string }) {
   const cf2mdSchema = z.object({
     success: z.boolean(),
     result: z.optional(
@@ -42,6 +42,7 @@ async function url2markdown(url: string) {
   })
   const origin_html = await (await fetch(url)).blob()
   const fd = new FormData()
+  // TODO: test if ext name will affect parse result (pdf)
   fd.set("files", origin_html, "html2md.html")
   const raw = await (
     await fetch("https://api.cloudflare.com/client/v4/accounts/d5c2facf4cd13419884d0c4d0bf0f081/ai/tomarkdown", {
@@ -75,7 +76,7 @@ async function parsed_results({ keywords }: { keywords: string }) {
         raw_results.map(async (r) => {
           let content: Awaited<ReturnType<typeof url2markdown>> | undefined
           try {
-            content = await url2markdown(r.url)
+            content = await url2markdown({ url: r.url })
           } catch {
             return undefined
           }
@@ -95,7 +96,7 @@ async function parsed_results({ keywords }: { keywords: string }) {
   }
 }
 
-const websearch = new BaseFuntionTool({
+export const websearch = new BaseFunctionTool({
   name: "websearch",
   description: "Search the web",
   schema: z.object({
@@ -104,4 +105,14 @@ const websearch = new BaseFuntionTool({
   func: parsed_results
 })
 
-export default websearch
+export const fecthMarkdown = new BaseFunctionTool({
+  name: "fecthMarkdown",
+  description: `Fetch certain url, return markdown type contents.
+  Supported MimeTypes: PDF Documents, Images, HTML, XML, Microsoft Office Documents, Open Document Format, CSV, Apple Documents`,
+  schema: z.object({
+    url: z.url().meta({ description: "Target url started with `http://` or `https://` schema" })
+  }),
+  func: url2markdown
+})
+
+await websearch.execute('{"keywords": "学园偶像大师"}')

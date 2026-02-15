@@ -17,7 +17,6 @@ def search(keywords):
   '''
   return ddg_api.search(keywords)
 
-
 if len(sys.argv) > 1:
   print(dumps(search(' '.join(sys.argv[1:]))))
 else:

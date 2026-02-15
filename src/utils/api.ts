@@ -25,13 +25,13 @@ const models = {
   ...normal_models
 }
 
-type ModelWithTools = keyof typeof function_caller_models
-type ModelWithoutTools = keyof typeof normal_models
-type AnyModel = ModelWithTools | ModelWithoutTools
+export type ModelWithTools = keyof typeof function_caller_models
+export type ModelWithoutTools = keyof typeof normal_models
+export type Model = ModelWithTools | ModelWithoutTools
 
-type ToolsArg<M extends AnyModel> = M extends ModelWithTools ? [tools: ChatCompletionTool[]] : []
+type ToolsArg<M extends Model> = M extends ModelWithTools ? [tools: ChatCompletionTool[]] : []
 
-async function requestAPI<M extends AnyModel>(
+async function requestAPI<M extends Model>(
   model: M,
   messages: ChatCompletionMessageParam[],
   ...args: ToolsArg<M>

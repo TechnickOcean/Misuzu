@@ -1,8 +1,8 @@
 import type { ChatCompletionTool } from "openai/resources"
 import type * as z from "zod"
 
-class BaseFuntionTool<T extends z.ZodType, K> {
-  #name: string
+class BaseFunctionTool<T extends z.ZodType, K> {
+  name: string
   #description: string
   #schema: T
   #function: (para: z.infer<T>) => K
@@ -13,7 +13,7 @@ class BaseFuntionTool<T extends z.ZodType, K> {
     schema,
     func
   }: { name: string; description: string; schema: T; func: (para: z.infer<T>) => K }) {
-    this.#name = name
+    this.name = name
     this.#schema = schema
     this.#description = description
     this.#function = func
@@ -23,21 +23,24 @@ class BaseFuntionTool<T extends z.ZodType, K> {
       const parameters = await this.#schema.parseAsync(JSON.parse(json))
       const result = this.#function(parameters)
       if (result instanceof Promise) {
-        return await result
+        return JSON.stringify(await result)
       } else {
-        return result
+        return JSON.stringify(result)
       }
     } catch (e) {
       if (e instanceof Error)
-        return { success: false, result: `Execution failed due to ${e.name}\n${e.message}\n${e?.stack}` }
-      return { success: false, result: "Execution failed due to unknown error." }
+        return JSON.stringify({
+          success: false,
+          result: `Execution failed due to ${e.name}\n${e.message}\n${e?.stack}`
+        })
+      return JSON.stringify({ success: false, result: "Execution failed due to unknown error." })
     }
   }
   make_schema(): ChatCompletionTool {
     return {
       type: "function",
       function: {
-        name: this.#name,
+        name: this.name,
         description: this.#description,
         //? https://developers.openai.com/api/docs/guides/function-calling?strict-mode=enabled#strict-mode
         strict: true,
@@ -47,4 +50,4 @@ class BaseFuntionTool<T extends z.ZodType, K> {
   }
 }
 
-export default BaseFuntionTool
+export default BaseFunctionTool
