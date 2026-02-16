@@ -45,11 +45,6 @@ async function requestAPI<M extends Model>(
   ...args: ToolsArg<M>
 ): Promise<APIPromise<ChatCompletion>> {
   const tools = args[0]
-  
-  const modelId = models[model]
-  if (!modelId) {
-    throw new Error(`Model ID not found for model: ${model}`)
-  }
 
   try {
     return client.chat.completions.create({
