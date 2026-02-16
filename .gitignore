@@ -29,6 +29,10 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # IntelliJ based IDEs
 .idea
+ 
+# VSCode
+.vscode/
+*.code-workspace
 
 # Finder (MacOS) folder config
 .DS_Store

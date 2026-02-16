@@ -91,46 +91,54 @@ class ToolLoopAgent {
     ]
   }
   async step() {
-    let nextStepFlag = true
-    const r = await requestAPI(
-      this.#model,
-      this.context,
-      this.#tools.map((t) => t.make_schema())
-    )
-    for (const choice of r.choices) {
-      switch (choice.finish_reason) {
-        case "tool_calls":
-          if (choice.message.tool_calls) await this.#handleToolcalls(choice.message.tool_calls)
-          // @ts-expect-error addtional prop added by qwen api
-          this.reasoning_flow.push(choice.message.reasoning_content)
-          break
-        case "stop":
-          nextStepFlag = false
-          this.context.push({ role: "assistant", content: choice.message.content })
-          console.log(choice.message.content)
-          break
-        case "content_filter":
-          nextStepFlag = false
-          this.context.splice(
-            this.context.findLastIndex((i) => i.role === "user"),
-            1
-          )
-          console.log("filtered")
-          break
-        case "length":
-          console.log(choice.message.content)
-          await this.compact()
-          break
+    let shouldContinue = true
+    
+    while (shouldContinue) {
+      const r = await requestAPI(
+        this.#model,
+        this.context,
+        this.#tools.map((t) => t.make_schema())
+      )
+      
+      let nextStepFlag = true
+      for (const choice of r.choices) {
+        switch (choice.finish_reason) {
+          case "tool_calls":
+            if (choice.message.tool_calls) await this.#handleToolcalls(choice.message.tool_calls)
+            // @ts-expect-error additional prop added by qwen api
+            this.reasoning_flow.push(choice.message.reasoning_content)
+            break
+          case "stop":
+            nextStepFlag = false
+            this.context.push({ role: "assistant", content: choice.message.content })
+            console.log(choice.message.content)
+            break
+          case "content_filter":
+            nextStepFlag = false
+            this.context.splice(
+              this.context.findLastIndex((i) => i.role === "user"),
+              1
+            )
+            console.log("filtered")
+            break
+          case "length":
+            console.log(choice.message.content)
+            await this.compact()
+            break
+        }
       }
+      
+      if (this.#onStepEnd) {
+        this.#onStepEnd({
+          APIResponse: r,
+          stop: (() => {
+            nextStepFlag = false
+          }).bind(this)
+        })
+      }
+      
+      shouldContinue = nextStepFlag
     }
-    if (this.#onStepEnd)
-      this.#onStepEnd({
-        APIResponse: r,
-        stop: (() => {
-          nextStepFlag = false
-        }).bind(this)
-      })
-    if (nextStepFlag) await this.step()
   }
   async generate({ prompt }: { prompt: string }) {
     this.context.push({ role: "user", content: prompt })
