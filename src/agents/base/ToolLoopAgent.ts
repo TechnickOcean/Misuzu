@@ -16,8 +16,8 @@ class ToolLoopAgent {
   #tools
   #onStepEnd
   instruction
-  reasoning_flow: string[] = []
   context: ChatCompletionMessageParam[] = []
+
   constructor({
     model,
     instruction,
@@ -32,21 +32,19 @@ class ToolLoopAgent {
     this.instruction = instruction
     this.#model = model
     this.#tools = tools
-    this.context.push({ role: "system", content: instruction })
     this.#onStepEnd = onStepEnd
   }
+
   #handleToolcalls(toolcalls: ChatCompletionMessageToolCall[]) {
     return new Promise((resolve, reject) => {
       Promise.all(
         toolcalls.map(async (toolcall) => {
           const callInfo = toolcall.type === "function" ? toolcall.function : toolcall.custom
+          const callArg = toolcall.type === "function" ? toolcall.function.arguments : toolcall.custom.input
           const targetTool = this.#tools.find((tool) => tool.name === callInfo.name)
-          console.log(`Calling ${targetTool?.name} with ${JSON.stringify(callInfo)}`)
+          console.log(`Calling ${targetTool?.name}(${callArg})`)
           return {
-            content:
-              (await targetTool?.execute(
-                toolcall.type === "function" ? toolcall.function.arguments : toolcall.custom.input
-              )) ?? "There's no output.",
+            content: (await targetTool?.execute(callArg)) ?? "There's no output.",
             role: "tool",
             tool_call_id: toolcall.id
           } satisfies ChatCompletionMessageParam
@@ -56,13 +54,12 @@ class ToolLoopAgent {
           this.context = this.context.concat(results)
           resolve(results)
         })
-        .catch((e) => {
-          reject(e)
-        })
+        .catch(reject)
     })
   }
+
   async compact() {
-    // https://github.com/anomalyco/opencode/blob/eb553f53ac9689ab2056fceea0c7b0504f642101/packages/opencode/src/agent/prompt/compaction.txt
+    // adaption to https://github.com/anomalyco/opencode/blob/eb553f53ac9689ab2056fceea0c7b0504f642101/packages/opencode/src/agent/prompt/compaction.txt
     const prompt = `You are a helpful AI assistant tasked with summarizing conversations.
 
     When asked to summarize, provide a detailed but concise summary of the conversation.
@@ -77,23 +74,17 @@ class ToolLoopAgent {
     Your summary should be comprehensive enough to provide context but concise enough to be quickly understood.
     
     Do not respond to any questions in the conversation, only output the summary.`
-    const nr = await requestAPI(this.#model, [
-      {
-        role: "system",
-        content: prompt
-      },
-      ...this.context.slice(1)
-    ])
+    this.context.push({ role: "user", content: "Summarize" })
+    const nr = await requestAPI(this.#model, prompt, this.context)
     if (!nr.choices) return
-    this.context = [
-      { role: "system", content: this.instruction },
-      { role: "user", content: nr.choices[0]?.message.content ?? "" }
-    ]
+    this.context = [{ role: "user", content: nr.choices[0]?.message.content ?? "" }]
   }
+
   async step() {
     let nextStepFlag = true
     const r = await requestAPI(
       this.#model,
+      this.instruction,
       this.context,
       this.#tools.map((t) => t.make_schema())
     )
@@ -102,7 +93,7 @@ class ToolLoopAgent {
         case "tool_calls":
           if (choice.message.tool_calls) await this.#handleToolcalls(choice.message.tool_calls)
           // @ts-expect-error addtional prop added by qwen api
-          this.reasoning_flow.push(choice.message.reasoning_content)
+          console.log(choice.message.reasoning_content)
           break
         case "stop":
           nextStepFlag = false
@@ -111,10 +102,10 @@ class ToolLoopAgent {
           break
         case "content_filter":
           nextStepFlag = false
-          this.context.splice(
-            this.context.findLastIndex((i) => i.role === "user"),
-            1
-          )
+          // this.context.splice(
+          //   this.context.findLastIndex((i) => i.role === "user"),
+          //   1
+          // )
           console.log("filtered")
           break
         case "length":
@@ -132,6 +123,7 @@ class ToolLoopAgent {
       })
     if (nextStepFlag) await this.step()
   }
+
   async generate({ prompt }: { prompt: string }) {
     this.context.push({ role: "user", content: prompt })
     await this.step()

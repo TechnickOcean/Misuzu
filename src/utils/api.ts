@@ -33,11 +33,12 @@ type ToolsArg<M extends Model> = M extends ModelWithTools ? [tools?: ChatComplet
 
 async function requestAPI<M extends Model>(
   model: M,
+  system_prompt: string,
   messages: ChatCompletionMessageParam[],
   ...args: ToolsArg<M>
 ): Promise<APIPromise<ChatCompletion>> {
   const tools = args[0]
-
+  messages = [{ role: "system", content: system_prompt }, ...messages]
   return client.chat.completions.create({
     model: models[model],
     messages,
