@@ -1,6 +1,5 @@
 {
   "name": "misuzu-core",
-  "module": "index.ts",
   "type": "module",
   "scripts": {
     "db:push": "bunx drizzle-kit push"

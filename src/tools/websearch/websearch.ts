@@ -98,23 +98,19 @@ async function search_serper({ keywords, language }: { keywords: string; languag
 
 export const websearch = new BaseFunctionTool({
   name: "websearch",
-  description:
-    "Search the web, return url results. You can use tool `fecthMarkdown` to get the content of certain url.",
+  description: "Perform a Google search to find relevant web pages. Returns titles, snippets, and URLs.",
   schema: z.object({
-    keywords: z.string().meta({ description: "Search keywords, splited with whitespaces(` `)." }),
-    language: z
-      .optional(z.string())
-      .meta({ description: "The language id you expect the search results are in. e.g. en, zh-cn, zh-tw..." })
+    keywords: z.string().meta({ description: "Search query string." }),
+    language: z.optional(z.string()).meta({ description: "Preferred language for results (e.g., 'en', 'zh-cn')." })
   }),
   func: search_serper
 })
 
-export const fecthMarkdown = new BaseFunctionTool({
-  name: "fecthMarkdown",
-  description: `Fetch certain url, return markdown type contents.
-  Supported MimeTypes: PDF Documents, Images, HTML, XML, Microsoft Office Documents, Open Document Format, CSV, Apple Documents`,
+export const fetchMarkdown = new BaseFunctionTool({
+  name: "fetchMarkdown",
+  description: "Fetch a URL's content and convert it to Markdown. Supports HTML, PDF, Office docs, etc.",
   schema: z.object({
-    url: z.url().meta({ description: "Target url started with `http://` or `https://` schema" })
+    url: z.url().meta({ description: "Full URL to fetch (must start with http:// or https://)." })
   }),
   func: url2markdown
 })

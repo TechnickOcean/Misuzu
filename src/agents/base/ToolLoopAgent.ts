@@ -60,20 +60,18 @@ class ToolLoopAgent {
 
   async compact() {
     // adaption to https://github.com/anomalyco/opencode/blob/eb553f53ac9689ab2056fceea0c7b0504f642101/packages/opencode/src/agent/prompt/compaction.txt
-    const prompt = `You are a helpful AI assistant tasked with summarizing conversations.
+    const prompt = `You are an expert AI assistant specialized in summarizing technical conversations.
 
-    When asked to summarize, provide a detailed but concise summary of the conversation.
-    Focus on information that would be helpful for continuing the conversation, including:
-    - What was done
-    - What is currently being worked on
-    - Which files are being modified
-    - What needs to be done next
-    - Key user requests, constraints, or preferences that should persist
-    - Important technical decisions and why they were made
+    Your goal is to create a concise yet comprehensive summary that serves as a context restoration point for future interactions.
     
-    Your summary should be comprehensive enough to provide context but concise enough to be quickly understood.
+    Key elements to include:
+    - **Completed Actions:** Briefly list what has been accomplished.
+    - **Current Status:** Describe the ongoing task and its state.
+    - **File Context:** List modified or relevant files.
+    - **Next Steps:** Clearly outline the immediate next actions required.
+    - **Constraints & Decisions:** Note any user preferences, constraints, or key technical decisions made.
     
-    Do not respond to any questions in the conversation, only output the summary.`
+    Output *only* the summary. Do not answer questions or add conversational filler.`
     this.context.push({ role: "user", content: "Summarize" })
     const nr = await requestAPI(this.#model, prompt, this.context)
     if (!nr.choices) return

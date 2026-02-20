@@ -1,19 +1,15 @@
 import { join } from "node:path"
-import { file, Glob, spawn } from "bun"
+import { $, file, Glob } from "bun"
 import * as z from "zod"
 import BaseFunctionTool from "../base/FunctionTool"
 import { createDBWorkspace, getDBWorkspace, updateDBWorkspace } from "./core/db"
 
 export const createWorkspaceTool = new BaseFunctionTool({
   name: "createWorkspace",
-  description: `Create a workspace for a certain CTF challenge, 
-  where provides a folder in a real machine to store Source Codes, 
-  Knowledges, scripts and other middle results during solving the challenge.
-
-  After created a workspace, you can add workspace_id argument to other tools 
-  to change the base path of file_path to workspace's base path.`,
+  description:
+    "Create a persistent workspace directory for a task or challenge. Returns a `workspace_id` for use with other tools.",
   schema: z.object({
-    title: z.string().meta({ description: "title of the workspace" })
+    title: z.string().meta({ description: "Descriptive title for the workspace." })
   }),
   func: createDBWorkspace
 })
@@ -60,15 +56,14 @@ async function readFile({
 
 export const readFileTool = new BaseFunctionTool({
   name: "readFile",
-  description: `Read file with line numbers.`,
+  description: "Read file contents with line numbers. Use `offset` and `limit` for large files.",
   schema: z.object({
-    file_path: z.string().meta({ description: "the path to taget file" }),
+    file_path: z.string().meta({ description: "Path to the target file." }),
     workspace_id: z.optional(z.number()),
     offset: z.optional(z.number()).meta({
-      description:
-        "Optional, if the file is too long, you can add limit&offset to read contents of [offset, offset+limit] lines"
+      description: "Start index (0-based) for reading lines."
     }),
-    limit: z.optional(z.number())
+    limit: z.optional(z.number()).meta({ description: "Maximum number of lines to read." })
   }),
   func: readFile
 })
@@ -92,10 +87,10 @@ async function writeFile({
 
 export const writeFileTool = new BaseFunctionTool({
   name: "writeFile",
-  description: "create a file and write contents into it",
+  description: "Create a new file with the specified content. Fails if the file already exists.",
   schema: z.object({
-    file_path: z.string(),
-    content: z.string(),
+    file_path: z.string().meta({ description: "Path to the new file." }),
+    content: z.string().meta({ description: "Content to write." }),
     workspace_id: z.optional(z.number())
   }),
   func: writeFile
@@ -124,11 +119,11 @@ async function editFile({
 
 export const editFileTool = new BaseFunctionTool({
   name: "editFile",
-  description: "Edit file content by replacing old content with new content.",
+  description: "Edit a file by replacing `old_content` with `new_content`.",
   schema: z.object({
-    file_path: z.string(),
-    old_content: z.string(),
-    new_content: z.string(),
+    file_path: z.string().meta({ description: "Path to the file to edit." }),
+    old_content: z.string().meta({ description: "Unique string in the file to be replaced." }),
+    new_content: z.string().meta({ description: "String to replace with." }),
     workspace_id: z.optional(z.number())
   }),
   func: editFile
@@ -141,7 +136,6 @@ async function globFiles({ pattern, workspace_id }: { pattern: string; workspace
   const glob = new Glob(pattern)
   const files: string[] = []
 
-  // Bun glob scan is async iterable
   for await (const file of glob.scan({ cwd: basePath, absolute: false })) {
     files.push(file)
   }
@@ -150,9 +144,9 @@ async function globFiles({ pattern, workspace_id }: { pattern: string; workspace
 
 export const globTool = new BaseFunctionTool({
   name: "globFiles",
-  description: "List files matching a glob pattern",
+  description: "List files matching a glob pattern.",
   schema: z.object({
-    pattern: z.string(),
+    pattern: z.string().meta({ description: "Glob pattern (e.g., `**/*.ts`)." }),
     workspace_id: z.optional(z.number())
   }),
   func: globFiles
@@ -162,25 +156,37 @@ async function grepFiles({ pattern, workspace_id }: { pattern: string; workspace
   let basePath = "."
   if (workspace_id) basePath = (await getDBWorkspace({ id: workspace_id }))!.path
 
-  // Use grep command for performance and robustness
-  const proc = spawn(["grep", "-rn", pattern, "."], {
-    cwd: basePath,
-    stdout: "pipe",
-    stderr: "pipe"
-  })
+  try {
+    const glob = new Glob("**/*")
+    const matches: string[] = []
 
-  const output = await new Response(proc.stdout).text()
-  const error = await new Response(proc.stderr).text()
+    const regex = new RegExp(pattern)
 
-  if (error) return `Error: ${error}`
-  return output || "No matches found."
+    for await (const f of glob.scan({ cwd: basePath, absolute: false })) {
+      const target = file(join(basePath, f))
+      if (target.size > 1024 * 1024) continue
+      try {
+        const content = await target.text()
+        const lines = content.split("\n")
+        lines.forEach((line, index) => {
+          if (regex.test(line)) {
+            matches.push(`${f}:${index + 1}:${line.trim()}`)
+          }
+        })
+      } catch (_e) {}
+    }
+
+    return matches.join("\n") || "No matches found."
+  } catch (e) {
+    return `Error: ${e}`
+  }
 }
 
 export const grepTool = new BaseFunctionTool({
   name: "grepFiles",
-  description: "Search for a pattern in files using grep",
+  description: "Search for a string or regex pattern in file contents.",
   schema: z.object({
-    pattern: z.string(),
+    pattern: z.string().meta({ description: "String or regex pattern to search for." }),
     workspace_id: z.optional(z.number())
   }),
   func: grepFiles
@@ -190,24 +196,19 @@ async function shell({ command, workspace_id }: { command: string; workspace_id?
   let basePath = "."
   if (workspace_id) basePath = (await getDBWorkspace({ id: workspace_id }))!.path
 
-  // Use sh -c to execute command string
-  const proc = spawn(["sh", "-c", command], {
-    cwd: basePath,
-    stdout: "pipe",
-    stderr: "pipe"
-  })
-
-  const output = await new Response(proc.stdout).text()
-  const error = await new Response(proc.stderr).text()
-
-  return `STDOUT:\n${output}\nSTDERR:\n${error}`
+  try {
+    const result = await $`${{ raw: command }}`.cwd(basePath).nothrow().quiet()
+    return `STDOUT:\n${result.stdout.toString()}\nSTDERR:\n${result.stderr.toString()}`
+  } catch (e) {
+    return `Error executing shell command: ${e}`
+  }
 }
 
 export const shellTool = new BaseFunctionTool({
   name: "shell",
-  description: "Execute a shell command in the workspace",
+  description: "Execute a shell command. Use with caution.",
   schema: z.object({
-    command: z.string(),
+    command: z.string().meta({ description: "Shell command to execute." }),
     workspace_id: z.optional(z.number())
   }),
   func: shell
@@ -248,11 +249,11 @@ async function manageState({
 
 export const stateTool = new BaseFunctionTool({
   name: "manageState",
-  description: "Manage persistent state (key-value store) in the workspace",
+  description: "Manage a simple key-value store for the workspace.",
   schema: z.object({
-    key: z.optional(z.string()),
-    value: z.optional(z.any()),
-    action: z.enum(["get", "set", "delete", "list"]),
+    key: z.optional(z.string()).meta({ description: "Key for the state item." }),
+    value: z.optional(z.any()).meta({ description: "Value to store (for 'set' action)." }),
+    action: z.enum(["get", "set", "delete", "list"]).meta({ description: "Action to perform." }),
     workspace_id: z.number()
   }),
   func: manageState
