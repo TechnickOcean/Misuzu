@@ -8,7 +8,7 @@ const client = new OpenAI({
 })
 
 const function_caller_models = {
-  // funtion calling enabled
+  // function calling enabled
   "glm-4.7-flash": "workers-ai/@cf/zai-org/glm-4.7-flash", // 131k
   "llama-4-scout-17b-16e-instruct": "workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct", // 131k
   "qwen3-30b-a3b-fp8": "workers-ai/@cf/qwen/qwen3-30b-a3b-fp8" // 32k

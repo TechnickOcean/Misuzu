@@ -31,3 +31,13 @@ export async function getDBWorkspace({ id }: { id: number }) {
   if (result.length > 0) return result[0]
   else throw "Not Found"
 }
+
+export async function updateDBWorkspace({
+  id,
+  data
+}: {
+  id: number
+  data: Partial<typeof workspacesTable.$inferInsert>
+}) {
+  return await db.update(workspacesTable).set(data).where(eq(workspacesTable.id, id)).returning()
+}

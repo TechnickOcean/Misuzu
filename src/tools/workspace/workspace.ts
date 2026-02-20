@@ -1,8 +1,8 @@
 import { join } from "node:path"
-import { file } from "bun"
+import { file, Glob, spawn } from "bun"
 import * as z from "zod"
 import BaseFunctionTool from "../base/FunctionTool"
-import { createDBWorkspace, getDBWorkspace } from "./core/db"
+import { createDBWorkspace, getDBWorkspace, updateDBWorkspace } from "./core/db"
 
 export const createWorkspaceTool = new BaseFunctionTool({
   name: "createWorkspace",
@@ -101,10 +101,159 @@ export const writeFileTool = new BaseFunctionTool({
   func: writeFile
 })
 
-async function editFile({}: {}) {}
+async function editFile({
+  file_path,
+  old_content,
+  new_content,
+  workspace_id
+}: {
+  file_path: string
+  old_content: string
+  new_content: string
+  workspace_id?: number
+}) {
+  let basePath = ""
+  if (workspace_id) basePath = (await getDBWorkspace({ id: workspace_id }))!.path
+  const target = file(join(basePath, file_path))
+  if (!(await target.exists())) return "File does not exist!"
+  const content = await target.text()
+  if (!content.includes(old_content)) return "old_content not found!"
+  await target.write(content.replace(old_content, new_content))
+  return "Successfully edited!"
+}
 
-export const editFileTool = new BaseFunctionTool()
+export const editFileTool = new BaseFunctionTool({
+  name: "editFile",
+  description: "Edit file content by replacing old content with new content.",
+  schema: z.object({
+    file_path: z.string(),
+    old_content: z.string(),
+    new_content: z.string(),
+    workspace_id: z.optional(z.number())
+  }),
+  func: editFile
+})
 
-// export const glob = new BaseFunctionTool()
-// export const grep = new BaseFunctionTool()
-// export const shell = new BaseFunctionTool()
+async function globFiles({ pattern, workspace_id }: { pattern: string; workspace_id?: number }) {
+  let basePath = "."
+  if (workspace_id) basePath = (await getDBWorkspace({ id: workspace_id }))!.path
+
+  const glob = new Glob(pattern)
+  const files: string[] = []
+
+  // Bun glob scan is async iterable
+  for await (const file of glob.scan({ cwd: basePath, absolute: false })) {
+    files.push(file)
+  }
+  return files.join("\n")
+}
+
+export const globTool = new BaseFunctionTool({
+  name: "globFiles",
+  description: "List files matching a glob pattern",
+  schema: z.object({
+    pattern: z.string(),
+    workspace_id: z.optional(z.number())
+  }),
+  func: globFiles
+})
+
+async function grepFiles({ pattern, workspace_id }: { pattern: string; workspace_id?: number }) {
+  let basePath = "."
+  if (workspace_id) basePath = (await getDBWorkspace({ id: workspace_id }))!.path
+
+  // Use grep command for performance and robustness
+  const proc = spawn(["grep", "-rn", pattern, "."], {
+    cwd: basePath,
+    stdout: "pipe",
+    stderr: "pipe"
+  })
+
+  const output = await new Response(proc.stdout).text()
+  const error = await new Response(proc.stderr).text()
+
+  if (error) return `Error: ${error}`
+  return output || "No matches found."
+}
+
+export const grepTool = new BaseFunctionTool({
+  name: "grepFiles",
+  description: "Search for a pattern in files using grep",
+  schema: z.object({
+    pattern: z.string(),
+    workspace_id: z.optional(z.number())
+  }),
+  func: grepFiles
+})
+
+async function shell({ command, workspace_id }: { command: string; workspace_id?: number }) {
+  let basePath = "."
+  if (workspace_id) basePath = (await getDBWorkspace({ id: workspace_id }))!.path
+
+  // Use sh -c to execute command string
+  const proc = spawn(["sh", "-c", command], {
+    cwd: basePath,
+    stdout: "pipe",
+    stderr: "pipe"
+  })
+
+  const output = await new Response(proc.stdout).text()
+  const error = await new Response(proc.stderr).text()
+
+  return `STDOUT:\n${output}\nSTDERR:\n${error}`
+}
+
+export const shellTool = new BaseFunctionTool({
+  name: "shell",
+  description: "Execute a shell command in the workspace",
+  schema: z.object({
+    command: z.string(),
+    workspace_id: z.optional(z.number())
+  }),
+  func: shell
+})
+
+async function manageState({
+  key,
+  value,
+  action,
+  workspace_id
+}: {
+  key?: string
+  value?: unknown
+  action: "get" | "set" | "delete" | "list"
+  workspace_id: number
+}) {
+  const workspace = await getDBWorkspace({ id: workspace_id })
+  if (!workspace) throw new Error("Workspace not found")
+  const store = (workspace.store as Record<string, unknown>) || {}
+
+  if (action === "get") {
+    if (!key) return "Key is required for get action"
+    return JSON.stringify(store[key])
+  } else if (action === "set") {
+    if (!key || value === undefined) return "Key and value are required for set action"
+    store[key] = value
+    await updateDBWorkspace({ id: workspace_id, data: { store } })
+    return "State updated"
+  } else if (action === "delete") {
+    if (!key) return "Key is required for delete action"
+    delete store[key]
+    await updateDBWorkspace({ id: workspace_id, data: { store } })
+    return "Key deleted"
+  } else if (action === "list") {
+    return JSON.stringify(store, null, 2)
+  }
+}
+
+export const stateTool = new BaseFunctionTool({
+  name: "manageState",
+  description: "Manage persistent state (key-value store) in the workspace",
+  schema: z.object({
+    key: z.optional(z.string()),
+    value: z.optional(z.any()),
+    action: z.enum(["get", "set", "delete", "list"]),
+    workspace_id: z.number()
+  }),
+  func: manageState
+})
