@@ -22,3 +22,8 @@ export async function runCTFOrchestrator(input: OrchestratorInput) {
     // This is a placeholder hook for future conditional scheduling.
   }
 }
+
+await runCTFAgent({
+  workspace_id: 1,
+  model: "qwen3-30b-a3b-fp8"
+})

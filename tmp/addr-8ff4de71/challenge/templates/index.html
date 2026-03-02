@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Manager System</title>
+    <style>
+        :root {
+            --primary-color: #007bff;
+            --bg-color: #f8f9fa;
+            --text-color: #333;
+            --box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 40px 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 { color: #2c3e50; margin-bottom: 30px; }
+        .container { max-width: 800px; width: 100%; }
+        
+        .box {
+            background: white;
+            border-radius: 8px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: var(--box-shadow);
+            border: 1px solid #eee;
+        }
+        .box h3 { margin-top: 0; border-bottom: 2px solid #f1f1f1; padding-bottom: 10px; color: #444; }
+        
+        /* 状态样式 */
+        .admin-msg { color: #28a745; font-weight: bold; background: #e8f5e9; padding: 10px; border-radius: 4px; }
+        .guest-msg { color: #6c757d; background: #e9ecef; padding: 10px; border-radius: 4px; }
+        
+        /* 错误提示 */
+        .error { color: #721c24; background-color: #f8d7da; border-color: #f5c6cb; padding: 15px; border-radius: 5px; margin-bottom: 20px; width: 100%; max-width: 800px; box-sizing: border-box;}
+        
+        /* 表单样式 */
+        form { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+        input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        button {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+        button:hover { background-color: #0056b3; }
+        
+        /* 结果显示 */
+        pre {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', monospace;
+        }
+
+        a { color: var(--primary-color); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+
+    <h1>系统管理控制台</h1>
+    
+    <div class="container">
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+            <div class="error">
+                {% for message in messages %}
+                <div>⚠️ {{ message }}</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        {% endwith %}
+
+        <div class="box">
+            <h3>📊 当前身份</h3>
+            {% if current_user == 'admin' %}
+                <div class="admin-msg">✅ 管理员 (Admin) - 已授权</div>
+                <p>您拥有最高系统权限。</p>
+            {% else %}
+                <div class="guest-msg">👤 {{ current_user if current_user else '未登录 (Guest)' }}</div>
+                {% if current_user %}
+                    <p style="color:#666; font-size: 0.9em;">普通用户权限受限。</p>
+                {% endif %}
+            {% endif %}
+        </div>
+
+        <div class="box">
+            <h3>📡 网络检测 (Ping)</h3>
+            <p style="font-size:0.85em; color:#888;">* 仅限管理员使用，支持 IPv4 连通性测试</p>
+            <form action="/ping" method="post">
+                <input type="text" name="target" placeholder="请输入目标 IP (例如: 8.8.8.8)" required>
+                <button type="submit">开始检测</button>
+            </form>
+            
+            {% if ping_result %}
+                <div style="margin-top: 15px;">
+                    <strong>执行结果:</strong>
+                    <pre>{{ ping_result }}</pre>
+                </div>
+            {% endif %}
+        </div>
+
+        <div class="box">
+            <h3>⚙️ 账户设置</h3>
+            <form action="/set_user_session" method="post">
+                <input type="text" name="username" placeholder="设置用户名" required>
+                <button type="submit" style="background-color: #6c757d;">更新身份</button>
+            </form>
+            <div style="margin-top: 15px; text-align: right;">
+                <a href="/logout">🚪 退出登录</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

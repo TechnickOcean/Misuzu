@@ -1,16 +1,19 @@
 import "dotenv/config"
-import { Database } from "bun:sqlite"
 import { randomBytes } from "node:crypto"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
+import { pathToFileURL } from "node:url"
 import { eq } from "drizzle-orm"
-import { drizzle } from "drizzle-orm/bun-sqlite"
+import { drizzle } from "drizzle-orm/libsql"
 import sanitize from "sanitize-filename"
 import { TMP_DIR } from "@/consts"
 import { AppError } from "@/utils/errors"
 import { workspacesTable } from "./schema"
 
-const sqlite = new Database(process.env.DB_FILE_NAME!, { create: true })
-const db = drizzle({ client: sqlite })
+const db = drizzle({
+  connection: {
+    url: pathToFileURL(resolve(`E:/dev/Misuzu/.data/workspaces.sqlite`)).href
+  }
+})
 
 function randomChars(byte: number) {
   return randomBytes(byte).toHex()
@@ -41,4 +44,8 @@ export async function updateDBWorkspace({
   data: Partial<typeof workspacesTable.$inferInsert>
 }) {
   return await db.update(workspacesTable).set(data).where(eq(workspacesTable.id, id)).returning()
+}
+
+export async function listDBWorkspaces() {
+  return await db.select().from(workspacesTable)
 }

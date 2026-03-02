@@ -50,6 +50,9 @@
       "complexity": {
         "noUselessContinue": "warn",
         "noImportantStyles": "off"
+      },
+      "suspicious": {
+        "noUnknownAtRules": "off"
       }
     }
   },
@@ -64,6 +67,11 @@
       "bracketSameLine": false,
       "quoteStyle": "double",
       "attributePosition": "auto"
+    }
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
     }
   }
 }
