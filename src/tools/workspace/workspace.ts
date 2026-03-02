@@ -1,6 +1,7 @@
 import { join } from "node:path"
 import { $, file, Glob } from "bun"
 import * as z from "zod"
+import { AppError } from "@/utils/errors"
 import BaseFunctionTool from "../base/FunctionTool"
 import { createDBWorkspace, getDBWorkspace, updateDBWorkspace } from "./core/db"
 
@@ -28,30 +29,30 @@ async function readFile({
   let basePath = ""
   if (workspace_id) basePath = (await getDBWorkspace({ id: workspace_id }))!.path
   const target = file(join(basePath, file_path))
-  // if (!(await target.exists())) return "File does not exist!"
-  if (target.size >= 20000) {
-    return `The file is too large to read (size: ${target.size} bytes), please consider use another way to read it.`
-  } else {
-    const raw = (await target.text()).split("\n")
-    const lines = []
-    for (let i = 1; i <= raw.length; i++) lines.push(`${i}| ${raw[i - 1]}`)
-    if (offset && limit) {
-      return lines.slice(offset, offset + limit).join("\n")
-    }
-    if (target.size >= 4000) {
-      // TODO: use stream
-      let sum = 0
-      let cnt = 0
-      for (const line of lines) {
-        sum += line.length
-        if (sum >= 4000) break
-        cnt += 1
-      }
-      return `${lines.slice(0, cnt + 1).join("\n")}\n[TOOLTIP] The content is too long (${lines.length} lines in total), add offset and limit to read next contents.`
-    } else {
-      return lines.join("\n")
-    }
+  if (!(await target.exists())) {
+    throw new AppError("NOT_FOUND", "File does not exist", { file_path })
   }
+  if (target.size >= 20000) {
+    throw new AppError("UPSTREAM_ERROR", "File too large to read", { file_path, size: target.size })
+  }
+  const raw = (await target.text()).split("\n")
+  const lines = []
+  for (let i = 1; i <= raw.length; i++) lines.push(`${i}| ${raw[i - 1]}`)
+  if (offset && limit) {
+    return lines.slice(offset, offset + limit).join("\n")
+  }
+  if (target.size >= 4000) {
+    // TODO: use stream
+    let sum = 0
+    let cnt = 0
+    for (const line of lines) {
+      sum += line.length
+      if (sum >= 4000) break
+      cnt += 1
+    }
+    return `${lines.slice(0, cnt + 1).join("\n")}\n[TOOLTIP] The content is too long (${lines.length} lines in total), add offset and limit to read next contents.`
+  }
+  return lines.join("\n")
 }
 
 export const readFileTool = new BaseFunctionTool({
@@ -80,7 +81,9 @@ async function writeFile({
   let basePath = ""
   if (workspace_id) basePath = (await getDBWorkspace({ id: workspace_id }))!.path
   const target = file(join(basePath, file_path))
-  if (await target.exists()) return "This file already exists!"
+  if (await target.exists()) {
+    throw new AppError("CONFLICT", "File already exists", { file_path })
+  }
   await target.write(content)
   return "Succesfully wrote!"
 }
@@ -110,9 +113,13 @@ async function editFile({
   let basePath = ""
   if (workspace_id) basePath = (await getDBWorkspace({ id: workspace_id }))!.path
   const target = file(join(basePath, file_path))
-  if (!(await target.exists())) return "File does not exist!"
+  if (!(await target.exists())) {
+    throw new AppError("NOT_FOUND", "File does not exist", { file_path })
+  }
   const content = await target.text()
-  if (!content.includes(old_content)) return "old_content not found!"
+  if (!content.includes(old_content)) {
+    throw new AppError("NOT_FOUND", "old_content not found", { file_path })
+  }
   await target.write(content.replace(old_content, new_content))
   return "Successfully edited!"
 }
@@ -156,30 +163,26 @@ async function grepFiles({ pattern, workspace_id }: { pattern: string; workspace
   let basePath = "."
   if (workspace_id) basePath = (await getDBWorkspace({ id: workspace_id }))!.path
 
-  try {
-    const glob = new Glob("**/*")
-    const matches: string[] = []
+  const glob = new Glob("**/*")
+  const matches: string[] = []
 
-    const regex = new RegExp(pattern)
+  const regex = new RegExp(pattern)
 
-    for await (const f of glob.scan({ cwd: basePath, absolute: false })) {
-      const target = file(join(basePath, f))
-      if (target.size > 1024 * 1024) continue
-      try {
-        const content = await target.text()
-        const lines = content.split("\n")
-        lines.forEach((line, index) => {
-          if (regex.test(line)) {
-            matches.push(`${f}:${index + 1}:${line.trim()}`)
-          }
-        })
-      } catch (_e) {}
-    }
-
-    return matches.join("\n") || "No matches found."
-  } catch (e) {
-    return `Error: ${e}`
+  for await (const f of glob.scan({ cwd: basePath, absolute: false })) {
+    const target = file(join(basePath, f))
+    if (target.size > 1024 * 1024) continue
+    try {
+      const content = await target.text()
+      const lines = content.split("\n")
+      lines.forEach((line, index) => {
+        if (regex.test(line)) {
+          matches.push(`${f}:${index + 1}:${line.trim()}`)
+        }
+      })
+    } catch (_e) {}
   }
+
+  return matches.join("\n") || "No matches found."
 }
 
 export const grepTool = new BaseFunctionTool({
@@ -196,12 +199,14 @@ async function shell({ command, workspace_id }: { command: string; workspace_id?
   let basePath = "."
   if (workspace_id) basePath = (await getDBWorkspace({ id: workspace_id }))!.path
 
-  try {
-    const result = await $`${{ raw: command }}`.cwd(basePath).nothrow().quiet()
-    return `STDOUT:\n${result.stdout.toString()}\nSTDERR:\n${result.stderr.toString()}`
-  } catch (e) {
-    return `Error executing shell command: ${e}`
+  const result = await $`${{ raw: command }}`.cwd(basePath).nothrow().quiet()
+  if (result.exitCode !== 0) {
+    throw new AppError("UPSTREAM_ERROR", "Shell command failed", {
+      command,
+      exitCode: result.exitCode
+    })
   }
+  return `STDOUT:\n${result.stdout.toString()}\nSTDERR:\n${result.stderr.toString()}`
 }
 
 export const shellTool = new BaseFunctionTool({
@@ -226,25 +231,29 @@ async function manageState({
   workspace_id: number
 }) {
   const workspace = await getDBWorkspace({ id: workspace_id })
-  if (!workspace) throw new Error("Workspace not found")
+  if (!workspace) throw new AppError("NOT_FOUND", "Workspace not found", { workspace_id })
   const store = (workspace.store as Record<string, unknown>) || {}
 
   if (action === "get") {
-    if (!key) return "Key is required for get action"
+    if (!key) throw new AppError("VALIDATION_ERROR", "Key is required for get action")
     return JSON.stringify(store[key])
-  } else if (action === "set") {
-    if (!key || value === undefined) return "Key and value are required for set action"
+  }
+  if (action === "set") {
+    if (!key || value === undefined) throw new AppError("VALIDATION_ERROR", "Key and value are required for set action")
     store[key] = value
     await updateDBWorkspace({ id: workspace_id, data: { store } })
     return "State updated"
-  } else if (action === "delete") {
-    if (!key) return "Key is required for delete action"
+  }
+  if (action === "delete") {
+    if (!key) throw new AppError("VALIDATION_ERROR", "Key is required for delete action")
     delete store[key]
     await updateDBWorkspace({ id: workspace_id, data: { store } })
     return "Key deleted"
-  } else if (action === "list") {
+  }
+  if (action === "list") {
     return JSON.stringify(store, null, 2)
   }
+  throw new AppError("VALIDATION_ERROR", "Unknown action", { action })
 }
 
 export const stateTool = new BaseFunctionTool({

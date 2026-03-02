@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import sanitize from "sanitize-filename"
 import { TMP_DIR } from "@/consts"
+import { AppError } from "@/utils/errors"
 import { workspacesTable } from "./schema"
 
 const sqlite = new Database(process.env.DB_FILE_NAME!, { create: true })
@@ -29,7 +30,7 @@ export async function createDBWorkspace({ title }: { title: string }) {
 export async function getDBWorkspace({ id }: { id: number }) {
   const result = await db.select().from(workspacesTable).where(eq(workspacesTable.id, id))
   if (result.length > 0) return result[0]
-  else throw "Not Found"
+  throw new AppError("NOT_FOUND", "Workspace not found", { id })
 }
 
 export async function updateDBWorkspace({

@@ -1,6 +1,7 @@
 import * as z from "zod"
 import BaseFunctionTool from "../base/FunctionTool"
 import "dotenv/config"
+import { AppError } from "@/utils/errors"
 
 const serperRespSchema = z.object({
   knowledgeGraph: z.optional(z.object()),
@@ -15,24 +16,40 @@ const serperRespSchema = z.object({
   )
 })
 
-async function call_search(keywords: string, language?: string) {
-  const result = serperRespSchema.parse(
-    await (
-      await fetch("https://google.serper.dev/search", {
-        headers: {
-          "X-API-KEY": process.env.SERPER_API_KEY!,
-          "Content-Type": "application/json"
-        },
-        method: "POST",
-        body: JSON.stringify({
-          q: keywords,
-          hl: language
-        }),
-        redirect: "follow"
-      })
-    ).json()
-  )
+async function search_serper(keywords: string, language?: string) {
+  const apiKey = process.env.SERPER_API_KEY
+  if (!apiKey) {
+    throw new AppError("UPSTREAM_ERROR", "SERPER_API_KEY is not configured")
+  }
+
+  const response = await fetch("https://google.serper.dev/search", {
+    headers: {
+      "X-API-KEY": apiKey,
+      "Content-Type": "application/json"
+    },
+    method: "POST",
+    body: JSON.stringify({
+      q: keywords,
+      hl: language
+    }),
+    redirect: "follow"
+  })
+
+  if (!response.ok) {
+    throw new AppError("UPSTREAM_ERROR", "Serper search failed", {
+      status: response.status
+    })
+  }
+
+  const result = serperRespSchema.parse(await response.json())
   return result
+}
+
+async function search({ keywords, language }: { keywords: string; language?: string }) {
+  return {
+    success: true,
+    data: await search_serper(keywords, language)
+  }
 }
 
 async function url2markdown({ url }: { url: string }) {
@@ -51,48 +68,43 @@ async function url2markdown({ url }: { url: string }) {
       )
     )
   })
-  try {
-    const origin_html = await (await fetch(url)).blob()
-    const fd = new FormData()
-    // TODO: test if ext name will affect parse result (pdf)
-    fd.set("files", origin_html, "html2md.html")
-    const raw = await (
-      await fetch("https://api.cloudflare.com/client/v4/accounts/d5c2facf4cd13419884d0c4d0bf0f081/ai/tomarkdown", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.CLOUDFLARE_AI_TOKEN}`
-        },
-        body: fd
-      })
-    ).json()
-    const result = cf2mdSchema.parse(raw)
-    if (!result.success || !result.result || result.result?.length === 0)
-      return {
-        format: "html",
-        result: await origin_html.text()
-      }
-    else
-      return {
-        format: "markdown",
-        tokens: result.result[0]!.tokens,
-        result: result.result[0]!.data
-      }
-  } catch (e) {
-    return e instanceof Error ? e.toString() : "Failed to fetch target url!"
+  const token = process.env.CLOUDFLARE_AI_TOKEN
+  if (!token) {
+    throw new AppError("UPSTREAM_ERROR", "CLOUDFLARE_AI_TOKEN is not configured")
   }
-}
 
-async function search_serper({ keywords, language }: { keywords: string; language?: string }) {
-  try {
-    return {
-      success: true,
-      data: await call_search(keywords, language)
+  const origin_html = await (await fetch(url)).blob()
+  const fd = new FormData()
+  // TODO: test if ext name will affect parse result (pdf)
+  fd.set("files", origin_html, "html2md.html")
+  const response = await fetch(
+    "https://api.cloudflare.com/client/v4/accounts/d5c2facf4cd13419884d0c4d0bf0f081/ai/tomarkdown",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`
+      },
+      body: fd
     }
-  } catch (e) {
+  )
+
+  if (!response.ok) {
+    throw new AppError("UPSTREAM_ERROR", "Cloudflare markdown conversion failed", {
+      status: response.status
+    })
+  }
+
+  const result = cf2mdSchema.parse(await response.json())
+  if (!result.success || !result.result || result.result?.length === 0)
     return {
-      success: false,
-      reason: e instanceof Object ? e.toString() : "Unknown error occurred!"
+      format: "html",
+      result: await origin_html.text()
     }
+
+  return {
+    format: "markdown",
+    tokens: result.result[0]!.tokens,
+    result: result.result[0]!.data
   }
 }
 
@@ -103,12 +115,12 @@ export const websearch = new BaseFunctionTool({
     keywords: z.string().meta({ description: "Search query string." }),
     language: z.optional(z.string()).meta({ description: "Preferred language for results (e.g., 'en', 'zh-cn')." })
   }),
-  func: search_serper
+  func: search
 })
 
 export const fetchMarkdown = new BaseFunctionTool({
   name: "fetchMarkdown",
-  description: "Fetch a URL's content and convert it to Markdown. Supports HTML, PDF, Office docs, etc.",
+  description: "Fetch a URL's content, result in Markdown. Supports HTML, PDF, Office docs, etc.",
   schema: z.object({
     url: z.url().meta({ description: "Full URL to fetch (must start with http:// or https://)." })
   }),

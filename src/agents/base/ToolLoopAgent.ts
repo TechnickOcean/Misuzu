@@ -3,6 +3,7 @@ import type * as z from "zod"
 import type BaseCustomTool from "@/tools/base/CustomTool"
 import type BaseFunctionTool from "@/tools/base/FunctionTool"
 import requestAPI, { type ModelWithTools } from "@/utils/api"
+import logger from "@/utils/logger"
 
 type Tool = BaseCustomTool<unknown> | BaseFunctionTool<z.ZodType, unknown>
 
@@ -42,7 +43,7 @@ class ToolLoopAgent {
           const callInfo = toolcall.type === "function" ? toolcall.function : toolcall.custom
           const callArg = toolcall.type === "function" ? toolcall.function.arguments : toolcall.custom.input
           const targetTool = this.#tools.find((tool) => tool.name === callInfo.name)
-          console.log(`Calling ${targetTool?.name}(${callArg})`)
+          logger.debug({ tool: targetTool?.name }, "tool call")
           return {
             content: (await targetTool?.execute(callArg)) ?? "There's no output.",
             role: "tool",
@@ -91,12 +92,12 @@ class ToolLoopAgent {
         case "tool_calls":
           if (choice.message.tool_calls) await this.#handleToolcalls(choice.message.tool_calls)
           // @ts-expect-error addtional prop added by qwen api
-          console.log(choice.message.reasoning_content)
+          logger.debug({ reasoning: choice.message.reasoning_content }, "model reasoning")
           break
         case "stop":
           nextStepFlag = false
           this.context.push({ role: "assistant", content: choice.message.content })
-          console.log(choice.message.content)
+          logger.debug({ message: choice.message.content }, "model output")
           break
         case "content_filter":
           nextStepFlag = false
@@ -104,10 +105,10 @@ class ToolLoopAgent {
           //   this.context.findLastIndex((i) => i.role === "user"),
           //   1
           // )
-          console.log("filtered")
+          logger.warn("content filtered")
           break
         case "length":
-          console.log(choice.message.content)
+          logger.warn({ message: choice.message.content }, "output length exceeded")
           await this.compact()
           break
       }

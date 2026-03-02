@@ -1,4 +1,6 @@
 import type { ChatCompletionTool } from "openai/resources"
+import { AppError, toErrorResponse } from "@/utils/errors"
+import logger from "@/utils/logger"
 
 class BaseCustomTool<T> {
   name: string
@@ -19,12 +21,13 @@ class BaseCustomTool<T> {
         return JSON.stringify(result)
       }
     } catch (e) {
-      if (e instanceof Error)
-        return JSON.stringify({
-          success: false,
-          result: `Execution failed due to ${e.name}\n${e.message}\n${e?.stack}`
-        })
-      return JSON.stringify({ success: false, result: "Execution failed due to unknown error." })
+      const error = e instanceof Error ? e : new AppError("TOOL_ERROR", "Tool execution failed")
+      const response = toErrorResponse(error, {
+        code: "TOOL_ERROR",
+        message: "Tool execution failed"
+      })
+      logger.error({ tool: this.name, error: e instanceof Error ? e.message : String(e) }, "tool execution failed")
+      return JSON.stringify(response)
     }
   }
   make_schema(): ChatCompletionTool {
