@@ -267,3 +267,38 @@ export const stateTool = new BaseFunctionTool({
   }),
   func: manageState
 })
+
+async function appendKnowledge({
+  workspace_id,
+  entry
+}: {
+  workspace_id: number
+  entry: { id: string; title: string; summary: string; source: string; path: string }
+}) {
+  const workspace = await getDBWorkspace({ id: workspace_id })
+  if (!workspace) throw new AppError("NOT_FOUND", "Workspace not found", { workspace_id })
+  const store = (workspace.store as Record<string, unknown>) || {}
+  const knowledge = Array.isArray(store.knowledge_index) ? store.knowledge_index : []
+  const next = {
+    ...store,
+    knowledge_index: [...knowledge, entry]
+  }
+  await updateDBWorkspace({ id: workspace_id, data: { store: next } })
+  return "Knowledge entry appended"
+}
+
+export const appendKnowledgeTool = new BaseFunctionTool({
+  name: "appendKnowledge",
+  description: "Append a knowledge index entry to the workspace store.",
+  schema: z.object({
+    workspace_id: z.number(),
+    entry: z.object({
+      id: z.string(),
+      title: z.string(),
+      summary: z.string(),
+      source: z.string(),
+      path: z.string()
+    })
+  }),
+  func: appendKnowledge
+})

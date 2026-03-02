@@ -262,8 +262,6 @@ export class GitHubSearch {
   }
 }
 
-// --- Function Tool Exports ---
-
 const gitHubToolInstance = new GitHubSearch()
 
 export const ghSearchRepos = new BaseFunctionTool({
