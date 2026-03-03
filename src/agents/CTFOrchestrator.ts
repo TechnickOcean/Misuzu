@@ -18,12 +18,5 @@ export async function runCTFOrchestrator(input: OrchestratorInput) {
   const workspace = await getDBWorkspace({ id: envResult.workspace_id })
   const store = workspace?.store as { status?: string } | null
   if (store?.status === "blocked") {
-    // AgentHiro dispatch should be triggered by CTFAgent in real flow.
-    // This is a placeholder hook for future conditional scheduling.
   }
 }
-
-await runCTFAgent({
-  workspace_id: 1,
-  model: "qwen3-30b-a3b-fp8"
-})

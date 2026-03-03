@@ -1,6 +1,5 @@
 import OpenAI, { type APIPromise } from "openai"
 import type { ChatCompletion, ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources"
-import "dotenv/config"
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_TOKEN,

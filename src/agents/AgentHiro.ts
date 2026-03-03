@@ -1,3 +1,4 @@
+import { readAgentState, writeAgentState } from "@/agents/base/agentState"
 import ToolLoopAgent from "@/agents/base/ToolLoopAgent"
 import {
   ghGetContent,
@@ -5,11 +6,17 @@ import {
   ghListSecurityAdvisories,
   ghSearchCode,
   ghSearchRepos
-} from "@/tools/websearch/GitHubSearch"
-import { fetchMarkdown, websearch } from "@/tools/websearch/WebSearch"
+} from "@/tools/websearch/githubSearch"
+import { fetchMarkdown, websearch } from "@/tools/websearch/websearch"
 import { getDBWorkspace, updateDBWorkspace } from "@/tools/workspace/core/db"
 import type { WorkspaceStore } from "@/tools/workspace/helpers"
-import { appendKnowledgeTool, readFileTool, shellTool, stateTool, writeFileTool } from "@/tools/workspace/workspace"
+import {
+  createAppendKnowledgeTool,
+  createReadFileTool,
+  createShellTool,
+  createStateTool,
+  createWriteFileTool
+} from "@/tools/workspace/workspace"
 import { AppError } from "@/utils/errors"
 
 export interface AgentHiroInput {
@@ -42,10 +49,24 @@ function buildHiroPrompt(questions: string[]) {
   ].join("\n")
 }
 
-export async function runAgentHiro(input: AgentHiroInput) {
+export async function runAgentHiro(
+  input: AgentHiroInput,
+  callbacks?: {
+    onEvent?: (event: { type: string; [key: string]: unknown }) => void
+    shouldStop?: () => boolean
+  }
+) {
   const workspace = await getDBWorkspace({ id: input.workspace_id })
   if (!workspace) throw new AppError("NOT_FOUND", "Workspace not found", { workspace_id: input.workspace_id })
+  const workspacePath = workspace.path
 
+  const readFileTool = createReadFileTool(input.workspace_id)
+  const writeFileTool = createWriteFileTool(input.workspace_id)
+  const appendKnowledgeTool = createAppendKnowledgeTool(input.workspace_id)
+  const stateTool = createStateTool(input.workspace_id)
+  const shellTool = createShellTool(input.workspace_id)
+
+  const savedState = await readAgentState(workspacePath)
   const agent = new ToolLoopAgent({
     model: input.model,
     instruction: buildHiroPrompt(input.questions),
@@ -62,7 +83,22 @@ export async function runAgentHiro(input: AgentHiroInput) {
       appendKnowledgeTool,
       stateTool,
       shellTool
-    ]
+    ],
+    initialContext: savedState?.context,
+    onEvent: callbacks?.onEvent,
+    onStepEnd: async ({ stop }) => {
+      const shouldStop = callbacks?.shouldStop?.() ?? false
+      const status = shouldStop ? "paused" : "running"
+      if (shouldStop) stop()
+      await writeAgentState(workspacePath, {
+        version: 1,
+        context: agent.context,
+        step_count: agent.stepCount,
+        status,
+        last_agent: "AgentHiro",
+        updated_at: new Date().toISOString()
+      })
+    }
   })
 
   const store = (workspace.store as WorkspaceStore | null) ?? null
@@ -75,6 +111,15 @@ export async function runAgentHiro(input: AgentHiroInput) {
         current_step: "hiro_research"
       }
     }
+  })
+
+  await writeAgentState(workspacePath, {
+    version: 1,
+    context: savedState?.context ?? [],
+    step_count: savedState?.step_count ?? 0,
+    status: "running",
+    last_agent: "AgentHiro",
+    updated_at: new Date().toISOString()
   })
 
   await agent.generate({

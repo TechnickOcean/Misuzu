@@ -1,4 +1,3 @@
-import "dotenv/config"
 import { randomBytes } from "node:crypto"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"

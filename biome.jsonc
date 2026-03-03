@@ -16,7 +16,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/dist"]
+    "includes": ["**", "!**/dist", "!tmp"]
   },
   "assist": {
     "actions": {

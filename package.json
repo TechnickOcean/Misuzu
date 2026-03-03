@@ -8,7 +8,7 @@
     "web:preview": "bun run --cwd apps/web preview",
     "server:dev": "bun run --cwd apps/server dev",
     "server:start": "bun run --cwd apps/server start",
-    "dev": "concurrently -n web,server -c cyan,magenta \"bun run web:dev\" \"bun run server:dev\"",
+    "dev": "concurrently -n web,server -c cyan,magenta \"bun run web:dev\" \"bun --env-file=.env run server:dev \"",
     "code:check": "bunx biome check --write"
   },
   "devDependencies": {
@@ -25,7 +25,6 @@
     "@octokit/rest": "^22.0.1",
     "ai-gateway-provider": "^3.1.1",
     "better-sqlite3": "^12.6.2",
-    "dotenv": "^17.3.1",
     "drizzle-orm": "^0.45.1",
     "openai": "^6.25.0",
     "pino": "^10.3.1",

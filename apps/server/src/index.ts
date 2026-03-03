@@ -4,11 +4,16 @@ import { zValidator } from "@hono/zod-validator"
 import type { ServerWebSocket } from "bun"
 import * as Bun from "bun"
 import { Hono } from "hono"
+import { createBunWebSocket } from "hono/bun"
 import { z } from "zod"
+import { runAgentHiro } from "@/agents/AgentHiro"
+import { readAgentState } from "@/agents/base/agentState"
+import { runCTFAgent } from "@/agents/CTFAgent"
 import { runEnvAgent } from "@/agents/EnvAgent"
 import { getDBWorkspace, listDBWorkspaces, updateDBWorkspace } from "@/tools/workspace/core/db"
 
 const app = new Hono()
+const agentControllers = new Map<number, { stop: boolean; running: boolean }>()
 app.use("*", async (c, next) => {
   c.header("Access-Control-Allow-Origin", "http://localhost:5173")
   c.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
@@ -46,23 +51,30 @@ app.post(
 app.get("/api/workspaces/:id", async (c) => {
   const id = Number(c.req.param("id"))
   const workspace = await getDBWorkspace({ id })
+  const agentState = workspace?.path ? await readAgentState(workspace.path) : null
   return c.json({
     id: workspace?.id,
     title: workspace?.title,
     path: workspace?.path,
-    store: workspace?.store ?? null
+    store: workspace?.store ?? null,
+    agent_state: agentState,
+    is_running: agentControllers.get(id)?.running ?? false
   })
 })
 
 app.get("/api/workspaces", async (c) => {
   const workspaces = await listDBWorkspaces()
   return c.json(
-    workspaces.map((workspace) => ({
-      id: workspace.id,
-      title: workspace.title,
-      path: workspace.path,
-      store: workspace.store ?? null
-    }))
+    await Promise.all(
+      workspaces.map(async (workspace) => ({
+        id: workspace.id,
+        title: workspace.title,
+        path: workspace.path,
+        store: workspace.store ?? null,
+        agent_state: workspace.path ? await readAgentState(workspace.path) : null,
+        is_running: agentControllers.get(workspace.id)?.running ?? false
+      }))
+    )
   )
 })
 
@@ -70,17 +82,76 @@ app.post("/api/workspaces/:id/switch", async (c) => {
   const id = Number(c.req.param("id"))
   const workspace = await getDBWorkspace({ id })
   if (!workspace) return c.json({ error: "Workspace not found" }, 404)
+  const store = (workspace.store as Record<string, unknown> | null) ?? {}
   await updateDBWorkspace({
     id,
     data: {
       store: {
-        ...(workspace.store as Record<string, unknown>),
-        status: "running",
+        ...store,
         current_step: "active"
       }
     }
   })
   await broadcastWorkspaces()
+  return c.json({ ok: true })
+})
+
+const agentStartSchema = z.object({
+  model: z.enum(["glm-4.7-flash", "llama-4-scout-17b-16e-instruct", "qwen3-30b-a3b-fp8"]),
+  type: z.enum(["ctf", "hiro"]).default("ctf"),
+  questions: z.array(z.string()).default([])
+})
+
+app.post(
+  "/api/workspaces/:id/agent/start",
+  zValidator("json", agentStartSchema, (result, c) => {
+    if (!result.success) return c.json({ error: "Invalid payload" }, 400)
+  }),
+  async (c) => {
+    const id = Number(c.req.param("id"))
+    const workspace = await getDBWorkspace({ id })
+    if (!workspace) return c.json({ error: "Workspace not found" }, 404)
+
+    if (!agentControllers.has(id)) {
+      agentControllers.set(id, { stop: false, running: false })
+    }
+    const controller = agentControllers.get(id)
+    if (!controller) return c.json({ error: "Agent controller unavailable" }, 500)
+    if (controller.running) return c.json({ error: "Agent already running" }, 409)
+
+    controller.stop = false
+    controller.running = true
+
+    const payload = c.req.valid("json")
+    const notify = (event: { type: string; [key: string]: unknown }) => {
+      const message = JSON.stringify({ type: "agent_event", workspace_id: id, data: event })
+      for (const ws of sockets) ws.send(message)
+    }
+
+    const shouldStop = () => controller.stop
+
+    if (payload.type === "hiro") {
+      const questions = payload.questions.length ? payload.questions : ["Provide missing knowledge."]
+      runAgentHiro({ workspace_id: id, model: payload.model, questions }, { onEvent: notify, shouldStop }).finally(
+        () => {
+          controller.running = false
+        }
+      )
+    } else {
+      runCTFAgent({ workspace_id: id, model: payload.model }, { onEvent: notify, shouldStop }).finally(() => {
+        controller.running = false
+      })
+    }
+
+    return c.json({ ok: true })
+  }
+)
+
+app.post("/api/workspaces/:id/agent/stop", async (c) => {
+  const id = Number(c.req.param("id"))
+  const controller = agentControllers.get(id)
+  if (!controller) return c.json({ error: "Agent not started" }, 404)
+  controller.stop = true
   return c.json({ ok: true })
 })
 
@@ -126,40 +197,48 @@ app.post("/api/workspaces/with-attachments", async (c) => {
 app.get("/healthz", (c) => c.text("ok"))
 
 const sockets = new Set<ServerWebSocket<undefined>>()
-let server: ReturnType<typeof Bun.serve>
 
-server = Bun.serve({
-  port: 3001,
-  fetch(req) {
-    const url = new URL(req.url)
-    if (url.pathname === "/ws") {
-      if (server.upgrade(req, { data: undefined })) return
-      return new Response("Upgrade required", { status: 426 })
+const { upgradeWebSocket, websocket } = createBunWebSocket<ServerWebSocket<undefined>>()
+
+app.get(
+  "/ws",
+  upgradeWebSocket((c) => {
+    return {
+      onOpen(event, ws) {
+        if (ws.raw) {
+          sockets.add(ws.raw as ServerWebSocket<undefined>)
+          broadcastWorkspaces().catch(() => {})
+        }
+      },
+      onClose(event, ws) {
+        if (ws.raw) {
+          sockets.delete(ws.raw as ServerWebSocket<undefined>)
+        }
+      }
     }
-    return app.fetch(req, undefined as never)
-  },
-  websocket: {
-    open(ws) {
-      sockets.add(ws as ServerWebSocket<undefined>)
-      broadcastWorkspaces().catch(() => {})
-    },
-    close(ws) {
-      sockets.delete(ws as ServerWebSocket<undefined>)
-    },
-    message() {}
-  }
+  })
+)
+
+Bun.serve({
+  port: 3001,
+  fetch: app.fetch,
+  websocket
 })
 
 async function broadcastWorkspaces() {
   const workspaces = await listDBWorkspaces()
   const payload = JSON.stringify({
     type: "workspaces",
-    data: workspaces.map((workspace) => ({
-      id: workspace.id,
-      title: workspace.title,
-      path: workspace.path,
-      store: workspace.store ?? null
-    }))
+    data: await Promise.all(
+      workspaces.map(async (workspace) => ({
+        id: workspace.id,
+        title: workspace.title,
+        path: workspace.path,
+        store: workspace.store ?? null,
+        agent_state: workspace.path ? await readAgentState(workspace.path) : null,
+        is_running: agentControllers.get(workspace.id)?.running ?? false
+      }))
+    )
   })
   for (const ws of sockets) {
     ws.send(payload)

@@ -1,7 +1,6 @@
 import * as z from "zod"
-import BaseFunctionTool from "../base/FunctionTool"
-import "dotenv/config"
 import { AppError } from "@/utils/errors"
+import BaseFunctionTool from "../base/FunctionTool"
 
 const serperRespSchema = z.object({
   knowledgeGraph: z.optional(z.object()),
