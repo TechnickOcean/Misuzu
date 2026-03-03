@@ -1,5 +1,8 @@
+import * as z from "zod"
+import { runAgentHiro } from "@/agents/AgentHiro"
 import { readAgentState, writeAgentState } from "@/agents/base/agentState"
 import ToolLoopAgent from "@/agents/base/ToolLoopAgent"
+import BaseFunctionTool from "@/tools/base/FunctionTool"
 import { getDBWorkspace, updateDBWorkspace } from "@/tools/workspace/core/db"
 import type { WorkspaceStore } from "@/tools/workspace/helpers"
 import { ShellManager } from "@/tools/workspace/shell_manager"
@@ -32,6 +35,7 @@ function buildContextPrompt(store: WorkspaceStore | null, envMd: string, fileTre
     "Use multi-terminal tools for persistent sessions: create_terminal -> exec_terminal. `cd` persists per session.",
     "Use background mode for long-running tasks. read_terminal shows recent output, kill_terminal stops it.",
     "Use the legacy `shell` tool for quick, one-off commands with no persistent state.",
+    "If you need external knowledge, call request_agent_hiro with questions.",
     "If stuck for 3 steps without progress, request AgentHiro.",
     "",
     "## Environment",
@@ -68,8 +72,58 @@ export async function runCTFAgent(
   const grepTool = createGrepTool(input.workspace_id)
   const shellTool = createShellTool(input.workspace_id)
   const stateTool = createStateTool(input.workspace_id)
-  const shellManager = new ShellManager(workspacePath, callbacks?.onEvent)
+  const tagEvent = (agentName: string) => (event: { type: string; [key: string]: unknown }) => {
+    callbacks?.onEvent?.({
+      ...event,
+      agent: agentName,
+      timestamp: new Date().toISOString()
+    })
+  }
+  const shellManager = new ShellManager(workspacePath, tagEvent("CTFAgent"))
   const shellSessionTools = createShellSessionTools(shellManager)
+
+  const requestHiroTool = new BaseFunctionTool({
+    name: "request_agent_hiro",
+    description: "Request AgentHiro research for missing knowledge and wait for its report.",
+    schema: z.object({
+      questions: z.optional(z.array(z.string())).meta({ description: "Questions for AgentHiro to research." }),
+      reason: z.optional(z.string()).meta({ description: "Short reason for requesting AgentHiro." })
+    }),
+    func: async ({ questions, reason }: { questions?: string[]; reason?: string }) => {
+      const list = (questions ?? [])
+        .map((q) => q.trim())
+        .filter(Boolean)
+        .slice(0, 5)
+      const fallback = reason?.trim() ? [reason.trim()] : []
+      const payload = list.length ? list : fallback.length ? fallback : ["Provide missing knowledge."]
+      await runAgentHiro(
+        {
+          workspace_id: input.workspace_id,
+          model: input.model,
+          questions: payload
+        },
+        {
+          ...callbacks,
+          onEvent: tagEvent("AgentHiro")
+        }
+      )
+      await writeAgentState(workspacePath, {
+        version: 1,
+        context: agent.context,
+        step_count: agent.stepCount,
+        status: "running",
+        last_agent: "CTFAgent",
+        updated_at: new Date().toISOString()
+      })
+      const refreshed = await getDBWorkspace({ id: input.workspace_id })
+      const store = (refreshed?.store as WorkspaceStore | null) ?? null
+      const latest = store?.knowledge_index?.slice(-1)[0]
+      if (latest) {
+        return `AgentHiro report: ${latest.title} (${latest.path})`
+      }
+      return "AgentHiro completed without knowledge report"
+    }
+  })
 
   const envMd = await readFileTool.execute(JSON.stringify({ file_path: "Environment.md" }))
   const fileTree = await globTool.execute(JSON.stringify({ pattern: "**/*" }))
@@ -101,9 +155,18 @@ export async function runCTFAgent(
   const agent = new ToolLoopAgent({
     model: input.model,
     instruction: prompt,
-    tools: [readFileTool, writeFileTool, globTool, grepTool, shellTool, stateTool, ...shellSessionTools],
+    tools: [
+      readFileTool,
+      writeFileTool,
+      globTool,
+      grepTool,
+      shellTool,
+      stateTool,
+      requestHiroTool,
+      ...shellSessionTools
+    ],
     initialContext: savedState?.context,
-    onEvent: callbacks?.onEvent,
+    onEvent: tagEvent("CTFAgent"),
     onStepEnd: async ({ stop }) => {
       const shouldStop = callbacks?.shouldStop?.() ?? false
       const status = shouldStop ? "paused" : "running"

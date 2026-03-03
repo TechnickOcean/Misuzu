@@ -85,6 +85,9 @@ export class ShellSession {
       subprocess.exited
     ])
 
+    if (stdout) this.appendOutput("stdout", stdout)
+    if (stderr) this.appendOutput("stderr", stderr)
+
     if (exitCode !== 0) {
       throw new AppError("UPSTREAM_ERROR", "Shell command failed", {
         command,
@@ -206,7 +209,7 @@ export class ShellManager {
 }
 
 function buildShellCommand(command: string) {
-  if (process.platform === "win32") return ["cmd.exe", "/c", command]
+  if (process.platform === "win32") return ["pwsh", "-NoProfile", "-Command", command]
   return ["bash", "-lc", command]
 }
 

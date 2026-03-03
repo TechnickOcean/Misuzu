@@ -232,7 +232,7 @@ export const createShellTool = (workspace_id: number) => {
 }
 
 function buildShellCommand(command: string) {
-  if (process.platform === "win32") return ["cmd.exe", "/c", command]
+  if (process.platform === "win32") return ["pwsh", "-NoProfile", "-Command", command]
   return ["bash", "-lc", command]
 }
 
@@ -356,7 +356,14 @@ export const createStateTool = (workspace_id: number) => {
 
     if (action === "get") {
       if (!key) throw new AppError("VALIDATION_ERROR", "Key is required for get action")
-      const payload = JSON.stringify(store[key])
+      if (!Object.hasOwn(store, key)) {
+        throw new AppError("NOT_FOUND", "Key not found", { key })
+      }
+      const rawValue = store[key]
+      const payload = JSON.stringify(rawValue)
+      if (!payload) {
+        return "null"
+      }
       if (payload.length > MAX_OUTPUT_CHARS) {
         return `${payload.slice(0, MAX_OUTPUT_CHARS)}\n... (value truncated)`
       }

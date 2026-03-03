@@ -71,18 +71,57 @@ class ToolLoopAgent {
 
   #handleToolcalls(toolcalls: ChatCompletionMessageToolCall[]) {
     return new Promise((resolve, reject) => {
+      const normalizeName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "")
+      const toolIndex = this.#tools.map((tool) => ({
+        tool,
+        name: tool.name,
+        normalized: normalizeName(tool.name)
+      }))
+      const resolveTool = (rawName: string) => {
+        const direct = toolIndex.find((entry) => entry.name === rawName)?.tool
+        if (direct) return direct
+        const normalized = normalizeName(rawName)
+        const exactNormalized = toolIndex.find((entry) => entry.normalized === normalized)?.tool
+        if (exactNormalized) return exactNormalized
+        let best: { tool: Tool; index: number; length: number } | null = null
+        for (const entry of toolIndex) {
+          const index = normalized.lastIndexOf(entry.normalized)
+          if (index === -1) continue
+          if (!best || index > best.index || (index === best.index && entry.normalized.length > best.length)) {
+            best = { tool: entry.tool, index, length: entry.normalized.length }
+          }
+        }
+        return best?.tool
+      }
+
       Promise.all(
         toolcalls.map(async (toolcall) => {
           const callInfo = toolcall.type === "function" ? toolcall.function : toolcall.custom
           const callArg = toolcall.type === "function" ? toolcall.function.arguments : toolcall.custom.input
-          const targetTool = this.#tools.find((tool) => tool.name === callInfo.name)
-          if (targetTool && this.#onEvent) {
-            this.#onEvent({ type: "tool_call", tool: targetTool.name, input: callArg })
+          let callName = callInfo.name.trim()
+          if (callName.includes("<")) {
+            callName = callName.split("<")[0]!.trim()
           }
-          const result = (await targetTool?.execute(callArg)) ?? "There's no output."
-          logger.debug({ tool: targetTool?.name, input: callArg, output: result.slice(0, 200) }, "tool call")
-          if (targetTool && this.#onEvent) {
-            this.#onEvent({ type: "tool_result", tool: targetTool.name, output: result })
+          callName = callName.split(/\s+/)[0] ?? callName
+          const targetTool = resolveTool(callName)
+          if (this.#onEvent) {
+            this.#onEvent({ type: "tool_call", tool: targetTool?.name ?? callName, input: callArg })
+          }
+          const result = targetTool
+            ? await targetTool.execute(callArg)
+            : JSON.stringify({
+                success: false,
+                error: {
+                  code: "UNKNOWN_TOOL",
+                  message: `Unknown tool: ${callName}`
+                }
+              })
+          logger.debug(
+            { tool: targetTool?.name ?? callName, input: callArg, output: result.slice(0, 200) },
+            "tool call"
+          )
+          if (this.#onEvent) {
+            this.#onEvent({ type: "tool_result", tool: targetTool?.name ?? callName, output: result })
           }
           return {
             content: result,
