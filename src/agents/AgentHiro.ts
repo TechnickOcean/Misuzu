@@ -56,6 +56,8 @@ export async function runAgentHiro(
     shouldStop?: () => boolean
   }
 ) {
+  const isFinalStop = (response?: { choices?: Array<{ finish_reason?: string }> }) =>
+    Array.isArray(response?.choices) && response.choices.some((choice) => choice.finish_reason === "stop")
   const workspace = await getDBWorkspace({ id: input.workspace_id })
   if (!workspace) throw new AppError("NOT_FOUND", "Workspace not found", { workspace_id: input.workspace_id })
   const workspacePath = workspace.path
@@ -86,9 +88,10 @@ export async function runAgentHiro(
     ],
     initialContext: savedState?.context,
     onEvent: callbacks?.onEvent,
-    onStepEnd: async ({ stop }) => {
+    onStepEnd: async ({ stop, APIResponse }) => {
       const shouldStop = callbacks?.shouldStop?.() ?? false
-      const status = shouldStop ? "paused" : "running"
+      const finished = !shouldStop && isFinalStop(APIResponse)
+      const status = shouldStop ? "paused" : finished ? "done" : "running"
       if (shouldStop) stop()
       await writeAgentState(workspacePath, {
         version: 1,
@@ -97,6 +100,19 @@ export async function runAgentHiro(
         status,
         last_agent: "AgentHiro",
         updated_at: new Date().toISOString()
+      })
+      const workspaceStatus: WorkspaceStore["status"] = shouldStop ? "blocked" : finished ? "done" : "running"
+      const latest = await getDBWorkspace({ id: input.workspace_id })
+      const latestStore = (latest?.store as WorkspaceStore | null) ?? null
+      await updateDBWorkspace({
+        id: input.workspace_id,
+        data: {
+          store: {
+            ...(latestStore ?? {}),
+            status: workspaceStatus,
+            current_step: shouldStop ? "hiro_paused" : finished ? "hiro_done" : "hiro_research"
+          }
+        }
       })
     }
   })

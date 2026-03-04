@@ -33,10 +33,8 @@ function buildContextPrompt(store: WorkspaceStore | null, envMd: string, fileTre
     "Use tools to inspect files, run commands, and gather evidence.",
     "Workspace tools are already scoped to the current workspace.",
     "Use multi-terminal tools for persistent sessions: create_terminal -> exec_terminal. `cd` persists per session.",
-    "Use background mode for long-running tasks. read_terminal shows recent output, kill_terminal stops it.",
-    "Use the legacy `shell` tool for quick, one-off commands with no persistent state.",
-    "If you need external knowledge, call request_agent_hiro with questions.",
-    "If stuck for 3 steps without progress, request AgentHiro.",
+    "If you need external knowledge or to dive into deep exploration about certain questions, call request_agent_hiro with detailed questions.",
+    "You can use python zipfile to unzip.",
     "",
     "## Environment",
     envMd,
@@ -62,6 +60,8 @@ export async function runCTFAgent(
     shouldStop?: () => boolean
   }
 ) {
+  const isFinalStop = (response?: { choices?: Array<{ finish_reason?: string }> }) =>
+    Array.isArray(response?.choices) && response.choices.some((choice) => choice.finish_reason === "stop")
   const workspace = await getDBWorkspace({ id: input.workspace_id })
   if (!workspace) throw new AppError("NOT_FOUND", "Workspace not found", { workspace_id: input.workspace_id })
   const workspacePath = workspace.path
@@ -117,11 +117,39 @@ export async function runCTFAgent(
       })
       const refreshed = await getDBWorkspace({ id: input.workspace_id })
       const store = (refreshed?.store as WorkspaceStore | null) ?? null
-      const latest = store?.knowledge_index?.slice(-1)[0]
-      if (latest) {
-        return `AgentHiro report: ${latest.title} (${latest.path})`
+      if (store) {
+        await updateDBWorkspace({
+          id: input.workspace_id,
+          data: {
+            store: {
+              ...store,
+              status: "running",
+              current_step: "ctf_agent"
+            }
+          }
+        })
       }
-      return "AgentHiro completed without knowledge report"
+      const latest = store?.knowledge_index?.slice(-1)[0]
+      if (!latest) return "AgentHiro completed without knowledge report"
+      let reportText = ""
+      try {
+        const raw = await readFileTool.execute(JSON.stringify({ file_path: latest.path }))
+        if (typeof raw === "string") {
+          const parsed = JSON.parse(raw)
+          reportText = typeof parsed === "string" ? parsed : ""
+        }
+      } catch {
+        reportText = ""
+      }
+      const summary = [
+        `AgentHiro report: ${latest.title}`,
+        `Source: ${latest.source}`,
+        `Path: ${latest.path}`,
+        latest.summary ? `Summary: ${latest.summary}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n")
+      return reportText ? `${summary}\n\n${reportText}` : summary
     }
   })
 
@@ -131,6 +159,7 @@ export async function runCTFAgent(
   const store = (workspace.store as WorkspaceStore | null) ?? null
   const prompt = buildContextPrompt(store, JSON.parse(envMd), JSON.parse(fileTree))
   const savedState = await readAgentState(workspacePath)
+  let lastWorkspaceStatus: WorkspaceStore["status"] = "running"
 
   await updateDBWorkspace({
     id: input.workspace_id,
@@ -167,9 +196,10 @@ export async function runCTFAgent(
     ],
     initialContext: savedState?.context,
     onEvent: tagEvent("CTFAgent"),
-    onStepEnd: async ({ stop }) => {
+    onStepEnd: async ({ stop, APIResponse }) => {
       const shouldStop = callbacks?.shouldStop?.() ?? false
-      const status = shouldStop ? "paused" : "running"
+      const finished = !shouldStop && isFinalStop(APIResponse)
+      const status = shouldStop ? "paused" : finished ? "done" : "running"
       if (shouldStop) stop()
       await writeAgentState(workspacePath, {
         version: 1,
@@ -179,6 +209,22 @@ export async function runCTFAgent(
         last_agent: "CTFAgent",
         updated_at: new Date().toISOString()
       })
+      const workspaceStatus: WorkspaceStore["status"] = shouldStop ? "blocked" : finished ? "done" : "running"
+      if (workspaceStatus !== lastWorkspaceStatus) {
+        lastWorkspaceStatus = workspaceStatus
+        const latest = await getDBWorkspace({ id: input.workspace_id })
+        const latestStore = (latest?.store as WorkspaceStore | null) ?? null
+        await updateDBWorkspace({
+          id: input.workspace_id,
+          data: {
+            store: {
+              ...(latestStore ?? {}),
+              status: workspaceStatus,
+              current_step: shouldStop ? "ctf_paused" : finished ? "ctf_done" : "ctf_agent"
+            }
+          }
+        })
+      }
     }
   })
 

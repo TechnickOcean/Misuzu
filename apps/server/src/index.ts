@@ -4,7 +4,7 @@ import { zValidator } from "@hono/zod-validator"
 import type { ServerWebSocket } from "bun"
 import * as Bun from "bun"
 import { Hono } from "hono"
-import { createBunWebSocket } from "hono/bun"
+import { upgradeWebSocket, websocket } from "hono/bun"
 import { z } from "zod"
 import { runAgentHiro } from "@/agents/AgentHiro"
 import { readAgentState } from "@/agents/base/agentState"
@@ -198,19 +198,17 @@ app.get("/healthz", (c) => c.text("ok"))
 
 const sockets = new Set<ServerWebSocket<undefined>>()
 
-const { upgradeWebSocket, websocket } = createBunWebSocket<ServerWebSocket<undefined>>()
-
 app.get(
   "/ws",
-  upgradeWebSocket((c) => {
+  upgradeWebSocket((_c) => {
     return {
-      onOpen(event, ws) {
+      onOpen(_event, ws) {
         if (ws.raw) {
           sockets.add(ws.raw as ServerWebSocket<undefined>)
           broadcastWorkspaces().catch(() => {})
         }
       },
-      onClose(event, ws) {
+      onClose(_event, ws) {
         if (ws.raw) {
           sockets.delete(ws.raw as ServerWebSocket<undefined>)
         }

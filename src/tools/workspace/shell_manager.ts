@@ -23,8 +23,16 @@ export class ShellSession {
   private basePath: string
   private onEvent?: (event: ShellEvent) => void
   private buffer: string[] = []
-  private pendingLine = ""
+
   private process: Bun.Subprocess | null = null
+  private backgroundProcesses = new Set<Bun.Subprocess>()
+
+  private currentResolver: ((output: string) => void) | null = null
+  private currentRejecter: ((err: Error) => void) | null = null
+  private cmdStdout = ""
+  private cmdStderr = ""
+  private cmdSentinel = ""
+  private cmdTimer: Timer | null = null
 
   constructor(options: {
     id: string
@@ -39,27 +47,97 @@ export class ShellSession {
     this.basePath = options.basePath
     this.onEvent = options.onEvent
     this.env = {}
+    this.start()
+  }
+
+  private start() {
+    const isWin = process.platform === "win32"
+    const shell = isWin ? "powershell.exe" : "bash"
+    // PowerShell: -Command - means read from stdin
+    const args = isWin ? ["-NoLogo", "-NoProfile", "-Command", "-"] : ["--noediting"]
+
+    this.process = Bun.spawn({
+      cmd: [shell, ...args],
+      cwd: this.cwd,
+      env: { ...process.env, ...this.env },
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe"
+    })
+
+    const stdout = this.process.stdout as ReadableStream<Uint8Array>
+    const stderr = this.process.stderr as ReadableStream<Uint8Array>
+
+    this.pumpStream(stdout.getReader(), "stdout")
+    this.pumpStream(stderr.getReader(), "stderr")
+
+    this.process.exited.then((code) => {
+      this.onEvent?.({ type: "terminal_exit", session_id: this.id, exitCode: code })
+      this.process = null
+      // If we were waiting for a command, it failed
+      if (this.currentRejecter) {
+        this.currentRejecter(new AppError("UPSTREAM_ERROR", "Shell process exited unexpectedly", { exitCode: code }))
+        this.resetCmdState()
+      }
+    })
   }
 
   isRunning() {
     return Boolean(this.process)
   }
 
-  async execute(command: string, background = false) {
-    const trimmed = command.trim()
-    const cdMatch = /^cd(\s+(.+))?$/i.exec(trimmed)
-    if (cdMatch) {
-      const rawTarget = cdMatch[2]?.trim()
-      const target = rawTarget ? this.resolvePath(rawTarget) : this.basePath
-      await this.assertDirExists(target)
-      this.cwd = target
-      return `Changed directory to ${this.cwd}`
+  async execute(command: string, background = false, timeout = 60000): Promise<string> {
+    if (!this.isRunning()) this.start()
+
+    if (background) return this.executeBackground(command)
+
+    if (this.currentResolver) {
+      throw new AppError("CONFLICT", "Session is busy executing another command", { session_id: this.id })
     }
 
-    if (this.process && this.isRunning()) {
-      throw new AppError("CONFLICT", "Session already has a running process", { session_id: this.id })
+    const isWin = process.platform === "win32"
+    const sentinelId = crypto.randomUUID().slice(0, 8)
+    const sentinel = `__END_${sentinelId}__`
+    this.cmdSentinel = sentinel
+    this.cmdStdout = ""
+    this.cmdStderr = ""
+
+    // Command construction
+    let fullCmd = ""
+    if (isWin) {
+      // PowerShell
+      fullCmd = `${command}; Write-Output "EXIT:$LASTEXITCODE"; Write-Output "CWD:$PWD"; Write-Output "${sentinel}"`
+    } else {
+      // Bash
+      fullCmd = `${command}; echo "EXIT:$?"; echo "CWD:$(pwd)"; echo "${sentinel}"`
     }
 
+    return new Promise((resolve, reject) => {
+      this.currentResolver = resolve
+      this.currentRejecter = reject
+      const enc = new TextEncoder()
+
+      // Write command
+      const stdin = this.process!.stdin as any
+      stdin.write(enc.encode(fullCmd + "\n"))
+      stdin.flush()
+
+      // Timeout
+      this.cmdTimer = setTimeout(() => {
+        if (this.currentRejecter) {
+          this.currentRejecter(
+            new AppError("UPSTREAM_ERROR", `Shell command timed out (${timeout}ms)`, { command, timeout })
+          )
+          this.resetCmdState()
+          // Restart shell to clear stuck state
+          this.stop()
+          this.start()
+        }
+      }, timeout)
+    })
+  }
+
+  private async executeBackground(command: string) {
     const subprocess = Bun.spawn({
       cmd: buildShellCommand(command),
       cwd: this.cwd,
@@ -68,98 +146,151 @@ export class ShellSession {
       stderr: "pipe"
     })
 
-    if (background) {
-      this.process = subprocess
-      this.streamToBuffer(subprocess.stdout, "stdout")
-      this.streamToBuffer(subprocess.stderr, "stderr")
-      subprocess.exited.then((exitCode) => {
-        this.process = null
-        this.onEvent?.({ type: "terminal_exit", session_id: this.id, exitCode })
-      })
-      return `Background process started (pid: ${subprocess.pid})`
-    }
+    const stdout = subprocess.stdout as ReadableStream<Uint8Array>
+    const stderr = subprocess.stderr as ReadableStream<Uint8Array>
 
-    const [stdout, stderr, exitCode] = await Promise.all([
-      subprocess.stdout ? new Response(subprocess.stdout).text() : Promise.resolve(""),
-      subprocess.stderr ? new Response(subprocess.stderr).text() : Promise.resolve(""),
-      subprocess.exited
-    ])
+    this.backgroundProcesses.add(subprocess)
+    subprocess.exited.finally(() => {
+      this.backgroundProcesses.delete(subprocess)
+    })
 
-    if (stdout) this.appendOutput("stdout", stdout)
-    if (stderr) this.appendOutput("stderr", stderr)
+    this.consumeBackgroundStream(stdout, "stdout")
+    this.consumeBackgroundStream(stderr, "stderr")
 
-    if (exitCode !== 0) {
-      throw new AppError("UPSTREAM_ERROR", "Shell command failed", {
-        command,
-        exitCode
-      })
-    }
-
-    return formatOutput(stdout, stderr)
+    return `Background process started (pid: ${subprocess.pid})`
   }
 
-  readBuffer(lines = 40) {
-    const slice = this.buffer.slice(-lines)
-    return slice.join("\n") || "(no output)"
-  }
-
-  stop() {
-    if (this.process) {
-      this.process.kill()
-      this.process = null
-    }
-  }
-
-  private async assertDirExists(target: string) {
-    try {
-      const stat = await fs.stat(target)
-      if (!stat.isDirectory()) {
-        throw new AppError("VALIDATION_ERROR", "Target is not a directory", { target })
-      }
-    } catch (error) {
-      if (error instanceof AppError) throw error
-      throw new AppError("NOT_FOUND", "Directory does not exist", { target })
-    }
-  }
-
-  private resolvePath(target: string) {
-    if (target.startsWith("~")) {
-      const home = os.homedir()
-      const rest = target.slice(1)
-      return path.resolve(home, rest)
-    }
-    if (path.isAbsolute(target)) return target
-    return path.resolve(this.cwd, target)
-  }
-
-  private streamToBuffer(stream: ReadableStream<Uint8Array> | null, kind: "stdout" | "stderr") {
+  private consumeBackgroundStream(stream: ReadableStream | null, kind: "stdout" | "stderr") {
     if (!stream) return
     const reader = stream.getReader()
     const decoder = new TextDecoder()
-
     const pump = async () => {
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        const chunk = decoder.decode(value)
-        this.appendOutput(kind, chunk)
-        this.onEvent?.({ type: "terminal_output", session_id: this.id, stream: kind, chunk })
+        const text = decoder.decode(value)
+        this.appendBuffer(kind, `[BG] ${text}`)
       }
     }
-
     pump().catch(() => {})
   }
 
-  private appendOutput(kind: "stdout" | "stderr", chunk: string) {
-    const tagged = `${kind.toUpperCase()}: ${chunk}`
-    const combined = this.pendingLine + tagged
-    const lines = combined.split("\n")
-    this.pendingLine = lines.pop() ?? ""
+  private async pumpStream(reader: any, kind: "stdout" | "stderr") {
+    const decoder = new TextDecoder()
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        const text = decoder.decode(value)
+        this.handleOutput(kind, text)
+      }
+    } catch (e) {}
+  }
+
+  private handleOutput(kind: "stdout" | "stderr", text: string) {
+    this.appendBuffer(kind, text)
+    this.onEvent?.({ type: "terminal_output", session_id: this.id, stream: kind, chunk: text })
+
+    if (this.currentResolver) {
+      if (kind === "stdout") this.cmdStdout += text
+      else this.cmdStderr += text
+
+      if (this.cmdStdout.includes(this.cmdSentinel)) {
+        this.finalizeCommand()
+      }
+    }
+  }
+
+  private finalizeCommand() {
+    if (this.cmdTimer) clearTimeout(this.cmdTimer)
+
+    const resolve = this.currentResolver
+    const reject = this.currentRejecter
+    this.currentResolver = null
+    this.currentRejecter = null
+    this.cmdTimer = null
+
+    const lines = this.cmdStdout.split(/\r?\n/)
+    const sentinelIdx = lines.findIndex((l) => l.includes(this.cmdSentinel))
+
+    // Safety check
+    if (sentinelIdx === -1) return
+
+    // Extract lines before sentinel
+    const rawLines = lines.slice(0, sentinelIdx)
+
+    let exitCode = 0
+    let foundCwd = false
+    let foundExit = false
+    let cutIndex = rawLines.length
+
+    // Scan backwards for CWD and EXIT
+    for (let i = rawLines.length - 1; i >= 0; i--) {
+      const line = (rawLines[i] ?? "").trim()
+      if (line === "") continue
+
+      if (!foundCwd && line.startsWith("CWD:")) {
+        this.cwd = line.substring(4).trim()
+        foundCwd = true
+        cutIndex = i
+        continue
+      }
+      if (foundCwd && !foundExit && line.startsWith("EXIT:")) {
+        exitCode = parseInt(line.substring(5), 10) || 0
+        foundExit = true
+        cutIndex = i
+        continue
+      }
+
+      // If we hit a non-empty line that isn't metadata while searching, stop.
+      // Metadata must be the last non-empty lines.
+      break
+    }
+
+    const output = formatOutput(rawLines.slice(0, cutIndex).join("\n"), this.cmdStderr)
+
+    // Reset buffers
+    this.cmdStdout = ""
+    this.cmdStderr = ""
+
+    if (exitCode !== 0) {
+      reject &&
+        reject(new AppError("UPSTREAM_ERROR", `Command failed with exit code ${exitCode}`, { output, exitCode }))
+    } else {
+      resolve && resolve(output)
+    }
+  }
+
+  private resetCmdState() {
+    if (this.cmdTimer) clearTimeout(this.cmdTimer)
+    this.currentResolver = null
+    this.currentRejecter = null
+    this.cmdTimer = null
+    this.cmdStdout = ""
+    this.cmdStderr = ""
+  }
+
+  private appendBuffer(kind: "stdout" | "stderr", text: string) {
+    // Basic buffering, maybe filtering sentinel out would be nice but not strictly required
+    const lines = text.split("\n")
     for (const line of lines) {
       if (!line) continue
-      this.buffer.push(line)
+      this.buffer.push(`${kind.toUpperCase()}: ${line}`)
       if (this.buffer.length > MAX_BUFFER_LINES) this.buffer.shift()
     }
+  }
+
+  readBuffer(lines = 40) {
+    return this.buffer.slice(-lines).join("\n") || "(no output)"
+  }
+
+  stop() {
+    this.process?.kill()
+    this.process = null
+    for (const proc of this.backgroundProcesses) {
+      proc.kill()
+    }
+    this.backgroundProcesses.clear()
   }
 }
 
@@ -214,13 +345,17 @@ function buildShellCommand(command: string) {
 }
 
 function formatOutput(stdout: string, stderr: string) {
-  let out = stdout
-  let err = stderr
+  let out = stdout.trim()
+  let err = stderr.trim()
   if (out.length > MAX_OUTPUT_CHARS) {
     out = `${out.slice(0, MAX_OUTPUT_CHARS)}\n... (stdout truncated)`
   }
   if (err.length > MAX_OUTPUT_CHARS) {
     err = `${err.slice(0, MAX_OUTPUT_CHARS)}\n... (stderr truncated)`
   }
-  return `STDOUT:\n${out}\nSTDERR:\n${err}`
+
+  const parts = []
+  if (out) parts.push(`STDOUT:\n${out}`)
+  if (err) parts.push(`STDERR:\n${err}`)
+  return parts.join("\n") || "(no output)"
 }

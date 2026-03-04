@@ -5,8 +5,10 @@ import * as z from "zod"
 import { AppError } from "@/utils/errors"
 import BaseFunctionTool from "../base/FunctionTool"
 import { createDBWorkspace, getDBWorkspace, updateDBWorkspace } from "./core/db"
+import { ShellManager } from "./shell_manager"
 
 const MAX_OUTPUT_CHARS = 2000
+const globalShellManagers = new Map<number, ShellManager>()
 
 export const createWorkspaceTool = new BaseFunctionTool({
   name: "createWorkspace",
@@ -194,72 +196,49 @@ export const createGrepTool = (workspace_id: number) => {
 }
 
 export const createShellTool = (workspace_id: number) => {
-  async function shell({ command }: { command: string }) {
-    const basePath = (await getDBWorkspace({ id: workspace_id }))!.path
-
-    const subprocess = Bun.spawn({
-      cmd: buildShellCommand(command),
-      cwd: basePath,
-      env: { ...process.env },
-      stdout: "pipe",
-      stderr: "pipe"
-    })
-
-    const [stdout, stderr, exitCode] = await Promise.all([
-      subprocess.stdout ? new Response(subprocess.stdout).text() : Promise.resolve(""),
-      subprocess.stderr ? new Response(subprocess.stderr).text() : Promise.resolve(""),
-      subprocess.exited
-    ])
-
-    if (exitCode !== 0) {
-      throw new AppError("UPSTREAM_ERROR", "Shell command failed", {
-        command,
-        exitCode
-      })
-    }
-
-    return formatOutput(stdout, stderr)
-  }
+  const isWin = process.platform === "win32"
+  const shellName = isWin ? "PowerShell" : "Bash"
 
   return new BaseFunctionTool({
     name: "shell",
-    description: "Execute a shell command. Use with caution.",
+    description: `Execute a shell command in a persistent ${shellName} session. State (env vars, cwd) persists between calls.`,
     schema: z.object({
-      command: z.string().meta({ description: "Shell command to execute." })
+      command: z.string().meta({ description: "Shell command to execute." }),
+      background: z.optional(z.boolean()).meta({ description: "Run the command in background." }),
+      timeout: z.optional(z.number()).meta({ description: "Timeout in milliseconds (default: 60000)." })
     }),
-    func: shell
+    func: async ({ command, background, timeout }: { command: string; background?: boolean; timeout?: number }) => {
+      let manager = globalShellManagers.get(workspace_id)
+      if (!manager) {
+        const workspace = await getDBWorkspace({ id: workspace_id })
+        if (!workspace) throw new AppError("NOT_FOUND", "Workspace not found", { workspace_id })
+        manager = new ShellManager(workspace.path)
+        globalShellManagers.set(workspace_id, manager)
+      }
+
+      const sessions = manager.listSessions()
+      let session = sessions.find((s) => s.name === "default")
+      if (!session) {
+        session = manager.createSession("default")
+      }
+
+      return session.execute(command, background, timeout)
+    }
   })
-}
-
-function buildShellCommand(command: string) {
-  if (process.platform === "win32") return ["pwsh", "-NoProfile", "-Command", command]
-  return ["bash", "-lc", command]
-}
-
-function formatOutput(stdout: string, stderr: string) {
-  let out = stdout
-  let err = stderr
-  if (out.length > MAX_OUTPUT_CHARS) {
-    out = `${out.slice(0, MAX_OUTPUT_CHARS)}\n... (stdout truncated)`
-  }
-  if (err.length > MAX_OUTPUT_CHARS) {
-    err = `${err.slice(0, MAX_OUTPUT_CHARS)}\n... (stderr truncated)`
-  }
-  return `STDOUT:\n${out}\nSTDERR:\n${err}`
 }
 
 export const createShellSessionTools = (manager: {
   createSession: (name?: string) => { id: string; name: string; cwd: string; isRunning: () => boolean }
   listSessions: () => { id: string; name: string; cwd: string; isRunning: () => boolean }[]
   getSession: (id: string) => {
-    execute: (command: string, background?: boolean) => Promise<string>
+    execute: (command: string, background?: boolean, timeout?: number) => Promise<string>
     readBuffer: (lines?: number) => string
   }
   killSession: (id: string) => void
 }) => {
   const createTerminalTool = new BaseFunctionTool({
     name: "create_terminal",
-    description: "Create a persistent terminal session. Returns a session_id.",
+    description: "Create a persistent terminal session (PowerShell/Bash). Returns a session_id.",
     schema: z.object({
       name: z.optional(z.string()).meta({ description: "Optional name for the session." })
     }),
@@ -292,23 +271,26 @@ export const createShellSessionTools = (manager: {
 
   const execTerminalTool = new BaseFunctionTool({
     name: "exec_terminal",
-    description: "Execute a command in a terminal session.",
+    description: "Execute a command in a terminal session. CWD and Env persist.",
     schema: z.object({
       session_id: z.string().meta({ description: "Terminal session id." }),
       command: z.string().meta({ description: "Shell command to execute." }),
-      background: z.optional(z.boolean()).meta({ description: "Run the command in background." })
+      background: z.optional(z.boolean()).meta({ description: "Run the command in background." }),
+      timeout: z.optional(z.number()).meta({ description: "Timeout in milliseconds (default: 60000)." })
     }),
     func: async ({
       session_id,
       command,
-      background
+      background,
+      timeout
     }: {
       session_id: string
       command: string
       background?: boolean
+      timeout?: number
     }) => {
       const session = manager.getSession(session_id)
-      return session.execute(command, background)
+      return session.execute(command, background, timeout)
     }
   })
 
