@@ -2,10 +2,9 @@ import * as fs from "node:fs/promises"
 import * as path from "node:path"
 import type { ChatCompletionMessageParam } from "openai/resources"
 
-export type AgentStateStatus = "idle" | "running" | "paused" | "blocked" | "done" | "failed"
+export type AgentStateStatus = "idle" | "running" | "paused" | "blocked" | "done" | "failed" | "max_steps" | "filtered"
 
 export interface AgentState {
-  version: 1
   context: ChatCompletionMessageParam[]
   step_count: number
   status: AgentStateStatus

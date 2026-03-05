@@ -10,41 +10,9 @@ export interface EnvironmentInfo {
   attachments?: string[]
 }
 
-export interface WorkspaceStore {
-  status: "idle" | "running" | "blocked" | "done" | "failed"
-  current_step: string
-  progress: Array<{ ts: string; agent: string; event: string }>
-  findings: Array<{ id: string; summary: string; artifacts: string[]; ts: string }>
-  knowledge_index: Array<{ id: string; title: string; summary: string; source: string; path: string }>
-  environment: {
-    remote_url: string | null
-    title: string
-    description: string
-    hints: string[]
-    attachments: string[]
-  }
-}
-
-export function appendProgress(store: WorkspaceStore, agent: string, event: string) {
-  const next = { ...store }
-  next.progress = [...store.progress, { ts: new Date().toISOString(), agent, event }]
-  return next
-}
-
-export function updateStatus(store: WorkspaceStore, status: WorkspaceStore["status"], step: string) {
-  return { ...store, status, current_step: step }
-}
-
-export function addKnowledge(
-  store: WorkspaceStore,
-  entry: { id: string; title: string; summary: string; source: string; path: string }
-) {
-  return { ...store, knowledge_index: [...store.knowledge_index, entry] }
-}
-
 export async function ensureWorkspaceLayout(rootPath: string) {
   await fs.mkdir(rootPath, { recursive: true })
-  const dirs = ["challenge", "knowledges", "solution", "logs"]
+  const dirs = ["challenge", "knowledges", "solution"]
   for (const dir of dirs) {
     await fs.mkdir(path.join(rootPath, dir), { recursive: true })
   }
@@ -95,22 +63,4 @@ export async function copyAttachments(rootPath: string, attachments: string[]) {
   }
 
   return copied
-}
-
-export function initWorkspaceStore(info: EnvironmentInfo): WorkspaceStore {
-  const now = new Date().toISOString()
-  return {
-    status: "idle",
-    current_step: "env_ready",
-    progress: [{ ts: now, agent: "EnvAgent", event: "environment initialized" }],
-    findings: [],
-    knowledge_index: [],
-    environment: {
-      remote_url: info.remote_url ?? null,
-      title: info.title,
-      description: info.description,
-      hints: info.hints ?? [],
-      attachments: info.attachments ?? []
-    }
-  }
 }

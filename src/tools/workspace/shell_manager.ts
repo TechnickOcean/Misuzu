@@ -1,6 +1,3 @@
-import * as fs from "node:fs/promises"
-import * as os from "node:os"
-import * as path from "node:path"
 import * as Bun from "bun"
 import { AppError } from "@/utils/errors"
 
@@ -96,6 +93,16 @@ export class ShellSession {
     }
 
     const isWin = process.platform === "win32"
+    if (isWin) {
+      const issues = validateWindowsCommand(command)
+      if (issues.length) {
+        throw new AppError("VALIDATION_ERROR", "PowerShell command likely invalid or blocking", {
+          command,
+          issues
+        })
+      }
+      command = normalizeWindowsCommand(command)
+    }
     const sentinelId = crypto.randomUUID().slice(0, 8)
     const sentinel = `__END_${sentinelId}__`
     this.cmdSentinel = sentinel
@@ -106,7 +113,8 @@ export class ShellSession {
     let fullCmd = ""
     if (isWin) {
       // PowerShell
-      fullCmd = `${command}; Write-Output "EXIT:$LASTEXITCODE"; Write-Output "CWD:$PWD"; Write-Output "${sentinel}"`
+      const prelude = WINDOWS_ALIAS_PRELUDE
+      fullCmd = `${prelude}; ${command}; Write-Output "EXIT:$LASTEXITCODE"; Write-Output "CWD:$PWD"; Write-Output "${sentinel}"`
     } else {
       // Bash
       fullCmd = `${command}; echo "EXIT:$?"; echo "CWD:$(pwd)"; echo "${sentinel}"`
@@ -118,8 +126,11 @@ export class ShellSession {
       const enc = new TextEncoder()
 
       // Write command
-      const stdin = this.process!.stdin as any
-      stdin.write(enc.encode(fullCmd + "\n"))
+      const stdin = this.process!.stdin as {
+        write: (chunk: Uint8Array) => void
+        flush: () => void
+      }
+      stdin.write(enc.encode(`${fullCmd}\n`))
       stdin.flush()
 
       // Timeout
@@ -138,6 +149,17 @@ export class ShellSession {
   }
 
   private async executeBackground(command: string) {
+    if (process.platform === "win32") {
+      const issues = validateWindowsCommand(command)
+      if (issues.length) {
+        throw new AppError("VALIDATION_ERROR", "PowerShell command likely invalid or blocking", {
+          command,
+          issues
+        })
+      }
+      command = normalizeWindowsCommand(command)
+      command = `${WINDOWS_ALIAS_PRELUDE}; ${command}`
+    }
     const subprocess = Bun.spawn({
       cmd: buildShellCommand(command),
       cwd: this.cwd,
@@ -175,7 +197,10 @@ export class ShellSession {
     pump().catch(() => {})
   }
 
-  private async pumpStream(reader: any, kind: "stdout" | "stderr") {
+  private async pumpStream(
+    reader: import("node:stream/web").ReadableStreamDefaultReader<Uint8Array>,
+    kind: "stdout" | "stderr"
+  ) {
     const decoder = new TextDecoder()
     try {
       while (true) {
@@ -184,7 +209,7 @@ export class ShellSession {
         const text = decoder.decode(value)
         this.handleOutput(kind, text)
       }
-    } catch (e) {}
+    } catch (_e) {}
   }
 
   private handleOutput(kind: "stdout" | "stderr", text: string) {
@@ -252,13 +277,12 @@ export class ShellSession {
     // Reset buffers
     this.cmdStdout = ""
     this.cmdStderr = ""
-
-    if (exitCode !== 0) {
-      reject &&
+    if (reject && resolve)
+      if (exitCode !== 0) {
         reject(new AppError("UPSTREAM_ERROR", `Command failed with exit code ${exitCode}`, { output, exitCode }))
-    } else {
-      resolve && resolve(output)
-    }
+      } else {
+        resolve(output)
+      }
   }
 
   private resetCmdState() {
@@ -342,6 +366,49 @@ export class ShellManager {
 function buildShellCommand(command: string) {
   if (process.platform === "win32") return ["pwsh", "-NoProfile", "-Command", command]
   return ["bash", "-lc", command]
+}
+
+export const WINDOWS_ALIAS_PRELUDE = "Remove-Item -ErrorAction SilentlyContinue Alias:curl,Alias:wget"
+
+export function normalizeWindowsCommand(command: string) {
+  // Replace standard Unix tools with Windows equivalents or fixes
+  let normalized = command
+    .replace(/\bcurl(?!\.exe)\b/gi, "curl.exe")
+    .replace(/\bwget(?!\.exe)\b/gi, "wget.exe")
+    .replace(/\bls\s+-la\b/gi, "ls -Force")
+    .replace(/\bls\s+-al\b/gi, "ls -Force")
+    .replace(/\bgrep\s+-r\b/g, "Select-String -Recurse")
+    .replace(/\bgrep\b/g, "Select-String")
+    .replace(/\brm\s+-rf\b/g, "rm -Recurse -Force")
+    .replace(/\bunzip\s+([^\s]+)/g, "Expand-Archive -Path $1 -DestinationPath . -Force")
+    .replace(/\btouch\s+([^\s]+)/g, "New-Item -ItemType File -Force -Path $1")
+    .replace(/\bexport\s+([A-Za-z0-9_]+)=(["'])(.*?)\2/g, "$env:$1=$2$3$2")
+    .replace(/\bexport\s+([A-Za-z0-9_]+)=([^\s;]+)/g, "$env:$1='$2'")
+
+  // Handle && chaining by converting to nested if ($?) { ... } blocks
+  // Example: "cmd1 && cmd2" -> "cmd1; if ($?) { cmd2 }"
+  if (normalized.includes("&&")) {
+    const parts = normalized.split("&&").map((p) => p.trim())
+    if (parts.length > 1) {
+      const base = parts[0]
+      const rest = parts.slice(1)
+      const suffix = " }".repeat(rest.length)
+      const middle = rest.map((p) => `; if ($?) { ${p}`).join("")
+      normalized = base + middle + suffix
+    }
+  }
+
+  return normalized
+}
+
+export function validateWindowsCommand(command: string) {
+  const issues: string[] = []
+  // && is now handled in normalizeWindowsCommand
+
+  if (/\s&\s*$/.test(command) || /&\s*$/.test(command)) {
+    issues.push("Do not use '&' for background. Use the tool's background=true option.")
+  }
+  return issues
 }
 
 function formatOutput(stdout: string, stderr: string) {

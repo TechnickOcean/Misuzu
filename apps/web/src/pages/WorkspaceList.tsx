@@ -19,6 +19,7 @@ export default function WorkspaceList() {
   const [workspaceType, setWorkspaceType] = useState("whitebox")
   const [workspaceHints, setWorkspaceHints] = useState("")
   const [workspaceUrl, setWorkspaceUrl] = useState("")
+  const [isRemote, setIsRemote] = useState(false)
   const [attachments, setAttachments] = useState<File[]>([])
 
   useEffect(() => {
@@ -35,6 +36,11 @@ export default function WorkspaceList() {
     return attachments.map((file) => file.name).join(", ")
   }, [attachments])
 
+  async function refreshWorkspaces() {
+    const data = await fetch(`${API_BASE}/api/workspaces`).then((res) => res.json())
+    setWorkspaces(data)
+  }
+
   async function handleWorkspaceCreate() {
     if (!workspaceName.trim()) return
     const hints = workspaceHints
@@ -50,7 +56,7 @@ export default function WorkspaceList() {
           title: workspaceName.trim(),
           description: workspaceName.trim(),
           hints,
-          remote_url: workspaceUrl || undefined,
+          remote_url: isRemote ? workspaceUrl || undefined : undefined,
           type: workspaceType
         })
       )
@@ -69,21 +75,25 @@ export default function WorkspaceList() {
           title: workspaceName.trim(),
           description: workspaceName.trim(),
           hints,
-          remote_url: workspaceUrl || undefined,
+          remote_url: isRemote ? workspaceUrl || undefined : undefined,
           type: workspaceType
         })
       })
     }
 
-    // Refresh list
-    fetch(`${API_BASE}/api/workspaces`)
-      .then((res) => res.json())
-      .then(setWorkspaces)
+    await refreshWorkspaces()
 
     setWorkspaceName("")
     setWorkspaceHints("")
     setWorkspaceUrl("")
+    setIsRemote(false)
     setAttachments([])
+  }
+
+  async function handleWorkspaceDelete(event: React.MouseEvent<HTMLButtonElement>, workspaceId: string) {
+    event.stopPropagation()
+    await fetch(`${API_BASE}/api/workspaces/${workspaceId}`, { method: "DELETE" })
+    await refreshWorkspaces()
   }
 
   return (
@@ -110,22 +120,29 @@ export default function WorkspaceList() {
                 >
                   <CardHeader>
                     <div className="flex items-start justify-between">
-                      <CardTitle className="text-lg text-amber-950 group-hover:text-amber-700">{ws.title}</CardTitle>
-                      <Badge
-                        variant="outline"
-                        className={`border-amber-400/60 text-amber-900 ${
-                          ws.store?.status === "running" ? "bg-amber-100" : ""
-                        }`}
-                      >
-                        {ws.store?.status ?? "idle"}
-                      </Badge>
+                      <div>
+                        <CardTitle className="text-lg text-amber-950 group-hover:text-amber-700">{ws.title}</CardTitle>
+                        <CardDescription className="text-xs text-amber-900/50">ID: {ws.id}</CardDescription>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="border-amber-400/60 text-amber-900">
+                          idle
+                        </Badge>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 rounded-full px-3 text-xs text-amber-900/60 hover:text-amber-950"
+                          onClick={(event) => handleWorkspaceDelete(event, ws.id)}
+                        >
+                          删除
+                        </Button>
+                      </div>
                     </div>
-                    <CardDescription className="text-xs text-amber-900/50">ID: {ws.id}</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="flex items-center gap-4 text-xs text-amber-900/60">
                       <div>
-                        <span className="font-semibold text-amber-950">{ws.store?.findings?.length ?? 0}</span> Findings
+                        <span className="font-semibold text-amber-950">{ws.stats?.findings_count ?? 0}</span> Findings
                       </div>
                       <div>
                         <span className="font-semibold text-amber-950">{ws.agent_state?.step_count ?? 0}</span> Steps
@@ -165,13 +182,10 @@ export default function WorkspaceList() {
                   </Select>
                   <div className="flex items-center justify-between rounded-xl border border-amber-900/10 bg-white px-3 py-2">
                     <span className="text-xs text-amber-900/70">远程</span>
-                    <Switch
-                      checked={Boolean(workspaceUrl)}
-                      onCheckedChange={(checked) => (!checked ? setWorkspaceUrl("") : null)}
-                    />
+                    <Switch checked={isRemote} onCheckedChange={setIsRemote} />
                   </div>
                 </div>
-                {workspaceUrl !== "" && (
+                {isRemote && (
                   <Input
                     placeholder="远程 URL"
                     value={workspaceUrl}

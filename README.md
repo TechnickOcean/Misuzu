@@ -13,3 +13,9 @@ bun run index.ts
 ```
 
 This project was created using `bun init` in bun v1.3.7. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+
+## TODOs
+
+- github.com/skylot/jadx
+
+- github.com/microsoft/playwright-mcp

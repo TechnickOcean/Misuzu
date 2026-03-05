@@ -1,10 +1,10 @@
+import type { ChatCompletionMessageParam } from "openai/resources"
 import * as z from "zod"
 import { runAgentHiro } from "@/agents/AgentHiro"
 import { readAgentState, writeAgentState } from "@/agents/base/agentState"
 import ToolLoopAgent from "@/agents/base/ToolLoopAgent"
 import BaseFunctionTool from "@/tools/base/FunctionTool"
-import { getDBWorkspace, updateDBWorkspace } from "@/tools/workspace/core/db"
-import type { WorkspaceStore } from "@/tools/workspace/helpers"
+import { getWorkspace } from "@/tools/workspace/core/manager"
 import { ShellManager } from "@/tools/workspace/shell_manager"
 import {
   createGlobTool,
@@ -12,44 +12,47 @@ import {
   createReadFileTool,
   createShellSessionTools,
   createShellTool,
-  createStateTool,
   createWriteFileTool
 } from "@/tools/workspace/workspace"
-import { AppError } from "@/utils/errors"
 
 export interface CTFAgentInput {
-  workspace_id: number
+  workspace_id: string
   model: "glm-4.7-flash" | "llama-4-scout-17b-16e-instruct" | "qwen3-30b-a3b-fp8"
 }
 
-function buildContextPrompt(store: WorkspaceStore | null, envMd: string, fileTree: string) {
-  const knowledge = store?.knowledge_index ?? []
-  const findings = store?.findings ?? []
-  const progress = store?.progress ?? []
+const CTF_COMPACT_PROMPT = `You are summarizing the state of a CTF-solving agent for later restoration.
+Return ONLY the summary. Be concise but preserve critical technical details.
 
+Include:
+- Objective and challenge type (white/black/gray) + remote URL (if any).
+- Key artifacts: paths, filenames, and noteworthy snippets/IOCs.
+- Steps already tried, tools/commands executed, and their outcomes.
+- Current hypothesis/attack path and blockers.
+- Pending tasks or next commands to run.
+- Any temp services/ports started locally and credentials/secrets found.
+`
+
+function buildContextPrompt(envMd: string, fileTree: string) {
   return [
-    "You are CTFAgent, responsible for solving the challenge.",
-    "Follow the OODA loop: Observe -> Orient -> Decide -> Act.",
-    "Use tools to inspect files, run commands, and gather evidence.",
-    "Workspace tools are already scoped to the current workspace.",
-    "Use multi-terminal tools for persistent sessions: create_terminal -> exec_terminal. `cd` persists per session.",
-    "If you need external knowledge or to dive into deep exploration about certain questions, call request_agent_hiro with detailed questions.",
-    "You can use python zipfile to unzip.",
+    "你是 CTF Agent，一个身经百战的 CTFer。你的任务是接受用户提供的 CTF 挑战题目，并尝试一步一步地解决它，获得 flag。",
+
+    "你应当遵循：收集信息 -> 尝试利用已有知识解题 -> 若失败，简短**反思**后继续解题 的循环。",
+
+    "关于“信息”的第一来源应当是用户提供的附件，对于白盒题目，你应当第一时间分析附件，仔细审计源码中潜在的漏洞；",
+    "对于黑/灰盒题目，你应当使用 curl, nc 等命令行工具去收集用户提供远程环境 URL 暴露的信息。",
+    "在你卡在某一环节一段时间，认为自己需要补充相关知识(语法点/CVE...)或需要搜索互联网，你可以详细地描述你的问题，使用 requestHiroTool 提供给安全专家 AgentHiro，她会尽全力为你解惑；",
+    "这些问题应当是具体到点的而非泛化的，你可以引用题目源码的段落，AgentHiro 与你分享一个工作空间。",
+
+    "你应当积极地利用工具(python 脚本、curl...)做出具体的解题尝试而不是空思考。",
+    "对于黑盒题目，若无明确说明，请不要爆破或扫描远程环境；",
+    "对于提供了源码的白盒题目，你应当总是使用 terminal 在本地 background 启动测试环境，",
+    "在本地成功攻击，取得测试 flag 后再将你的 exp 运行于远程环境。（若附件为压缩包，你可以使用 python 的 zipfile 解压）",
     "",
     "## Environment",
     envMd,
     "",
     "## Workspace Files",
-    fileTree || "(empty)",
-    "",
-    "## Findings",
-    findings.length ? JSON.stringify(findings, null, 2) : "(none)",
-    "",
-    "## Knowledge Index",
-    knowledge.length ? JSON.stringify(knowledge, null, 2) : "(none)",
-    "",
-    "## Recent Progress",
-    progress.slice(-10).length ? JSON.stringify(progress.slice(-10), null, 2) : "(none)"
+    fileTree || "(empty)"
   ].join("\n")
 }
 
@@ -62,8 +65,7 @@ export async function runCTFAgent(
 ) {
   const isFinalStop = (response?: { choices?: Array<{ finish_reason?: string }> }) =>
     Array.isArray(response?.choices) && response.choices.some((choice) => choice.finish_reason === "stop")
-  const workspace = await getDBWorkspace({ id: input.workspace_id })
-  if (!workspace) throw new AppError("NOT_FOUND", "Workspace not found", { workspace_id: input.workspace_id })
+  const workspace = await getWorkspace({ id: input.workspace_id })
   const workspacePath = workspace.path
 
   const readFileTool = createReadFileTool(input.workspace_id)
@@ -71,7 +73,6 @@ export async function runCTFAgent(
   const globTool = createGlobTool(input.workspace_id)
   const grepTool = createGrepTool(input.workspace_id)
   const shellTool = createShellTool(input.workspace_id)
-  const stateTool = createStateTool(input.workspace_id)
   const tagEvent = (agentName: string) => (event: { type: string; [key: string]: unknown }) => {
     callbacks?.onEvent?.({
       ...event,
@@ -108,72 +109,23 @@ export async function runCTFAgent(
         }
       )
       await writeAgentState(workspacePath, {
-        version: 1,
         context: agent.context,
         step_count: agent.stepCount,
         status: "running",
         last_agent: "CTFAgent",
         updated_at: new Date().toISOString()
       })
-      const refreshed = await getDBWorkspace({ id: input.workspace_id })
-      const store = (refreshed?.store as WorkspaceStore | null) ?? null
-      if (store) {
-        await updateDBWorkspace({
-          id: input.workspace_id,
-          data: {
-            store: {
-              ...store,
-              status: "running",
-              current_step: "ctf_agent"
-            }
-          }
-        })
-      }
-      const latest = store?.knowledge_index?.slice(-1)[0]
-      if (!latest) return "AgentHiro completed without knowledge report"
-      let reportText = ""
-      try {
-        const raw = await readFileTool.execute(JSON.stringify({ file_path: latest.path }))
-        if (typeof raw === "string") {
-          const parsed = JSON.parse(raw)
-          reportText = typeof parsed === "string" ? parsed : ""
-        }
-      } catch {
-        reportText = ""
-      }
-      const summary = [
-        `AgentHiro report: ${latest.title}`,
-        `Source: ${latest.source}`,
-        `Path: ${latest.path}`,
-        latest.summary ? `Summary: ${latest.summary}` : ""
-      ]
-        .filter(Boolean)
-        .join("\n")
-      return reportText ? `${summary}\n\n${reportText}` : summary
+      return "AgentHiro completed"
     }
   })
 
   const envMd = await readFileTool.execute(JSON.stringify({ file_path: "Environment.md" }))
   const fileTree = await globTool.execute(JSON.stringify({ pattern: "**/*" }))
 
-  const store = (workspace.store as WorkspaceStore | null) ?? null
-  const prompt = buildContextPrompt(store, JSON.parse(envMd), JSON.parse(fileTree))
+  const prompt = buildContextPrompt(JSON.parse(envMd), JSON.parse(fileTree))
   const savedState = await readAgentState(workspacePath)
-  let lastWorkspaceStatus: WorkspaceStore["status"] = "running"
-
-  await updateDBWorkspace({
-    id: input.workspace_id,
-    data: {
-      store: {
-        ...(store ?? {}),
-        status: "running",
-        current_step: "ctf_agent"
-      }
-    }
-  })
 
   await writeAgentState(workspacePath, {
-    version: 1,
     context: savedState?.context ?? [],
     step_count: savedState?.step_count ?? 0,
     status: "running",
@@ -184,57 +136,93 @@ export async function runCTFAgent(
   const agent = new ToolLoopAgent({
     model: input.model,
     instruction: prompt,
-    tools: [
-      readFileTool,
-      writeFileTool,
-      globTool,
-      grepTool,
-      shellTool,
-      stateTool,
-      requestHiroTool,
-      ...shellSessionTools
-    ],
+    tools: [readFileTool, writeFileTool, globTool, grepTool, shellTool, requestHiroTool, ...shellSessionTools],
     initialContext: savedState?.context,
     onEvent: tagEvent("CTFAgent"),
-    onStepEnd: async ({ stop, APIResponse }) => {
+    onStepEnd: async ({ stop, APIResponse, stopReason }) => {
       const shouldStop = callbacks?.shouldStop?.() ?? false
       const finished = !shouldStop && isFinalStop(APIResponse)
-      const status = shouldStop ? "paused" : finished ? "done" : "running"
+      const status = shouldStop
+        ? "paused"
+        : stopReason === "max_steps"
+          ? "max_steps"
+          : stopReason === "content_filter"
+            ? "filtered"
+            : finished
+              ? "done"
+              : "running"
       if (shouldStop) stop()
       await writeAgentState(workspacePath, {
-        version: 1,
         context: agent.context,
         step_count: agent.stepCount,
         status,
         last_agent: "CTFAgent",
         updated_at: new Date().toISOString()
       })
-      const workspaceStatus: WorkspaceStore["status"] = shouldStop ? "blocked" : finished ? "done" : "running"
-      if (workspaceStatus !== lastWorkspaceStatus) {
-        lastWorkspaceStatus = workspaceStatus
-        const latest = await getDBWorkspace({ id: input.workspace_id })
-        const latestStore = (latest?.store as WorkspaceStore | null) ?? null
-        await updateDBWorkspace({
-          id: input.workspace_id,
-          data: {
-            store: {
-              ...(latestStore ?? {}),
-              status: workspaceStatus,
-              current_step: shouldStop ? "ctf_paused" : finished ? "ctf_done" : "ctf_agent"
-            }
-          }
-        })
-      }
+      void finished
     }
   })
 
   try {
     await agent.generate({
       prompt:
-        "Start solving. If you need external knowledge, stop and ask for AgentHiro. " +
+        "Start solving." +
         "If you obtain the final flag, write the exploit script to solution/ and update WriteUp.md with reproducible steps."
     })
   } finally {
     shellManager.closeAll()
   }
+}
+
+export async function pauseCTFAgent(input: { workspace_id: string }) {
+  const workspace = await getWorkspace({ id: input.workspace_id })
+  const workspacePath = workspace.path
+  const savedState = await readAgentState(workspacePath)
+  await writeAgentState(workspacePath, {
+    context: savedState?.context ?? [],
+    step_count: savedState?.step_count ?? 0,
+    status: "paused",
+    last_agent: savedState?.last_agent ?? "CTFAgent",
+    updated_at: new Date().toISOString()
+  })
+  return { ok: true }
+}
+
+export async function addCTFConversation(input: { workspace_id: string; prompt: string }) {
+  const workspace = await getWorkspace({ id: input.workspace_id })
+  const workspacePath = workspace.path
+  const savedState = await readAgentState(workspacePath)
+  const nextContext = [
+    ...(savedState?.context ?? []),
+    { role: "user", content: input.prompt } as ChatCompletionMessageParam
+  ]
+  await writeAgentState(workspacePath, {
+    context: nextContext,
+    step_count: 0,
+    status: "running",
+    last_agent: "CTFAgent",
+    updated_at: new Date().toISOString()
+  })
+  return { ok: true }
+}
+
+export async function compactCTFContext(input: { workspace_id: string; model: CTFAgentInput["model"] }) {
+  const workspace = await getWorkspace({ id: input.workspace_id })
+  const workspacePath = workspace.path
+  const savedState = await readAgentState(workspacePath)
+  const agent = new ToolLoopAgent({
+    model: input.model,
+    instruction: buildContextPrompt("", ""),
+    tools: [],
+    initialContext: savedState?.context
+  })
+  await agent.compactWithPrompt(CTF_COMPACT_PROMPT)
+  await writeAgentState(workspacePath, {
+    context: agent.context,
+    step_count: 0,
+    status: "paused",
+    last_agent: "CTFAgent",
+    updated_at: new Date().toISOString()
+  })
+  return { ok: true }
 }

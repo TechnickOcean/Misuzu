@@ -8,29 +8,36 @@ import {
   ghSearchRepos
 } from "@/tools/websearch/githubSearch"
 import { fetchMarkdown, websearch } from "@/tools/websearch/websearch"
-import { getDBWorkspace, updateDBWorkspace } from "@/tools/workspace/core/db"
-import type { WorkspaceStore } from "@/tools/workspace/helpers"
+import { getWorkspace } from "@/tools/workspace/core/manager"
 import {
   createAppendKnowledgeTool,
   createReadFileTool,
   createShellTool,
-  createStateTool,
   createWriteFileTool
 } from "@/tools/workspace/workspace"
-import { AppError } from "@/utils/errors"
 
 export interface AgentHiroInput {
-  workspace_id: number
+  workspace_id: string
   model: "glm-4.7-flash" | "llama-4-scout-17b-16e-instruct" | "qwen3-30b-a3b-fp8"
   questions: string[]
 }
 
 function buildHiroPrompt(questions: string[]) {
   return [
-    "You are AgentHiro. Gather accurate information to resolve the following questions.",
-    "Use tools to verify and cross-check sources.",
-    "Produce a reproducible report in knowledges/ and summarize it in the workspace store.",
-    "The report must follow this template:",
+    "你是 AgentHiro, 一个网络安全专家，你的任务是尽可能地帮助用户探索他的问题的解法。",
+
+    "你可以利用网络搜索工具和你自身的知识，不过在你总结出结论之前，必须利用终端等本地工具尽可能对这些知识进行验证。",
+
+    "你进行探索的思路是：先查询互联网资料，寻找可能有用的信息，结合自身知识将其实践运用到问题解决上。",
+
+    "若你搜集的知识目前不足以解决问题，尝试猜测问题解决的方法，寻找新的灵感：对于利用方式可预见且有限的潜在利用点，你可以使用 fuzz(模糊测试) ，对于潜在的 0-day 风险，若你认为有必要，你可以 clone 对应版本的 lib 源码到本地进一步分析。",
+
+    "当你认为你确实做足了所有尝试，仍然无法得出解决方案，你应当停止。",
+
+    "无论是否得出结论，都请将本次探索的收获记录成清晰简洁可复现的 knowledge report (markdown) 到 knowledges/ 目录下，并使用 appendKnowledge tool 添加到知识库",
+
+    "报告应当遵循以下格式",
+
     "# Knowledge Report: <title>",
     "## Summary",
     "- <bullet points>",
@@ -44,8 +51,10 @@ function buildHiroPrompt(questions: string[]) {
     "## Applicability",
     "- <when it applies>",
     "",
-    "Questions:",
-    ...questions.map((q, idx) => `${idx + 1}) ${q}`)
+
+    "Questions",
+    "",
+    ...questions.map((q, idx) => `${idx + 1}. ${q}`)
   ].join("\n")
 }
 
@@ -58,14 +67,12 @@ export async function runAgentHiro(
 ) {
   const isFinalStop = (response?: { choices?: Array<{ finish_reason?: string }> }) =>
     Array.isArray(response?.choices) && response.choices.some((choice) => choice.finish_reason === "stop")
-  const workspace = await getDBWorkspace({ id: input.workspace_id })
-  if (!workspace) throw new AppError("NOT_FOUND", "Workspace not found", { workspace_id: input.workspace_id })
+  const workspace = await getWorkspace({ id: input.workspace_id })
   const workspacePath = workspace.path
 
   const readFileTool = createReadFileTool(input.workspace_id)
   const writeFileTool = createWriteFileTool(input.workspace_id)
   const appendKnowledgeTool = createAppendKnowledgeTool(input.workspace_id)
-  const stateTool = createStateTool(input.workspace_id)
   const shellTool = createShellTool(input.workspace_id)
 
   const savedState = await readAgentState(workspacePath)
@@ -83,7 +90,6 @@ export async function runAgentHiro(
       readFileTool,
       writeFileTool,
       appendKnowledgeTool,
-      stateTool,
       shellTool
     ],
     initialContext: savedState?.context,
@@ -94,43 +100,17 @@ export async function runAgentHiro(
       const status = shouldStop ? "paused" : finished ? "done" : "running"
       if (shouldStop) stop()
       await writeAgentState(workspacePath, {
-        version: 1,
         context: agent.context,
         step_count: agent.stepCount,
         status,
         last_agent: "AgentHiro",
         updated_at: new Date().toISOString()
       })
-      const workspaceStatus: WorkspaceStore["status"] = shouldStop ? "blocked" : finished ? "done" : "running"
-      const latest = await getDBWorkspace({ id: input.workspace_id })
-      const latestStore = (latest?.store as WorkspaceStore | null) ?? null
-      await updateDBWorkspace({
-        id: input.workspace_id,
-        data: {
-          store: {
-            ...(latestStore ?? {}),
-            status: workspaceStatus,
-            current_step: shouldStop ? "hiro_paused" : finished ? "hiro_done" : "hiro_research"
-          }
-        }
-      })
-    }
-  })
-
-  const store = (workspace.store as WorkspaceStore | null) ?? null
-  await updateDBWorkspace({
-    id: input.workspace_id,
-    data: {
-      store: {
-        ...(store ?? {}),
-        status: "blocked",
-        current_step: "hiro_research"
-      }
+      void finished
     }
   })
 
   await writeAgentState(workspacePath, {
-    version: 1,
     context: savedState?.context ?? [],
     step_count: savedState?.step_count ?? 0,
     status: "running",
@@ -139,7 +119,6 @@ export async function runAgentHiro(
   })
 
   await agent.generate({
-    prompt:
-      "Begin research. Write report to knowledges/ using the template and call appendKnowledge with id/title/summary/source/path."
+    prompt: "开始你的探索。"
   })
 }

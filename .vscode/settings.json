@@ -31,5 +31,6 @@
   },
   "[css]": {
     "editor.defaultFormatter": "biomejs.biome"
-  }
+  },
+  "cSpell.words": ["bunx", "qwen", "toolcall", "toolcalls", "websearch"]
 }

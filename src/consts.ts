@@ -1,1 +1,1 @@
-export const TMP_DIR = "E:\\dev\\Misuzu\\tmp"
+export const TMP_DIR = "E:\\dev\\Misuzu_workspaces"

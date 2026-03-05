@@ -1,14 +1,65 @@
 import { join } from "node:path"
-import * as Bun from "bun"
 import { file, Glob } from "bun"
 import * as z from "zod"
 import { AppError } from "@/utils/errors"
 import BaseFunctionTool from "../base/FunctionTool"
-import { createDBWorkspace, getDBWorkspace, updateDBWorkspace } from "./core/db"
+import { appendWorkspaceKnowledge, createWorkspace, getWorkspace } from "./core/manager"
 import { ShellManager } from "./shell_manager"
 
 const MAX_OUTPUT_CHARS = 2000
-const globalShellManagers = new Map<number, ShellManager>()
+const globalShellManagers = new Map<string, ShellManager>()
+
+export function closeWorkspaceShellManager(workspace_id: string) {
+  const manager = globalShellManagers.get(workspace_id)
+  if (!manager) return
+  manager.closeAll()
+  globalShellManagers.delete(workspace_id)
+}
+
+export async function resolveFilePath(
+  workspace_id: string,
+  file_path: string,
+  mode: "read" | "write" = "read",
+  // Dependency injection for testing
+  injectedContext?: { rootPath: string; cwd?: string }
+): Promise<string> {
+  let rootPath: string
+  let cwd: string
+
+  if (injectedContext) {
+    rootPath = injectedContext.rootPath
+    cwd = injectedContext.cwd || rootPath
+  } else {
+    const manager = globalShellManagers.get(workspace_id)
+    const session = manager?.listSessions().find((s) => s.name === "default")
+    const workspace = await getWorkspace({ id: workspace_id })
+    rootPath = workspace.path
+    cwd = session ? session.cwd : rootPath
+  }
+
+  // Normalize file_path to be relative (strip leading / or \)
+  const cleanPath = file_path.replace(/^[\\/]+/, "")
+
+  // Mode write: Always resolve relative to CWD (or root if no session)
+  if (mode === "write") {
+    return join(cwd, cleanPath)
+  }
+
+  // Mode read: Try resolving against CWD first
+  const cwdTarget = join(cwd, cleanPath)
+  if (await file(cwdTarget).exists()) {
+    return cwdTarget
+  }
+
+  // Fallback: Try resolving against Workspace Root
+  const rootTarget = join(rootPath, cleanPath)
+  if (await file(rootTarget).exists()) {
+    return rootTarget
+  }
+
+  // Default to CWD path for error message consistency if not found
+  return cwdTarget
+}
 
 export const createWorkspaceTool = new BaseFunctionTool({
   name: "createWorkspace",
@@ -17,13 +68,13 @@ export const createWorkspaceTool = new BaseFunctionTool({
   schema: z.object({
     title: z.string().meta({ description: "Descriptive title for the workspace." })
   }),
-  func: createDBWorkspace
+  func: async ({ title }: { title: string }) => createWorkspace({ title })
 })
 
-export const createReadFileTool = (workspace_id: number) => {
+export const createReadFileTool = (workspace_id: string) => {
   async function readFile({ file_path, offset, limit }: { file_path: string; offset?: number; limit?: number }) {
-    const basePath = (await getDBWorkspace({ id: workspace_id }))!.path
-    const target = file(join(basePath, file_path))
+    const targetPath = await resolveFilePath(workspace_id, file_path, "read")
+    const target = file(targetPath)
     if (!(await target.exists())) {
       throw new AppError("NOT_FOUND", "File does not exist", { file_path })
     }
@@ -63,15 +114,15 @@ export const createReadFileTool = (workspace_id: number) => {
   })
 }
 
-export const createWriteFileTool = (workspace_id: number) => {
+export const createWriteFileTool = (workspace_id: string) => {
   async function writeFile({ file_path, content }: { file_path: string; content: string }) {
-    const basePath = (await getDBWorkspace({ id: workspace_id }))!.path
-    const target = file(join(basePath, file_path))
+    const targetPath = await resolveFilePath(workspace_id, file_path, "write")
+    const target = file(targetPath)
     if (await target.exists()) {
       throw new AppError("CONFLICT", "File already exists", { file_path })
     }
     await target.write(content)
-    return "Succesfully wrote!"
+    return "Successfully wrote!"
   }
 
   return new BaseFunctionTool({
@@ -85,7 +136,7 @@ export const createWriteFileTool = (workspace_id: number) => {
   })
 }
 
-export const createEditFileTool = (workspace_id: number) => {
+export const createEditFileTool = (workspace_id: string) => {
   async function editFile({
     file_path,
     old_content,
@@ -95,8 +146,8 @@ export const createEditFileTool = (workspace_id: number) => {
     old_content: string
     new_content: string
   }) {
-    const basePath = (await getDBWorkspace({ id: workspace_id }))!.path
-    const target = file(join(basePath, file_path))
+    const targetPath = await resolveFilePath(workspace_id, file_path, "read")
+    const target = file(targetPath)
     if (!(await target.exists())) {
       throw new AppError("NOT_FOUND", "File does not exist", { file_path })
     }
@@ -120,9 +171,9 @@ export const createEditFileTool = (workspace_id: number) => {
   })
 }
 
-export const createGlobTool = (workspace_id: number) => {
+export const createGlobTool = (workspace_id: string) => {
   async function globFiles({ pattern }: { pattern: string }) {
-    const basePath = (await getDBWorkspace({ id: workspace_id }))!.path
+    const basePath = (await getWorkspace({ id: workspace_id })).path
 
     const glob = new Glob(pattern)
     const files: string[] = []
@@ -150,9 +201,9 @@ export const createGlobTool = (workspace_id: number) => {
   })
 }
 
-export const createGrepTool = (workspace_id: number) => {
+export const createGrepTool = (workspace_id: string) => {
   async function grepFiles({ pattern }: { pattern: string }) {
-    const basePath = (await getDBWorkspace({ id: workspace_id }))!.path
+    const basePath = (await getWorkspace({ id: workspace_id })).path
 
     const glob = new Glob("**/*")
     const matches: string[] = []
@@ -195,7 +246,7 @@ export const createGrepTool = (workspace_id: number) => {
   })
 }
 
-export const createShellTool = (workspace_id: number) => {
+export const createShellTool = (workspace_id: string) => {
   const isWin = process.platform === "win32"
   const shellName = isWin ? "PowerShell" : "Bash"
 
@@ -210,8 +261,7 @@ export const createShellTool = (workspace_id: number) => {
     func: async ({ command, background, timeout }: { command: string; background?: boolean; timeout?: number }) => {
       let manager = globalShellManagers.get(workspace_id)
       if (!manager) {
-        const workspace = await getDBWorkspace({ id: workspace_id })
-        if (!workspace) throw new AppError("NOT_FOUND", "Workspace not found", { workspace_id })
+        const workspace = await getWorkspace({ id: workspace_id })
         manager = new ShellManager(workspace.path)
         globalShellManagers.set(workspace_id, manager)
       }
@@ -322,91 +372,19 @@ export const createShellSessionTools = (manager: {
   return [createTerminalTool, listTerminalTool, execTerminalTool, readTerminalTool, killTerminalTool]
 }
 
-export const createStateTool = (workspace_id: number) => {
-  async function manageState({
-    key,
-    value,
-    action
-  }: {
-    key?: string
-    value?: unknown
-    action: "get" | "set" | "delete" | "list"
-  }) {
-    const workspace = await getDBWorkspace({ id: workspace_id })
-    if (!workspace) throw new AppError("NOT_FOUND", "Workspace not found", { workspace_id })
-    const store = (workspace.store as Record<string, unknown>) || {}
-
-    if (action === "get") {
-      if (!key) throw new AppError("VALIDATION_ERROR", "Key is required for get action")
-      if (!Object.hasOwn(store, key)) {
-        throw new AppError("NOT_FOUND", "Key not found", { key })
-      }
-      const rawValue = store[key]
-      const payload = JSON.stringify(rawValue)
-      if (!payload) {
-        return "null"
-      }
-      if (payload.length > MAX_OUTPUT_CHARS) {
-        return `${payload.slice(0, MAX_OUTPUT_CHARS)}\n... (value truncated)`
-      }
-      return payload
-    }
-    if (action === "set") {
-      if (!key || value === undefined)
-        throw new AppError("VALIDATION_ERROR", "Key and value are required for set action")
-      store[key] = value
-      await updateDBWorkspace({ id: workspace_id, data: { store } })
-      return "State updated"
-    }
-    if (action === "delete") {
-      if (!key) throw new AppError("VALIDATION_ERROR", "Key is required for delete action")
-      delete store[key]
-      await updateDBWorkspace({ id: workspace_id, data: { store } })
-      return "Key deleted"
-    }
-    if (action === "list") {
-      const payload = JSON.stringify(store, null, 2)
-      if (payload.length > MAX_OUTPUT_CHARS) {
-        return `${payload.slice(0, MAX_OUTPUT_CHARS)}\n... (list truncated)`
-      }
-      return payload
-    }
-    throw new AppError("VALIDATION_ERROR", "Unknown action", { action })
-  }
-
-  return new BaseFunctionTool({
-    name: "manageState",
-    description: "Manage a simple key-value store for the workspace.",
-    schema: z.object({
-      key: z.optional(z.string()).meta({ description: "Key for the state item." }),
-      value: z.optional(z.any()).meta({ description: "Value to store (for 'set' action)." }),
-      action: z.enum(["get", "set", "delete", "list"]).meta({ description: "Action to perform." })
-    }),
-    func: manageState
-  })
-}
-
-export const createAppendKnowledgeTool = (workspace_id: number) => {
+export const createAppendKnowledgeTool = (workspace_id: string) => {
   async function appendKnowledge({
     entry
   }: {
     entry: { id: string; title: string; summary: string; source: string; path: string }
   }) {
-    const workspace = await getDBWorkspace({ id: workspace_id })
-    if (!workspace) throw new AppError("NOT_FOUND", "Workspace not found", { workspace_id })
-    const store = (workspace.store as Record<string, unknown>) || {}
-    const knowledge = Array.isArray(store.knowledge_index) ? store.knowledge_index : []
-    const next = {
-      ...store,
-      knowledge_index: [...knowledge, entry]
-    }
-    await updateDBWorkspace({ id: workspace_id, data: { store: next } })
+    await appendWorkspaceKnowledge({ id: workspace_id, entry })
     return "Knowledge entry appended"
   }
 
   return new BaseFunctionTool({
     name: "appendKnowledge",
-    description: "Append a knowledge index entry to the workspace store.",
+    description: "Append a knowledge index entry to the workspace files.",
     schema: z.object({
       entry: z.object({
         id: z.string(),

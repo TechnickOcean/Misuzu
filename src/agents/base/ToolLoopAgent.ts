@@ -7,9 +7,12 @@ import logger from "@/utils/logger"
 
 type Tool = BaseCustomTool<unknown> | BaseFunctionTool<z.ZodType, unknown>
 
+type StopReason = "stop" | "content_filter" | "max_steps"
+
 interface stepEndCallbackResp {
-  APIResponse: Awaited<ReturnType<typeof requestAPI>>
+  APIResponse?: Awaited<ReturnType<typeof requestAPI>>
   stop: () => void
+  stopReason?: StopReason
 }
 
 export interface ToolLoopAgentOptions {
@@ -53,7 +56,7 @@ class ToolLoopAgent {
     tools,
     onStepEnd,
     onEvent,
-    maxSteps = 1000,
+    maxSteps = 200,
     maxRetries = 5,
     initialContext
   }: ToolLoopAgentOptions) {
@@ -158,6 +161,13 @@ class ToolLoopAgent {
     this.context = [{ role: "user", content: nr.choices[0]?.message.content ?? "" }]
   }
 
+  async compactWithPrompt(prompt: string) {
+    this.context.push({ role: "user", content: "Summarize" })
+    const nr = await requestAPI(this.#model, prompt, this.context)
+    if (!nr.choices) return
+    this.context = [{ role: "user", content: nr.choices[0]?.message.content ?? "" }]
+  }
+
   async run() {
     this.stepCount = 0
     let nextStepFlag = true
@@ -170,6 +180,15 @@ class ToolLoopAgent {
           role: "assistant",
           content: "Max steps reached. Manual intervention or context pruning required."
         })
+        if (this.#onStepEnd)
+          await Promise.resolve(
+            this.#onStepEnd({
+              stop: (() => {
+                nextStepFlag = false
+              }).bind(this),
+              stopReason: "max_steps"
+            })
+          )
         break
       }
 
@@ -202,6 +221,7 @@ class ToolLoopAgent {
 
       if (!r) break
 
+      let stopReason: StopReason | undefined
       for (const choice of r.choices) {
         switch (choice.finish_reason) {
           case "tool_calls":
@@ -209,17 +229,19 @@ class ToolLoopAgent {
               this.context.push(choice.message)
               await this.#handleToolcalls(choice.message.tool_calls)
             }
-            // @ts-expect-error addtional prop added by qwen api
+            // @ts-expect-error additional prop added by qwen api
             logger.debug({ reasoning: choice.message.reasoning_content }, "model reasoning")
             break
           case "stop":
             nextStepFlag = false
+            stopReason = "stop"
             this.context.push({ role: "assistant", content: choice.message.content })
             logger.debug({ message: choice.message.content }, "model output")
             if (this.#onEvent) this.#onEvent({ type: "model_output", content: choice.message.content })
             break
           case "content_filter":
             nextStepFlag = false
+            stopReason = "content_filter"
             logger.warn("content filtered")
             if (this.#onEvent) this.#onEvent({ type: "content_filter" })
             break
@@ -235,6 +257,7 @@ class ToolLoopAgent {
         await Promise.resolve(
           this.#onStepEnd({
             APIResponse: r,
+            stopReason,
             stop: (() => {
               nextStepFlag = false
             }).bind(this)
