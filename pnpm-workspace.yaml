@@ -13,7 +13,7 @@ catalog:
   tsx: ^4.21.0
   typescript: ^5
   vite: npm:@voidzero-dev/vite-plus-core@latest
-  vite-plus: latest
+  vite-plus: 0.1.13
   vitest: npm:@voidzero-dev/vite-plus-test@latest
   yaml: ^2.8.3
 
