@@ -38,6 +38,7 @@ export class FeaturedAgent {
         ...opts.initialState,
         systemPrompt: (opts.initialState?.systemPrompt ?? "") + skillCatalog,
         tools: tools ?? baseTools,
+        thinkingLevel: opts.initialState?.thinkingLevel ?? "minimal",
       },
       convertToLlm: customConvertToLlm ?? convertToLlm,
       transformContext: async (_messages, _signal) => {
