@@ -1,0 +1,111 @@
+CTF SANDBOX TOOLS REFERENCE
+============================
+All tools pre-installed in the sandbox. cat /tools.txt to view this file.
+
+== NETWORKING ==
+nc (netcat)        TCP/UDP connections. nc host port <<'EOF' for heredoc sessions.
+curl               HTTP client. -s silent, -k skip TLS, -d data, -H header.
+wget               HTTP download. wget -O file url.
+nmap               Port scanner. nmap -sV host, nmap -p- host.
+
+== BINARY ANALYSIS ==
+file               Identify file type. file binary
+strings            Extract printable strings. strings -n 8 binary
+xxd                Hex dump. xxd file | head, xxd -r to reverse.
+hexdump            Hex dump. hexdump -C file.
+binwalk            Firmware/embedded extraction. binwalk -e file to extract.
+objdump            Disassembly. objdump -d binary (from binutils).
+readelf            ELF header info. readelf -a binary.
+nm                 Symbol listing. nm binary.
+
+== DEBUGGERS / TRACING ==
+gdb                GNU debugger. gdb binary, then run, break, info, x/...
+ltrace             Library call tracer. ltrace ./binary
+strace             System call tracer. strace ./binary
+radare2            Reverse engineering. r2 binary, then aaa; pdf @main; afl
+
+== STEGANOGRAPHY ==
+steghide           Embed/extract in JPEG/BMP/WAV. steghide extract -sf file.jpg
+stegseek           Brute-force steghide passwords. stegseek file.jpg wordlist.txt
+zsteg              PNG/BMP steg detector. zsteg file.png (tries LSB, bit planes, etc.)
+exiftool           EXIF/metadata reader. exiftool file.jpg
+pngcheck           PNG structure checker. pngcheck -v file.png
+
+== IMAGE / MEDIA ==
+identify           ImageMagick: identify file properties. identify image.png
+convert            ImageMagick: transform images. convert in.png -enhance out.png
+montage            ImageMagick: tile images. montage *.png out.png
+tesseract          OCR. tesseract image.png stdout, or --psm 6 for block text.
+ffmpeg             Audio/video processing. ffmpeg -i in.wav out.mp3
+sox                Audio analysis. sox in.wav -n spectrogram -o spec.png
+
+== FILESYSTEM FORENSICS ==
+mmls               Sleuthkit: partition layout. mmls disk.img
+fls                Sleuthkit: list files (incl. deleted). fls -r -o offset disk.img
+icat               Sleuthkit: extract file by inode. icat -o offset disk.img inode > out
+tsk_recover        Sleuthkit: recover deleted files. tsk_recover disk.img outdir/
+fsstat             Sleuthkit: filesystem stats. fsstat -o offset disk.img
+foremost           File carving by header/footer. foremost -i disk.img -o outdir/
+testdisk           Partition recovery. testdisk disk.img
+xfs_db             XFS debugger. xfs_db -c "sb 0" -c "p" disk.img
+xfs_repair         XFS repair. xfs_repair -n disk.img (read-only check).
+dcfldd             Forensic dd with hashing. dcfldd if=in of=out hash=md5
+volatility3        Memory forensics. vol -f memdump.raw windows.info
+
+== CRYPTOGRAPHY ==
+openssl            Crypto swiss army knife. openssl enc, openssl rsa, openssl s_client
+RsaCtfTool         Automated RSA attacks. RsaCtfTool -n N -e E --attack all
+sage               SageMath CAS. sage -c 'from sage.all import *; print(factor(n))'
+                   ECM factoring: sage -c 'from sage.all import *; print(ecm.factor(n))'
+                   LLL lattice: sage -c 'M=matrix(ZZ,[...]); print(M.LLL())'
+cado-nfs           Number Field Sieve (large factoring/DLP). cado-nfs <N>
+flatter            Fast LLL lattice reduction. flatter < input_matrix
+
+== BUILD TOOLS ==
+gcc / g++          C/C++ compiler. gcc -o exploit exploit.c
+make / cmake       Build systems.
+jq                 JSON processor. cat file.json | jq '.key'
+
+== ARCHIVE ==
+zip / unzip        ZIP archives.
+git                Version control / clone repos.
+
+== CONTAINERS (Podman) ==
+podman             Run challenge Docker images inside the sandbox.
+                   podman run -d -p 8080:80 challenge-image
+                   podman build -t myimage .
+podman-compose     Docker Compose compatible. podman-compose up -d
+buildah            Build OCI container images. buildah bud -t myimage .
+
+== PYTHON 3 LIBRARIES ==
+pwntools           CTF exploit framework. from pwn import *
+                   p64/p32 packing, remote/process, ROP, shellcraft, asm.
+pycryptodome       Crypto primitives. from Crypto.Cipher import AES
+sympy              Symbolic math. factorint(n), isprime(n), discrete_log, nthroot_mod.
+gmpy2              Fast multi-precision arithmetic. gmpy2.iroot, gmpy2.invert.
+z3-solver          SMT solver. from z3 import *; s=Solver(); s.add(...); s.check()
+fpylll             LLL/BKZ lattice reduction. from fpylll import IntegerMatrix, LLL.
+angr               Binary analysis framework. import angr; p=angr.Project('bin')
+capstone           Disassembly engine. from capstone import *
+unicorn            CPU emulator. from unicorn import *
+ropgadget          ROP gadget finder. ROPgadget --binary binary
+Pillow             Image processing. from PIL import Image
+pytesseract        Python OCR wrapper. pytesseract.image_to_string(img)
+scipy              Scientific computing. scipy.optimize, scipy.linalg.
+numpy              Numerical arrays. np.frombuffer, np.bitwise_xor.
+requests           HTTP client. requests.get(url), requests.post(url, data=...).
+flask              HTTP server. Quick listeners for callbacks.
+volatility3        Memory forensics framework (Python API).
+torch              PyTorch (CPU). import torch — tensors, neural nets, ML inference.
+keras              Keras deep learning. import keras — model loading, inference.
+PyJWT              JWT encode/decode. import jwt; jwt.encode(payload, key, algorithm='HS256')
+
+== NOTES ==
+- Sandbox runs ARM64. Do NOT execute x86/x86-64 binaries locally.
+  Use Ghidra tools for RE, and interact with remote services for dynamic analysis.
+- Need a package not listed? Run `pip install <pkg>` or `uv pip install <pkg>`.
+- Distfiles are at /challenge/distfiles/ (read-only)
+- Write generated/repaired files to /challenge/workspace/ (writable)
+- Services on the host are reachable via host.docker.internal (bridge networking).
+- RsaCtfTool is at /opt/RsaCtfTool/
+- CADO-NFS is at /opt/cado-nfs/

@@ -1,0 +1,139 @@
+# CTF challenge solver sandbox image.
+# Build once: docker build -f Dockerfile.sandbox -t ctf-sandbox .
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TERM=xterm
+
+# ── System packages ───────────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y \
+    # Networking
+    netcat-openbsd curl wget nmap \
+    # Binary analysis
+    binutils file xxd bsdmainutils binwalk \
+    gdb ltrace strace \
+    # Forensics / steg / image analysis
+    exiftool steghide \
+    pngcheck imagemagick \
+    # Filesystem forensics
+    xfsprogs sleuthkit foremost dcfldd testdisk \
+    # Audio / media
+    ffmpeg sox \
+    # OCR
+    tesseract-ocr tesseract-ocr-eng \
+    # Crypto / encoding
+    openssl libssl-dev \
+    # Build tools
+    gcc g++ make cmake \
+    # Python (system base)
+    python3 python3-pip python3-dev \
+    # Ruby (for zsteg)
+    ruby ruby-dev \
+    # Java (for Ghidra headless if mounted)
+    default-jre-headless \
+    # Misc
+    git jq zip unzip ca-certificates ncurses-term \
+    # Math libs (required by flatter, cado-nfs, fpylll)
+    libgmp-dev libmpfr-dev libfplll-dev libeigen3-dev \
+    # z3 solver system lib
+    libz3-dev \
+    # SageMath (Ubuntu 22.04 ships 9.x, works on aarch64 and amd64)
+    sagemath \
+    # CADO-NFS build deps
+    libhwloc-dev libbz2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Podman (nested containers — run challenge Docker images inside sandbox) ───
+# Ubuntu 22.04 needs the kubic repo for podman
+RUN apt-get update && apt-get install -y curl gnupg2 \
+    && . /etc/os-release \
+    && echo "deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/xUbuntu_${VERSION_ID}/ /" \
+       > /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list \
+    && curl -fsSL "https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/xUbuntu_${VERSION_ID}/Release.key" \
+       | gpg --dearmor -o /etc/apt/trusted.gpg.d/kubic.gpg \
+    && apt-get update && apt-get install -y podman buildah fuse-overlayfs slirp4netns \
+    && rm -rf /var/lib/apt/lists/* \
+    || echo "Podman install failed (non-fatal) — nested containers will not be available"
+
+# ── radare2 ───────────────────────────────────────────────────────────────────
+RUN git clone --depth=1 https://github.com/radareorg/radare2 /tmp/r2 \
+    && cd /tmp/r2 && bash sys/install.sh --install \
+    && ldconfig \
+    && r2 -v \
+    && rm -rf /tmp/r2
+
+# ── flatter (fast lattice reduction — Keegan Ryan's fork) ────────────────────
+RUN git clone --depth=1 https://github.com/keeganryan/flatter /tmp/flatter \
+    && cmake -S /tmp/flatter -B /tmp/flatter/build \
+        -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build /tmp/flatter/build -j$(nproc) \
+    && cmake --install /tmp/flatter/build \
+    && ldconfig \
+    && rm -rf /tmp/flatter
+
+# ── uv (fast Python package manager) ─────────────────────────────────────────
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.cargo/bin:/root/.local/bin:$PATH"
+
+# ── zsteg ─────────────────────────────────────────────────────────────────────
+RUN gem install zsteg
+
+# ── stegseek (build from source — pre-built .deb is amd64 only) ──────────────
+RUN apt-get update && apt-get install -y libmhash-dev libmcrypt-dev libjpeg-dev zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone --depth=1 https://github.com/RickdeJager/stegseek /tmp/stegseek \
+    && cmake -S /tmp/stegseek -B /tmp/stegseek/build \
+    && cmake --build /tmp/stegseek/build --target install \
+    && rm -rf /tmp/stegseek
+
+# ── Python CTF libraries (system python3) ────────────────────────────────────
+RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip3 install --no-cache-dir \
+    pwntools \
+    pycryptodome \
+    sympy \
+    gmpy2 \
+    requests \
+    Pillow \
+    z3-solver \
+    pytesseract \
+    scipy \
+    numpy \
+    angr \
+    capstone \
+    unicorn \
+    ropgadget \
+    tqdm \
+    fpylll \
+    flask \
+    volatility3 \
+    PyJWT \
+    pyghidra
+
+# ── PyTorch (CPU-only) + Keras ────────────────────────────────────────────────
+RUN pip3 install --no-cache-dir --ignore-installed sympy \
+    torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip3 install --no-cache-dir keras
+
+# ── RsaCtfTool (catch-all automated RSA/factoring attacks) ────────────────────
+RUN git clone --depth=1 https://github.com/RsaCtfTool/RsaCtfTool /opt/RsaCtfTool \
+    && pip3 install --no-cache-dir /opt/RsaCtfTool
+
+# ── CADO-NFS (Number Field Sieve — large integer factoring + DLP) ─────────────
+RUN git clone --depth=1 https://gitlab.inria.fr/cado-nfs/cado-nfs.git /opt/cado-nfs \
+    && cd /opt/cado-nfs && make -j$(nproc)
+RUN printf '#!/bin/bash\n\
+BUILD_PARENT=/opt/cado-nfs/build\n\
+H=$(hostname)\n\
+if [ ! -d "$BUILD_PARENT/$H" ]; then\n\
+  src=$(ls -d "$BUILD_PARENT"/* 2>/dev/null | head -1)\n\
+  [ -n "$src" ] && ln -sf "$src" "$BUILD_PARENT/$H"\n\
+fi\n\
+exec python3 /opt/cado-nfs/cado-nfs.py "$@"\n' > /usr/local/bin/cado-nfs \
+    && chmod +x /usr/local/bin/cado-nfs
+
+# ── Tools reference ──────────────────────────────────────────────────────────
+COPY sandbox-tools.txt /tools.txt
+
+WORKDIR /challenge
