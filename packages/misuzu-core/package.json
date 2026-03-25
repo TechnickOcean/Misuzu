@@ -32,7 +32,10 @@
   },
   "dependencies": {
     "@mariozechner/pi-agent-core": "catalog:",
-    "@mariozechner/pi-ai": "catalog:"
+    "@mariozechner/pi-ai": "catalog:",
+    "@sinclair/typebox": "^0.34.0",
+    "glob": "^13.0.0",
+    "yaml": "^2.8.0"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
