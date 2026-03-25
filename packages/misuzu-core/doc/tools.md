@@ -31,9 +31,9 @@ This pattern enables tools to run locally or delegate execution to remote system
 Each tool is defined as an `AgentTool` with TypeBox parameter schemas:
 
 ```typescript
-import { Type } from "@sinclair/typebox";
-import type { Static } from "@sinclair/typebox";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { Type } from "@sinclair/typebox"
+import type { Static } from "@sinclair/typebox"
+import type { AgentTool } from "@mariozechner/pi-agent-core"
 
 // 1. Schema with descriptions on every field
 const readSchema = Type.Object({
@@ -42,14 +42,14 @@ const readSchema = Type.Object({
     Type.Number({ description: "Line number to start reading from (1-indexed)" }),
   ),
   limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
-});
+})
 
 // 2. Derive TypeScript type from schema
-export type ReadToolInput = Static<typeof readSchema>;
+export type ReadToolInput = Static<typeof readSchema>
 
 // 3. Details type for structured metadata
 export interface ReadToolDetails {
-  truncation?: TruncationResult;
+  truncation?: TruncationResult
 }
 
 // 4. Implement as AgentTool
@@ -60,14 +60,14 @@ const tool: AgentTool<typeof readSchema> = {
   parameters: readSchema,
   async execute(toolCallId, params, signal, onUpdate) {
     // params is fully typed as ReadToolInput
-    const { path, offset, limit } = params;
+    const { path, offset, limit } = params
     // ...
     return {
       content: [{ type: "text", text: fileContent }],
       details: { truncation },
-    };
+    }
   },
-};
+}
 ```
 
 ### Error Handling
@@ -109,7 +109,7 @@ export function createReadTool(
 }
 
 // Default instance using process.cwd()
-export const readTool = createReadTool(process.cwd());
+export const readTool = createReadTool(process.cwd())
 ```
 
 This pattern enables:
@@ -120,10 +120,10 @@ This pattern enables:
 
 ```typescript
 // Solver agent creates tools scoped to challenge directory
-const tools = createBaseTools("/tmp/challenge-42");
+const tools = createBaseTools("/tmp/challenge-42")
 
 // Coordinator creates tools with default cwd
-const tools = createBaseTools(process.cwd());
+const tools = createBaseTools(process.cwd())
 ```
 
 ## Pluggable Operations
@@ -136,28 +136,28 @@ export interface BashOperations {
     command: string,
     cwd: string,
     options: {
-      onData: (data: Buffer) => void;
-      signal?: AbortSignal;
-      timeout?: number;
-      env?: NodeJS.ProcessEnv;
+      onData: (data: Buffer) => void
+      signal?: AbortSignal
+      timeout?: number
+      env?: NodeJS.ProcessEnv
     },
-  ) => Promise<{ exitCode: number | null }>;
+  ) => Promise<{ exitCode: number | null }>
 }
 
 export interface ReadOperations {
-  readFile: (absolutePath: string) => Promise<Buffer>;
-  access: (absolutePath: string) => Promise<void>;
+  readFile: (absolutePath: string) => Promise<Buffer>
+  access: (absolutePath: string) => Promise<void>
 }
 
 export interface EditOperations {
-  readFile: (absolutePath: string) => Promise<Buffer>;
-  writeFile: (absolutePath: string, content: string) => Promise<void>;
-  access: (absolutePath: string) => Promise<void>;
+  readFile: (absolutePath: string) => Promise<Buffer>
+  writeFile: (absolutePath: string, content: string) => Promise<void>
+  access: (absolutePath: string) => Promise<void>
 }
 
 export interface WriteOperations {
-  writeFile: (absolutePath: string, content: string) => Promise<void>;
-  mkdir: (dir: string) => Promise<void>;
+  writeFile: (absolutePath: string, content: string) => Promise<void>
+  mkdir: (dir: string) => Promise<void>
 }
 ```
 
@@ -169,13 +169,13 @@ Each operations interface has a default implementation using the local filesyste
 const defaultReadOperations: ReadOperations = {
   readFile: (path) => fsReadFile(path),
   access: (path) => fsAccess(path, constants.R_OK),
-};
+}
 
 const defaultEditOperations: EditOperations = {
   readFile: (path) => fsReadFile(path),
   writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
   access: (path) => fsAccess(path, constants.R_OK | constants.W_OK),
-};
+}
 ```
 
 ### Sandbox Delegation
@@ -188,10 +188,10 @@ const sandboxOps: EditOperations = {
   readFile: (path) => sandboxExec(`cat ${path}`),
   writeFile: (path, content) => sandboxExec(`cat > ${path}`, content),
   access: (path) => sandboxExec(`test -f ${path}`),
-};
+}
 
 // Create tools that execute inside the sandbox
-const editTool = createEditTool("/challenge", { operations: sandboxOps });
+const editTool = createEditTool("/challenge", { operations: sandboxOps })
 ```
 
 This is the key mechanism that allows Solver agents to operate on challenge files inside isolated containers.
@@ -255,11 +255,11 @@ For bash, abort kills the entire process tree:
 
 ```typescript
 const onAbort = () => {
-  if (child.pid) killProcessTree(child.pid);
-};
+  if (child.pid) killProcessTree(child.pid)
+}
 if (signal) {
-  if (signal.aborted) onAbort();
-  else signal.addEventListener("abort", onAbort, { once: true });
+  if (signal.aborted) onAbort()
+  else signal.addEventListener("abort", onAbort, { once: true })
 }
 ```
 
@@ -272,14 +272,14 @@ Large outputs are truncated to prevent context overflow. Two strategies:
 Keeps content from the beginning, discards the rest:
 
 ```typescript
-import { truncateHead } from "./utils/truncate.js";
+import { truncateHead } from "./utils/truncate"
 
-const truncation = truncateHead(content);
+const truncation = truncateHead(content)
 if (truncation.truncated) {
   if (truncation.truncatedBy === "lines") {
-    outputText += `\n\n[Showing lines ${start}-${end} of ${total}. Use offset=${nextOffset} to continue.]`;
+    outputText += `\n\n[Showing lines ${start}-${end} of ${total}. Use offset=${nextOffset} to continue.]`
   } else {
-    outputText += `\n\n[Showing lines ${start}-${end} of ${total} (${formatSize(limit)} limit). Use offset=${nextOffset} to continue.]`;
+    outputText += `\n\n[Showing lines ${start}-${end} of ${total} (${formatSize(limit)} limit). Use offset=${nextOffset} to continue.]`
   }
 }
 ```
@@ -289,12 +289,12 @@ if (truncation.truncated) {
 Keeps the most recent output (end), discards older output:
 
 ```typescript
-import { truncateTail } from "./utils/truncate.js";
+import { truncateTail } from "./utils/truncate"
 
-const truncation = truncateTail(fullOutput);
+const truncation = truncateTail(fullOutput)
 if (truncation.truncated) {
-  const startLine = truncation.totalLines - truncation.outputLines + 1;
-  outputText += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${tempFilePath}]`;
+  const startLine = truncation.totalLines - truncation.outputLines + 1
+  outputText += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${tempFilePath}]`
 }
 ```
 
@@ -310,15 +310,15 @@ if (truncation.truncated) {
 
 ```typescript
 interface TruncationResult {
-  content: string; // The truncated content
-  truncated: boolean; // Whether truncation occurred
-  truncatedBy: "lines" | "bytes"; // What limit was hit
-  outputLines: number; // Lines in output
-  totalLines: number; // Total lines in original
-  outputBytes: number; // Bytes in output
-  totalBytes: number; // Total bytes in original
-  maxLines?: number; // Line limit applied
-  maxBytes?: number; // Byte limit applied
+  content: string // The truncated content
+  truncated: boolean // Whether truncation occurred
+  truncatedBy: "lines" | "bytes" // What limit was hit
+  outputLines: number // Lines in output
+  totalLines: number // Total lines in original
+  outputBytes: number // Bytes in output
+  totalBytes: number // Total bytes in original
+  maxLines?: number // Line limit applied
+  maxBytes?: number // Byte limit applied
 }
 ```
 
@@ -334,7 +334,7 @@ const schema = Type.Object({
   timeout: Type.Optional(
     Type.Number({ description: "Timeout in seconds (optional, no default timeout)" }),
   ),
-});
+})
 ```
 
 **Details**: `{ exitCode: number | null, truncation?: TruncationResult, fullOutputPath?: string }`
@@ -356,7 +356,7 @@ const schema = Type.Object({
     Type.Number({ description: "Line number to start reading from (1-indexed)" }),
   ),
   limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
-});
+})
 ```
 
 **Details**: `{ truncation?: TruncationResult }`
@@ -373,7 +373,7 @@ Write content to a file, creating parent directories automatically.
 const schema = Type.Object({
   path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
   content: Type.String({ description: "Content to write to the file" }),
-});
+})
 ```
 
 - Uses `withFileMutationQueue` to serialize concurrent writes to the same file
@@ -388,7 +388,7 @@ const schema = Type.Object({
   path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
   oldText: Type.String({ description: "Exact text to find and replace (must match exactly)" }),
   newText: Type.String({ description: "New text to replace the old text with" }),
-});
+})
 ```
 
 **Details**: `{ diff: string, firstChangedLine?: number }`
@@ -412,7 +412,7 @@ const schema = Type.Object({
     Type.String({ description: "Directory to search in (default: current directory)" }),
   ),
   limit: Type.Optional(Type.Number({ description: "Maximum number of results (default: 1000)" })),
-});
+})
 ```
 
 **Details**: `{ truncation?: TruncationResult, resultLimitReached?: number }`
@@ -444,7 +444,7 @@ const schema = Type.Object({
   limit: Type.Optional(
     Type.Number({ description: "Maximum number of matches to return (default: 100)" }),
   ),
-});
+})
 ```
 
 **Details**: `{ truncation?: TruncationResult, matchLimitReached?: number, linesTruncated?: boolean }`
@@ -493,15 +493,15 @@ export const baseTools: AgentTool<any>[] = [
   writeTool,
   findTool,
   grepTool,
-];
+]
 
 // Read-only tools (for Coordinator monitoring)
-export const readOnlyTools: AgentTool<any>[] = [readTool, grepTool, findTool];
+export const readOnlyTools: AgentTool<any>[] = [readTool, grepTool, findTool]
 
 // Factory collections (accept cwd)
-export function createBaseTools(cwd: string): AgentTool<any>[];
-export function createReadOnlyTools(cwd: string): AgentTool<any>[];
-export function createCtfTools(cwd: string): AgentTool<any>[]; // base + docker + sandbox
+export function createBaseTools(cwd: string): AgentTool<any>[]
+export function createReadOnlyTools(cwd: string): AgentTool<any>[]
+export function createCtfTools(cwd: string): AgentTool<any>[] // base + docker + sandbox
 ```
 
 ### Agent Tool Assignments

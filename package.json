@@ -1,15 +1,36 @@
 {
-  "name": "day-rub",
+  "name": "misuzu",
   "version": "0.0.0",
   "private": true,
+  "workspaces": {
+    "packages": [
+      "packages/*"
+    ],
+    "catalog": {
+      "@mariozechner/pi-agent-core": "^0.62.0",
+      "@mariozechner/pi-ai": "^0.62.0",
+      "@types/node": "^24",
+      "typescript": "^5",
+      "vite": "npm:@voidzero-dev/vite-plus-core@latest",
+      "vite-plus": "latest",
+      "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+    }
+  },
   "type": "module",
   "scripts": {
     "ready": "vp fmt && vp lint && vp run test -r && vp run build -r",
     "dev": "vp run website#dev",
     "prepare": "vp config"
   },
+  "dependencies": {
+    "dotenv": "catalog:"
+  },
   "devDependencies": {
     "vite-plus": "catalog:"
+  },
+  "overrides": {
+    "vite": "catalog:",
+    "vitest": "catalog:"
   },
   "engines": {
     "node": ">=22.12.0"

@@ -125,32 +125,32 @@ Solver-specific state transition. Not sent to LLM.
 ### SessionEntry Type
 
 ```typescript
-export type SessionEntry = MessageEntry | CompactionEntry | ChallengeStateEntry;
+export type SessionEntry = MessageEntry | CompactionEntry | ChallengeStateEntry
 
 export interface SessionEntryBase {
-  type: string;
-  id: string; // 8-char hex, unique within session
-  parentId: string | null;
-  timestamp: string;
+  type: string
+  id: string // 8-char hex, unique within session
+  parentId: string | null
+  timestamp: string
 }
 
 export interface MessageEntry extends SessionEntryBase {
-  type: "message";
-  message: AgentMessage;
+  type: "message"
+  message: AgentMessage
 }
 
 export interface CompactionEntry extends SessionEntryBase {
-  type: "compaction";
-  summary: string;
-  firstKeptEntryId: string;
-  tokensBefore: number;
+  type: "compaction"
+  summary: string
+  firstKeptEntryId: string
+  tokensBefore: number
 }
 
 export interface ChallengeStateEntry extends SessionEntryBase {
-  type: "challenge_state";
-  challengeId: string;
-  status: "assigned" | "solving" | "solved" | "failed";
-  model?: string;
+  type: "challenge_state"
+  challengeId: string
+  status: "assigned" | "solving" | "solved" | "failed"
+  model?: string
 }
 ```
 
@@ -243,55 +243,55 @@ Manages reading/writing session JSONL files.
 
 ```typescript
 export class SessionManager {
-  private sessionPath: string;
-  private fd: number;
+  private sessionPath: string
+  private fd: number
 
   constructor(sessionPath: string) {
-    this.sessionPath = sessionPath;
+    this.sessionPath = sessionPath
     // Open file for append (create if not exists)
-    this.fd = openSync(sessionPath, "a");
+    this.fd = openSync(sessionPath, "a")
   }
 
   /** Append an entry to the session file */
   append(entry: SessionEntry): void {
-    const line = JSON.stringify(entry) + "\n";
-    appendFileSync(this.fd, line);
+    const line = JSON.stringify(entry) + "\n"
+    appendFileSync(this.fd, line)
   }
 
   /** Read all entries from the session file */
   readAll(): SessionEntry[] {
-    if (!existsSync(this.sessionPath)) return [];
-    const content = readFileSync(this.sessionPath, "utf-8");
+    if (!existsSync(this.sessionPath)) return []
+    const content = readFileSync(this.sessionPath, "utf-8")
     return content
       .split("\n")
       .filter((line) => line.trim())
-      .map((line) => JSON.parse(line) as SessionEntry);
+      .map((line) => JSON.parse(line) as SessionEntry)
   }
 
   /** Rebuild AgentMessage[] from session entries */
   buildContext(): AgentMessage[] {
-    const entries = this.readAll();
-    const messages: AgentMessage[] = [];
+    const entries = this.readAll()
+    const messages: AgentMessage[] = []
 
     for (const entry of entries) {
       if (entry.type === "message") {
-        messages.push(entry.message);
+        messages.push(entry.message)
       } else if (entry.type === "compaction") {
         messages.push({
           role: "compactionSummary",
           summary: entry.summary,
           tokensBefore: entry.tokensBefore,
           timestamp: new Date(entry.timestamp).getTime(),
-        });
+        })
       }
       // challenge_state entries are skipped (not LLM context)
     }
 
-    return messages;
+    return messages
   }
 
   close(): void {
-    closeSync(this.fd);
+    closeSync(this.fd)
   }
 }
 ```
@@ -313,46 +313,46 @@ State is saved at these points (not on every message, to reduce I/O):
 ```typescript
 async function resumeCompetition(competitionDir: string): Promise<Competition> {
   // 1. Load manifest
-  const manifest = JSON.parse(readFileSync(join(competitionDir, "manifest.json"), "utf-8"));
+  const manifest = JSON.parse(readFileSync(join(competitionDir, "manifest.json"), "utf-8"))
 
   // 2. Load coordinator state
   const coordState = JSON.parse(
     readFileSync(join(competitionDir, "coordinator", "state.json"), "utf-8"),
-  );
+  )
 
   // 3. Rebuild coordinator agent
   const coordMessages = new SessionManager(
     join(competitionDir, "coordinator", "session.jsonl"),
-  ).buildContext();
+  ).buildContext()
 
   const coordinator = new Coordinator({
     model: getModel(coordState.modelPool[0].model),
     ctfPlatformUrl: manifest.platformUrl,
-  });
-  coordinator.replaceMessages(coordMessages);
+  })
+  coordinator.replaceMessages(coordMessages)
 
   // 4. Rebuild solver agents for active challenges
-  const solvers = new Map<string, Solver>();
+  const solvers = new Map<string, Solver>()
   for (const challenge of coordState.challenges) {
     if (challenge.status === "solving" && challenge.solverId) {
-      const solverDir = join(competitionDir, "solvers", challenge.solverId);
-      const solverState = JSON.parse(readFileSync(join(solverDir, "state.json"), "utf-8"));
-      const solverMessages = new SessionManager(join(solverDir, "session.jsonl")).buildContext();
+      const solverDir = join(competitionDir, "solvers", challenge.solverId)
+      const solverState = JSON.parse(readFileSync(join(solverDir, "state.json"), "utf-8"))
+      const solverMessages = new SessionManager(join(solverDir, "session.jsonl")).buildContext()
 
       const solver = new Solver({
         cwd: solverState.cwd,
         model: getModel(solverState.model),
         challengeDescription: challenge.name,
-      });
-      solver.replaceMessages(solverMessages);
-      solvers.set(challenge.solverId, solver);
+      })
+      solver.replaceMessages(solverMessages)
+      solvers.set(challenge.solverId, solver)
     }
   }
 
   // 5. Restore model pool state
-  const modelPool = new ModelPool(coordState.modelPool);
+  const modelPool = new ModelPool(coordState.modelPool)
 
-  return { coordinator, solvers, modelPool, manifest };
+  return { coordinator, solvers, modelPool, manifest }
 }
 ```
 

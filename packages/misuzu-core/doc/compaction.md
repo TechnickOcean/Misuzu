@@ -59,11 +59,11 @@ The check runs in the `transformContext` hook, called by `pi-agent-core` before 
 this.agent = new Agent({
   transformContext: async (messages, signal) => {
     if (checkCompact(this.agent)) {
-      return compact(this.agent);
+      return compact(this.agent)
     }
-    return messages;
+    return messages
   },
-});
+})
 ```
 
 ## Token Estimation
@@ -90,7 +90,7 @@ export function estimateTokens(message: AgentMessage): number {
       // summary.length / 4
     }
   }
-  return 0;
+  return 0
 }
 ```
 
@@ -230,22 +230,22 @@ Messages are serialized to text before summarization, so the LLM treats them as 
 
 ```typescript
 function serializeConversation(messages: Message[]): string {
-  const parts: string[] = [];
+  const parts: string[] = []
 
   for (const msg of messages) {
     if (msg.role === "user") {
-      parts.push(`[User]: ${extractText(msg.content)}`);
+      parts.push(`[User]: ${extractText(msg.content)}`)
     } else if (msg.role === "assistant") {
       // Separate thinking, text, and tool calls
-      parts.push(`[Assistant]: ${textParts.join("\n")}`);
-      parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
+      parts.push(`[Assistant]: ${textParts.join("\n")}`)
+      parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`)
     } else if (msg.role === "toolResult") {
       // Truncate tool results to 2000 chars for summarization
-      parts.push(`[Tool result]: ${truncateForSummary(content, 2000)}`);
+      parts.push(`[Tool result]: ${truncateForSummary(content, 2000)}`)
     }
   }
 
-  return parts.join("\n\n");
+  return parts.join("\n\n")
 }
 ```
 
@@ -258,9 +258,9 @@ Misuzu defines custom message types for CTF operations via declaration merging:
 ```typescript
 declare module "@mariozechner/pi-agent-core" {
   interface CustomAgentMessages {
-    sandboxExecution: SandboxExecutionMessage;
-    challengeUpdate: ChallengeUpdateMessage;
-    flagResult: FlagResultMessage;
+    sandboxExecution: SandboxExecutionMessage
+    challengeUpdate: ChallengeUpdateMessage
+    flagResult: FlagResultMessage
   }
 }
 ```
@@ -278,7 +278,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
             content: `Sandbox ran: ${m.command}\n\`\`\`\n${m.output}\n\`\`\``,
             timestamp: m.timestamp,
           },
-        ];
+        ]
       case "challengeUpdate":
         return [
           {
@@ -286,7 +286,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
             content: `[Challenge ${m.challengeId}: ${m.status}] ${m.details}`,
             timestamp: m.timestamp,
           },
-        ];
+        ]
       case "flagResult":
         return [
           {
@@ -294,15 +294,15 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
             content: `[Flag ${m.correct ? "CORRECT" : "WRONG"}] ${m.message}`,
             timestamp: m.timestamp,
           },
-        ];
+        ]
       case "user":
       case "assistant":
       case "toolResult":
-        return [m];
+        return [m]
       default:
-        return [];
+        return []
     }
-  });
+  })
 }
 ```
 
@@ -364,7 +364,7 @@ See [skills.md](skills.md) for how the catalog is built and [architecture.md](ar
 ```typescript
 export class FeaturedAgent {
   constructor(options: FeaturedAgentOptions) {
-    const skillCatalog = buildSkillsCatalog(skills);
+    const skillCatalog = buildSkillsCatalog(skills)
 
     this.agent = new Agent({
       initialState: {
@@ -374,11 +374,11 @@ export class FeaturedAgent {
       convertToLlm, // Custom message conversion
       transformContext: async (messages, signal) => {
         if (checkCompact(this.agent)) {
-          return compact(this.agent); // Only touches messages
+          return compact(this.agent) // Only touches messages
         }
-        return messages;
+        return messages
       },
-    });
+    })
   }
 }
 ```
@@ -392,18 +392,18 @@ import {
   estimateTokens,
   estimateContextTokens,
   findCutPoint,
-} from "./features/compaction.js";
+} from "./features/compaction"
 
 // Check if compaction is needed
 if (checkCompact(agent)) {
   // Run compaction, get new message array
-  const compactedMessages = await compact(agent);
-  agent.replaceMessages(compactedMessages);
+  const compactedMessages = await compact(agent)
+  agent.replaceMessages(compactedMessages)
 }
 
 // Estimate tokens for a single message
-const tokens = estimateTokens(someMessage);
+const tokens = estimateTokens(someMessage)
 
 // Estimate total context tokens
-const { tokens, usageTokens, trailingTokens } = estimateContextTokens(agent.state.messages);
+const { tokens, usageTokens, trailingTokens } = estimateContextTokens(agent.state.messages)
 ```

@@ -1,11 +1,11 @@
-import { readFileSync, statSync } from "node:fs";
-import { resolve, join } from "node:path";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { type Static, Type } from "@sinclair/typebox";
-import { globSync } from "glob";
-import { truncateHead, truncateLine, type TruncationResult } from "../utils/truncate.js";
+import { readFileSync, statSync } from "node:fs"
+import { resolve, join } from "node:path"
+import type { AgentTool } from "@mariozechner/pi-agent-core"
+import { type Static, Type } from "@sinclair/typebox"
+import { globSync } from "glob"
+import { truncateHead, truncateLine, type TruncationResult } from "../utils/truncate.js"
 
-const GREP_MAX_LINE_LENGTH = 500;
+const GREP_MAX_LINE_LENGTH = 500
 
 const grepSchema = Type.Object({
   pattern: Type.String({ description: "Search pattern (regex or literal string)" }),
@@ -29,14 +29,14 @@ const grepSchema = Type.Object({
   limit: Type.Optional(
     Type.Number({ description: "Maximum number of matches to return (default: 100)" }),
   ),
-});
+})
 
-export type GrepToolInput = Static<typeof grepSchema>;
+export type GrepToolInput = Static<typeof grepSchema>
 
 export interface GrepToolDetails {
-  truncation?: TruncationResult;
-  matchLimitReached?: number;
-  linesTruncated?: boolean;
+  truncation?: TruncationResult
+  matchLimitReached?: number
+  linesTruncated?: boolean
 }
 
 export function createGrepTool(cwd: string): AgentTool<typeof grepSchema> {
@@ -48,74 +48,74 @@ export function createGrepTool(cwd: string): AgentTool<typeof grepSchema> {
       "Returns matching lines with file paths and line numbers.",
     parameters: grepSchema,
     async execute(toolCallId, params: GrepToolInput) {
-      const searchPath = params.path ? resolve(cwd, params.path) : cwd;
-      const limit = params.limit ?? 100;
+      const searchPath = params.path ? resolve(cwd, params.path) : cwd
+      const limit = params.limit ?? 100
 
-      let regex: RegExp;
+      let regex: RegExp
       try {
         const escaped = params.literal
           ? params.pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-          : params.pattern;
-        regex = new RegExp(escaped, params.ignoreCase ? "i" : "");
+          : params.pattern
+        regex = new RegExp(escaped, params.ignoreCase ? "i" : "")
       } catch {
-        throw new Error(`Invalid regex pattern: ${params.pattern}`);
+        throw new Error(`Invalid regex pattern: ${params.pattern}`)
       }
 
       // Get files to search
-      const files: string[] = [];
+      const files: string[] = []
       try {
-        const stat = statSync(searchPath);
+        const stat = statSync(searchPath)
         if (stat.isFile()) {
-          files.push(searchPath);
+          files.push(searchPath)
         } else {
-          const pattern = params.glob ?? "**/*";
-          files.push(...globSync(pattern, { cwd: searchPath, nodir: true, maxDepth: 20 }));
+          const pattern = params.glob ?? "**/*"
+          files.push(...globSync(pattern, { cwd: searchPath, nodir: true, maxDepth: 20 }))
         }
       } catch {
-        throw new Error(`Path not found: ${params.path ?? "."}`);
+        throw new Error(`Path not found: ${params.path ?? "."}`)
       }
 
-      const matches: string[] = [];
-      let linesTruncated = false;
+      const matches: string[] = []
+      let linesTruncated = false
 
       for (const file of files) {
-        if (matches.length >= limit) break;
+        if (matches.length >= limit) break
 
-        const filePath = searchPath === resolve(cwd, file) ? file : join(searchPath, file);
-        let content: string;
+        const filePath = searchPath === resolve(cwd, file) ? file : join(searchPath, file)
+        let content: string
         try {
-          content = readFileSync(filePath, "utf-8");
+          content = readFileSync(filePath, "utf-8")
         } catch {
-          continue; // Skip unreadable files
+          continue // Skip unreadable files
         }
 
-        const lines = content.split("\n");
+        const lines = content.split("\n")
         for (let i = 0; i < lines.length; i++) {
-          if (matches.length >= limit) break;
+          if (matches.length >= limit) break
           if (regex.test(lines[i])) {
-            let line = `${file}:${i + 1}:${lines[i]}`;
+            let line = `${file}:${i + 1}:${lines[i]}`
             if (Buffer.byteLength(line, "utf-8") > GREP_MAX_LINE_LENGTH) {
-              line = truncateLine(line, GREP_MAX_LINE_LENGTH);
-              linesTruncated = true;
+              line = truncateLine(line, GREP_MAX_LINE_LENGTH)
+              linesTruncated = true
             }
-            matches.push(line);
+            matches.push(line)
           }
         }
       }
 
-      const content = matches.join("\n") || "(no matches)";
-      const truncation = truncateHead(content, { maxLines: limit });
+      const content = matches.join("\n") || "(no matches)"
+      const truncation = truncateHead(content, { maxLines: limit })
 
-      const details: GrepToolDetails = { truncation };
-      if (matches.length >= limit) details.matchLimitReached = limit;
-      if (linesTruncated) details.linesTruncated = true;
+      const details: GrepToolDetails = { truncation }
+      if (matches.length >= limit) details.matchLimitReached = limit
+      if (linesTruncated) details.linesTruncated = true
 
       return {
         content: [{ type: "text", text: content }],
         details,
-      };
+      }
     },
-  };
+  }
 }
 
-export const grepTool = createGrepTool(process.cwd());
+export const grepTool = createGrepTool(process.cwd())

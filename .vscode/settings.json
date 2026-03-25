@@ -1,6 +1,8 @@
 {
   "editor.defaultFormatter": "oxc.oxc-vscode",
   "oxc.fmt.configPath": "./vite.config.ts",
+  "files.autoSave": "afterDelay",
+  "files.autoSaveWhenNoErrors": true,
   "editor.formatOnSave": true,
   "editor.formatOnSaveMode": "file",
   "editor.codeActionsOnSave": {

@@ -1,37 +1,37 @@
 // Agents
-export { FeaturedAgent, type FeaturedAgentOptions } from "./agents/misuzu-featured.js";
-export { Solver, type SolverOptions } from "./agents/misuzu-solver.js";
+export { FeaturedAgent, type FeaturedAgentOptions } from "./agents/misuzu-featured.js"
+export { Solver, type SolverOptions } from "./agents/misuzu-solver.js"
 export {
   Coordinator,
   type CoordinatorOptions,
   ModelPool,
   type ModelSlot,
   type Challenge,
-} from "./agents/misuzu-coordinator.js";
+} from "./agents/misuzu-coordinator.js"
 
 // Features
 export {
   checkCompact,
+  compact,
   compactWithSummary,
   estimateTokens,
   estimateContextTokens,
   findCutPoint,
-  prepareCompaction,
-} from "./features/compaction.js";
+} from "./features/compaction.js"
 export {
   type Skill,
   type SkillFrontmatter,
   extractSkillFrontmatter,
   importSkillsFromDirectory,
   buildSkillsCatalog,
-} from "./features/skill.js";
+} from "./features/skill.js"
 export {
   convertToLlm,
   type SandboxExecutionMessage,
   type FlagResultMessage,
   type ChallengeUpdateMessage,
   type CompactionSummaryMessage,
-} from "./features/messages.js";
+} from "./features/messages.js"
 
 // Tools
 export {
@@ -68,7 +68,7 @@ export {
   resolveToCwd,
   resolveReadPath,
   expandPath,
-} from "./builtins/tools/index.js";
+} from "./builtins/tools/index.js"
 
 // CTF Tools
 export {
@@ -78,11 +78,11 @@ export {
   dockerExecTool,
   dockerStopTool,
   dockerRmTool,
-} from "./builtins/tools/misuzu/docker.js";
+} from "./builtins/tools/misuzu/docker.js"
 export {
   requestrepoTools,
   requestrepoCreateTool,
   requestrepoWaitTool,
   requestrepoSetFileTool,
   requestrepoAddDnsTool,
-} from "./builtins/tools/misuzu/requestrepo.js";
+} from "./builtins/tools/misuzu/requestrepo.js"

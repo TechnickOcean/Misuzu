@@ -6,11 +6,16 @@ packages:
 catalog:
   "@mariozechner/pi-agent-core": ^0.62.0
   "@mariozechner/pi-ai": ^0.62.0
+  "@sinclair/typebox": ^0.34.48
   "@types/node": ^24
+  dotenv: ^17.3.1
+  glob: ^13.0.6
+  tsx: ^4.21.0
   typescript: ^5
   vite: npm:@voidzero-dev/vite-plus-core@latest
   vite-plus: latest
   vitest: npm:@voidzero-dev/vite-plus-test@latest
+  yaml: ^2.8.3
 
 catalogMode: prefer
 overrides:

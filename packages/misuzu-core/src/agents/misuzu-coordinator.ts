@@ -1,90 +1,90 @@
-import { Type } from "@sinclair/typebox";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { Model } from "@mariozechner/pi-ai";
-import { FeaturedAgent, type FeaturedAgentOptions } from "./misuzu-featured.ts";
-import { Solver } from "./misuzu-solver.ts";
-import { createReadOnlyTools } from "../builtins/tools/index.ts";
-import { bashTool } from "../builtins/tools/base/bash.ts";
-import { requestrepoTools } from "../builtins/tools/misuzu/requestrepo.ts";
-import type { FlagResultMessage } from "../features/messages.ts";
-import { loadBuiltinSkills, type Skill } from "../features/skill.ts";
+import { Type } from "@sinclair/typebox"
+import type { AgentTool } from "@mariozechner/pi-agent-core"
+import type { Model } from "@mariozechner/pi-ai"
+import { FeaturedAgent, type FeaturedAgentOptions } from "./misuzu-featured.ts"
+import { Solver } from "./misuzu-solver.ts"
+import { createReadOnlyTools } from "../builtins/tools/index.ts"
+import { bashTool } from "../builtins/tools/base/bash.ts"
+import { requestrepoTools } from "../builtins/tools/misuzu/requestrepo.ts"
+import type { FlagResultMessage } from "../features/messages.ts"
+import { loadBuiltinSkills, type Skill } from "../features/skill.ts"
 
 export interface ModelSlot {
-  model: string;
-  status: "idle" | "busy";
-  solverId?: string;
+  model: string
+  status: "idle" | "busy"
+  solverId?: string
 }
 
 export class ModelPool {
-  private slots: ModelSlot[];
+  private slots: ModelSlot[]
 
   constructor(models: string[]) {
-    this.slots = models.map((model) => ({ model, status: "idle" }));
+    this.slots = models.map((model) => ({ model, status: "idle" }))
   }
 
   acquire(solverId: string): string | null {
-    const slot = this.slots.find((s) => s.status === "idle");
-    if (!slot) return null;
-    slot.status = "busy";
-    slot.solverId = solverId;
-    return slot.model;
+    const slot = this.slots.find((s) => s.status === "idle")
+    if (!slot) return null
+    slot.status = "busy"
+    slot.solverId = solverId
+    return slot.model
   }
 
   release(solverId: string): void {
-    const slot = this.slots.find((s) => s.solverId === solverId);
+    const slot = this.slots.find((s) => s.solverId === solverId)
     if (slot) {
-      slot.status = "idle";
-      slot.solverId = undefined;
+      slot.status = "idle"
+      slot.solverId = undefined
     }
   }
 
   get available(): number {
-    return this.slots.filter((s) => s.status === "idle").length;
+    return this.slots.filter((s) => s.status === "idle").length
   }
 
   toJSON(): ModelSlot[] {
-    return [...this.slots];
+    return [...this.slots]
   }
 }
 
 export interface CoordinatorOptions {
-  cwd?: string;
-  ctfPlatformUrl?: string;
-  models?: string[];
-  model?: Model<any>;
-  modelPool?: ModelPool;
+  cwd?: string
+  ctfPlatformUrl?: string
+  models?: string[]
+  model?: Model<any>
+  modelPool?: ModelPool
 }
 
 export interface Challenge {
-  id: string;
-  name: string;
-  category: string;
-  description: string;
-  difficulty?: number;
-  files?: string[];
-  points?: number;
+  id: string
+  name: string
+  category: string
+  description: string
+  difficulty?: number
+  files?: string[]
+  points?: number
 }
 
 export class Coordinator extends FeaturedAgent {
-  readonly modelPool: ModelPool;
-  readonly solvers: Map<string, Solver> = new Map();
+  readonly modelPool: ModelPool
+  readonly solvers: Map<string, Solver> = new Map()
   readonly challengeQueue: Array<{
-    challengeId: string;
-    challengeName: string;
-    category: string;
-    description: string;
-    difficulty?: number;
-    files?: string[];
-  }> = [];
+    challengeId: string
+    challengeName: string
+    category: string
+    description: string
+    difficulty?: number
+    files?: string[]
+  }> = []
 
   constructor(options: CoordinatorOptions & FeaturedAgentOptions = {}) {
-    const cwd = options.cwd ?? process.cwd();
-    const modelPool = options.modelPool ?? new ModelPool(options.models ?? []);
-    const skills: Skill[] = [...(options.skills ?? []), ...loadBuiltinSkills()];
+    const cwd = options.cwd ?? process.cwd()
+    const modelPool = options.modelPool ?? new ModelPool(options.models ?? [])
+    const skills: Skill[] = [...(options.skills ?? []), ...loadBuiltinSkills()]
 
-    const tools = [...createReadOnlyTools(cwd), bashTool, ...requestrepoTools];
+    const tools = [...createReadOnlyTools(cwd), bashTool, ...requestrepoTools]
 
-    const systemPrompt = buildCoordinatorSystemPrompt(options);
+    const systemPrompt = buildCoordinatorSystemPrompt(options)
 
     super({
       ...options,
@@ -96,9 +96,9 @@ export class Coordinator extends FeaturedAgent {
         model: options.model,
         systemPrompt,
       },
-    });
+    })
 
-    this.modelPool = modelPool;
+    this.modelPool = modelPool
   }
 
   getCreateSolverTool(): AgentTool {
@@ -113,7 +113,7 @@ export class Coordinator extends FeaturedAgent {
       files: Type.Optional(
         Type.Array(Type.String(), { description: "URLs to challenge attachments" }),
       ),
-    });
+    })
 
     return {
       name: "create_solver",
@@ -125,16 +125,16 @@ export class Coordinator extends FeaturedAgent {
       parameters: solverParams,
       execute: async (_toolCallId: string, rawParams: unknown) => {
         const params = rawParams as {
-          challengeId: string;
-          challengeName: string;
-          category: string;
-          description: string;
-          difficulty?: number;
-          files?: string[];
-        };
-        const model = this.modelPool.acquire(params.challengeId);
+          challengeId: string
+          challengeName: string
+          category: string
+          description: string
+          difficulty?: number
+          files?: string[]
+        }
+        const model = this.modelPool.acquire(params.challengeId)
         if (!model) {
-          this.challengeQueue.push(params);
+          this.challengeQueue.push(params)
           return {
             content: [
               {
@@ -143,15 +143,15 @@ export class Coordinator extends FeaturedAgent {
               },
             ],
             details: { queued: true, queueLength: this.challengeQueue.length },
-          };
+          }
         }
 
         const solver = new Solver({
           cwd: `/tmp/ctf-${params.challengeId}`,
           challengeDescription: params.description,
-        });
+        })
 
-        this.solvers.set(params.challengeId, solver);
+        this.solvers.set(params.challengeId, solver)
 
         solver.subscribe((event) => {
           if (event.type === "message_end" && event.message.role === "flagResult") {
@@ -159,16 +159,16 @@ export class Coordinator extends FeaturedAgent {
               role: "user" as const,
               content: `Solver for "${params.challengeName}" found a flag: ${(event.message as unknown as FlagResultMessage).flag}`,
               timestamp: Date.now(),
-            } as any);
+            } as any)
           }
           if (event.type === "agent_end") {
-            this.onSolverFinished(params.challengeId);
+            this.onSolverFinished(params.challengeId)
           }
-        });
+        })
 
         await solver.solve(
           `Challenge: ${params.challengeName}\nCategory: ${params.category}\n\n${params.description}`,
-        );
+        )
 
         return {
           content: [
@@ -178,23 +178,23 @@ export class Coordinator extends FeaturedAgent {
             },
           ],
           details: { model, solverId: params.challengeId },
-        };
+        }
       },
-    };
+    }
   }
 
   private onSolverFinished(solverId: string): void {
-    this.modelPool.release(solverId);
-    this.solvers.delete(solverId);
+    this.modelPool.release(solverId)
+    this.solvers.delete(solverId)
 
     if (this.challengeQueue.length > 0 && this.modelPool.available > 0) {
-      const next = this.challengeQueue.shift()!;
+      const next = this.challengeQueue.shift()!
       // Queue follow-up to create next solver
       this.appendMessage({
         role: "user" as const,
         content: `Model freed. Create a solver for queued challenge: ${next.challengeName} (ID: ${next.challengeId})`,
         timestamp: Date.now(),
-      } as any);
+      } as any)
     }
   }
 }
@@ -213,9 +213,9 @@ function buildCoordinatorSystemPrompt(_options: CoordinatorOptions): string {
 6. Notify the user of progress
 
 Workflow:
-- Use agent-browser to navigate and extract challenge information
+- Use browser to navigate and extract challenge information
 - Call create_solver for each challenge (easiest first)
 - The system handles model allocation and queuing automatically
 - Use bash to submit flags when solvers report them
-- Remote environment may have quantitative limits, do not try to launch a wnv again when being informed reached the limit.`;
+- Remote environment may have quantitative limits, do not try to launch a wnv again when being informed reached the limit.`
 }

@@ -1,116 +1,165 @@
-import { expect, test, describe } from "vite-plus/test";
+import { expect, test, describe } from "vite-plus/test"
 import {
   estimateTokens,
   estimateContextTokens,
   findCutPoint,
   compactWithSummary,
-} from "./compaction.js";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+} from "./compaction.js"
+import type { AgentMessage } from "@mariozechner/pi-agent-core"
 
-function userMsg(content: string, ts = Date.now()): AgentMessage {
-  return { role: "user", content, timestamp: ts } as AgentMessage;
+function user(content: string): AgentMessage {
+  return { role: "user", content, timestamp: Date.now() } as AgentMessage
 }
 
-function assistantMsg(text: string, ts = Date.now()): AgentMessage {
+function assistant(
+  text: string,
+  usage?: { input: number; output: number; cacheRead: number; cacheWrite: number },
+): AgentMessage {
   return {
     role: "assistant",
     content: [{ type: "text", text }],
     api: {} as any,
-    provider: "test" as any,
+    provider: "test",
     model: "test",
-    usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    usage: usage
+      ? {
+          ...usage,
+          totalTokens: usage.input + usage.output,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        }
+      : {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
     stopReason: "stop",
-    timestamp: ts,
-  } as unknown as AgentMessage;
+    timestamp: Date.now(),
+  } as unknown as AgentMessage
 }
 
-function toolResultMsg(content: string, ts = Date.now()): AgentMessage {
+function toolResult(content: string): AgentMessage {
   return {
     role: "toolResult",
     toolCallId: "1",
     toolName: "test",
     content: [{ type: "text", text: content }],
     isError: false,
-    timestamp: ts,
-  } as AgentMessage;
+    timestamp: Date.now(),
+  } as AgentMessage
+}
+
+function sandbox(command: string, output: string): AgentMessage {
+  return {
+    role: "sandboxExecution",
+    command,
+    output,
+    exitCode: 0,
+    timestamp: Date.now(),
+  } as AgentMessage
 }
 
 describe("estimateTokens", () => {
-  test("estimates user message tokens", () => {
-    const msg = userMsg("a".repeat(400));
-    expect(estimateTokens(msg)).toBe(100);
-  });
+  test("user", () => {
+    expect(estimateTokens(user("a".repeat(400)))).toBe(100)
+  })
 
-  test("estimates assistant message tokens", () => {
-    const msg = assistantMsg("a".repeat(800));
-    expect(estimateTokens(msg)).toBe(200);
-  });
+  test("assistant", () => {
+    expect(estimateTokens(assistant("a".repeat(800)))).toBe(200)
+  })
 
-  test("estimates tool result tokens", () => {
-    const msg = toolResultMsg("a".repeat(400));
-    expect(estimateTokens(msg)).toBe(100);
-  });
-});
+  test("toolResult", () => {
+    expect(estimateTokens(toolResult("a".repeat(400)))).toBe(100)
+  })
+
+  test("sandboxExecution", () => {
+    // 2 + 400 = 402, /4 = 100.5, ceil = 101
+    expect(estimateTokens(sandbox("ls", "a".repeat(400)))).toBe(101)
+  })
+})
 
 describe("estimateContextTokens", () => {
   test("sums all messages", () => {
-    const messages = [userMsg("a".repeat(400)), assistantMsg("a".repeat(800))];
-    expect(estimateContextTokens(messages)).toBe(300);
-  });
+    expect(estimateContextTokens([user("a".repeat(400)), assistant("a".repeat(800))])).toBe(300)
+  })
 
-  test("returns 0 for empty array", () => {
-    expect(estimateContextTokens([])).toBe(0);
-  });
-});
+  test("empty array", () => {
+    expect(estimateContextTokens([])).toBe(0)
+  })
+
+  test("prefers actual usage over heuristic", () => {
+    const messages = [
+      user("a".repeat(400)),
+      assistant("response", { input: 5000, output: 500, cacheRead: 1000, cacheWrite: 0 }),
+    ]
+    // 5000 + 1000 + 0 = 6000 (no trailing messages)
+    expect(estimateContextTokens(messages)).toBe(6000)
+  })
+
+  test("estimates trailing messages after last usage", () => {
+    const messages = [
+      assistant("old", { input: 5000, output: 500, cacheRead: 0, cacheWrite: 0 }),
+      user("a".repeat(400)),
+    ]
+    // 5000 + 1000 trailing = 5100
+    expect(estimateContextTokens(messages)).toBe(5100)
+  })
+})
 
 describe("findCutPoint", () => {
-  test("keeps all messages when context is small", () => {
-    const messages = [userMsg("hello"), assistantMsg("hi")];
-    const { cutIndex } = findCutPoint(messages);
-    expect(cutIndex).toBe(messages.length);
-  });
+  test("keeps all when context is small", () => {
+    expect(findCutPoint([user("hello"), assistant("hi")])).toBe(2)
+  })
 
-  test("cuts at valid point (user/assistant boundary)", () => {
-    // Create messages that exceed KEEP_RECENT_TOKENS (20000)
-    const longText = "x".repeat(100_000); // ~25000 tokens
+  test("cuts at user/assistant boundary, never at toolResult", () => {
+    const long = "x".repeat(100_000) // ~25k tokens, exceeds KEEP_RECENT_TOKENS
     const messages: AgentMessage[] = [
-      userMsg(longText),
-      assistantMsg("response 1"),
-      toolResultMsg("result 1"),
-      userMsg("follow up"),
-      assistantMsg("response 2"),
-      toolResultMsg("result 2"),
-      userMsg("short"),
-    ];
-    const { cutIndex } = findCutPoint(messages);
-    // Should cut somewhere, keeping the last messages
-    expect(cutIndex).toBeGreaterThan(0);
-    expect(cutIndex).toBeLessThan(messages.length);
-    // Should never cut at a toolResult
-    expect(messages[cutIndex].role).not.toBe("toolResult");
-  });
-});
+      user(long),
+      assistant("r1"),
+      toolResult("t1"),
+      user("r2"),
+      assistant("r3"),
+      toolResult("t2"),
+      user("recent"),
+    ]
+    const idx = findCutPoint(messages)
+    expect(idx).toBeGreaterThan(0)
+    expect(idx).toBeLessThan(messages.length)
+    expect(messages[idx].role).not.toBe("toolResult")
+  })
+
+  test("sandboxExecution is a valid cut point", () => {
+    const messages: AgentMessage[] = [
+      user("x".repeat(100_000)),
+      sandbox("ls", "out"),
+      user("recent"),
+    ]
+    const idx = findCutPoint(messages)
+    expect(idx).toBeGreaterThan(0)
+    expect(messages[idx].role).not.toBe("toolResult")
+  })
+})
 
 describe("compactWithSummary", () => {
   test("replaces old messages with summary", () => {
-    const longText = "x".repeat(100_000);
     const messages: AgentMessage[] = [
-      userMsg(longText),
-      assistantMsg("response"),
-      userMsg("recent question"),
-      assistantMsg("recent response"),
-    ];
-    const result = compactWithSummary(messages, "Summary of old messages");
-    expect(result[0].role).toBe("compactionSummary");
-    expect(result.length).toBeLessThan(messages.length + 1);
-  });
+      user("x".repeat(100_000)),
+      assistant("r1"),
+      user("recent"),
+      assistant("recent r"),
+    ]
+    const result = compactWithSummary(messages, "Summary")
+    expect(result[0].role).toBe("compactionSummary")
+    expect(result.length).toBeLessThan(messages.length + 1)
+  })
 
-  test("summary message has correct structure", () => {
-    const messages = [userMsg("old"), assistantMsg("old"), userMsg("new")];
-    const result = compactWithSummary(messages, "Test summary");
-    const summary = result[0] as any;
-    expect(summary.role).toBe("compactionSummary");
-    expect(summary.summary).toBe("Test summary");
-    expect(summary.tokensBefore).toBeGreaterThan(0);
-  });
-});
+  test("summary has correct fields", () => {
+    const messages = [user("old"), assistant("old"), user("new")]
+    const summary = compactWithSummary(messages, "Test summary")[0] as any
+    expect(summary.role).toBe("compactionSummary")
+    expect(summary.summary).toBe("Test summary")
+    expect(summary.tokensBefore).toBeGreaterThan(0)
+  })
+})

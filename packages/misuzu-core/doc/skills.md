@@ -101,7 +101,7 @@ Misuzu warns about issues but still loads skills:
 ```typescript
 // Description missing? Warning, but skill still loads.
 if (!frontmatter.description) {
-  diagnostics.push({ type: "warning", message: "description is required", path: filePath });
+  diagnostics.push({ type: "warning", message: "description is required", path: filePath })
 }
 
 // Name doesn't match directory? Warning, directory name is used.
@@ -109,27 +109,27 @@ if (frontmatter.name !== parentDirName) {
   diagnostics.push({
     type: "warning",
     message: `name "${frontmatter.name}" does not match directory`,
-  });
+  })
 }
 ```
 
 ### Parsing
 
 ```typescript
-import { parse } from "yaml";
+import { parse } from "yaml"
 
 export function extractSkillFrontmatter(content: string): {
-  frontmatter: SkillFrontmatter;
-  body: string;
+  frontmatter: SkillFrontmatter
+  body: string
 } {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/)
   if (!match) {
-    return { frontmatter: {}, body: content };
+    return { frontmatter: {}, body: content }
   }
 
-  const frontmatter = parse(match[1]) as SkillFrontmatter;
-  const body = match[2];
-  return { frontmatter, body };
+  const frontmatter = parse(match[1]) as SkillFrontmatter
+  const body = match[2]
+  return { frontmatter, body }
 }
 ```
 
@@ -160,12 +160,12 @@ export function importSkillsFromDirectory(dir: string): Skill[] {
 
 ```typescript
 export interface Skill {
-  name: string; // From frontmatter or directory name
-  description: string; // From frontmatter
-  filePath: string; // Absolute path to SKILL.md
-  baseDir: string; // Parent directory of SKILL.md
-  body: string; // Markdown content after frontmatter
-  allowedTools: string[]; // Parsed from allowed-tools frontmatter
+  name: string // From frontmatter or directory name
+  description: string // From frontmatter
+  filePath: string // Absolute path to SKILL.md
+  baseDir: string // Parent directory of SKILL.md
+  body: string // Markdown content after frontmatter
+  allowedTools: string[] // Parsed from allowed-tools frontmatter
 }
 ```
 
@@ -194,9 +194,9 @@ Skills are formatted as XML in the system prompt. This is the only place skills 
 
 ```typescript
 export function buildSkillsCatalog(skills: Skill[]): string {
-  const visibleSkills = skills.filter((s) => !s.disableModelInvocation);
+  const visibleSkills = skills.filter((s) => !s.disableModelInvocation)
 
-  if (visibleSkills.length === 0) return "";
+  if (visibleSkills.length === 0) return ""
 
   const lines = [
     "\nThe following skills provide specialized instructions for specific tasks.",
@@ -204,18 +204,18 @@ export function buildSkillsCatalog(skills: Skill[]): string {
     "When a skill file references a relative path, resolve it against the skill directory.",
     "",
     "<available_skills>",
-  ];
+  ]
 
   for (const skill of visibleSkills) {
-    lines.push("  <skill>");
-    lines.push(`    <name>${escapeXml(skill.name)}</name>`);
-    lines.push(`    <description>${escapeXml(skill.description)}</description>`);
-    lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
-    lines.push("  </skill>");
+    lines.push("  <skill>")
+    lines.push(`    <name>${escapeXml(skill.name)}</name>`)
+    lines.push(`    <description>${escapeXml(skill.description)}</description>`)
+    lines.push(`    <location>${escapeXml(skill.filePath)}</location>`)
+    lines.push("  </skill>")
   }
 
-  lines.push("</available_skills>");
-  return lines.join("\n");
+  lines.push("</available_skills>")
+  return lines.join("\n")
 }
 ```
 
@@ -224,8 +224,8 @@ export function buildSkillsCatalog(skills: Skill[]): string {
 The catalog is appended to `systemPrompt` at agent construction time:
 
 ```typescript
-const skillCatalog = buildSkillsCatalog(skills);
-const systemPrompt = basePrompt + skillCatalog;
+const skillCatalog = buildSkillsCatalog(skills)
+const systemPrompt = basePrompt + skillCatalog
 ```
 
 Since `systemPrompt` is a separate field on `AgentState` (not part of `messages`), the catalog is **never affected by compaction**. See [compaction.md](compaction.md#skill-catalog-protection) for details.

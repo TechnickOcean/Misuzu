@@ -22,11 +22,11 @@ The base class for all misuzu agents. Wraps `pi-agent-core`'s `Agent` with:
 
 ```typescript
 export interface FeaturedAgentOptions {
-  initialState?: Partial<AgentState>;
-  skills?: Skill[];
-  cwd?: string;
-  tools?: AgentTool<any>[];
-  convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
+  initialState?: Partial<AgentState>
+  skills?: Skill[]
+  cwd?: string
+  tools?: AgentTool<any>[]
+  convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>
 }
 ```
 
@@ -34,16 +34,16 @@ export interface FeaturedAgentOptions {
 
 ```typescript
 export class FeaturedAgent {
-  private agent: Agent;
-  private skills: Skill[];
-  private cwd: string;
+  private agent: Agent
+  private skills: Skill[]
+  private cwd: string
 
   constructor({ skills, cwd, tools, convertToLlm, ...opts }: FeaturedAgentOptions) {
-    this.cwd = cwd ?? process.cwd();
-    this.skills = skills ?? [];
+    this.cwd = cwd ?? process.cwd()
+    this.skills = skills ?? []
 
     // Build skill catalog in system prompt (protected from compaction)
-    const skillCatalog = buildSkillsCatalog(this.skills);
+    const skillCatalog = buildSkillsCatalog(this.skills)
 
     this.agent = new Agent({
       ...opts,
@@ -55,11 +55,11 @@ export class FeaturedAgent {
       convertToLlm: convertToLlm ?? defaultConvertToLlm,
       transformContext: async (messages, signal) => {
         if (checkCompact(this.agent)) {
-          return compact(this.agent);
+          return compact(this.agent)
         }
-        return messages;
+        return messages
       },
-    });
+    })
   }
 }
 ```
@@ -95,11 +95,11 @@ An expert CTF player agent. Extends `FeaturedAgent` with sandbox and Docker tool
 
 ```typescript
 export interface SolverOptions {
-  cwd?: string;
-  challengeDescription?: string;
-  challengeUrl?: string;
-  sandboxImage?: string; // Default: "ctf-sandbox"
-  model?: Model<any>;
+  cwd?: string
+  challengeDescription?: string
+  challengeUrl?: string
+  sandboxImage?: string // Default: "ctf-sandbox"
+  model?: Model<any>
 }
 ```
 
@@ -108,8 +108,8 @@ export interface SolverOptions {
 ```typescript
 export class Solver extends FeaturedAgent {
   constructor(options: SolverOptions) {
-    const cwd = options.cwd ?? "/tmp/ctf-solver";
-    const sandboxImage = options.sandboxImage ?? "ctf-sandbox";
+    const cwd = options.cwd ?? "/tmp/ctf-solver"
+    const sandboxImage = options.sandboxImage ?? "ctf-sandbox"
 
     super({
       ...options,
@@ -129,11 +129,11 @@ export class Solver extends FeaturedAgent {
         model: options.model,
         systemPrompt: buildSolverSystemPrompt(options),
       },
-    });
+    })
   }
 
   async solve(challenge: string): Promise<void> {
-    return this.prompt(challenge);
+    return this.prompt(challenge)
   }
 }
 ```
@@ -185,10 +185,10 @@ The team manager agent. Extends `FeaturedAgent` with platform interaction tools 
 
 ```typescript
 export interface CoordinatorOptions {
-  cwd?: string;
-  ctfPlatformUrl?: string;
-  model?: Model<any>;
-  solvers?: Map<string, Solver>;
+  cwd?: string
+  ctfPlatformUrl?: string
+  model?: Model<any>
+  solvers?: Map<string, Solver>
 }
 ```
 
@@ -196,10 +196,10 @@ export interface CoordinatorOptions {
 
 ```typescript
 export class Coordinator extends FeaturedAgent {
-  private solvers: Map<string, Solver>;
+  private solvers: Map<string, Solver>
 
   constructor(options: CoordinatorOptions) {
-    const cwd = options.cwd ?? process.cwd();
+    const cwd = options.cwd ?? process.cwd()
 
     super({
       ...options,
@@ -216,9 +216,9 @@ export class Coordinator extends FeaturedAgent {
         model: options.model,
         systemPrompt: buildCoordinatorSystemPrompt(options),
       },
-    });
+    })
 
-    this.solvers = options.solvers ?? new Map();
+    this.solvers = options.solvers ?? new Map()
   }
 }
 ```
@@ -264,39 +264,39 @@ The Coordinator manages a pool of models provided by the user. Each model can ru
 
 ```typescript
 export interface ModelSlot {
-  model: string; // Provider/model-id, e.g. "anthropic/claude-sonnet-4-20250514"
-  status: "idle" | "busy";
-  solverId?: string; // Which solver is using this model (if busy)
+  model: string // Provider/model-id, e.g. "anthropic/claude-sonnet-4-20250514"
+  status: "idle" | "busy"
+  solverId?: string // Which solver is using this model (if busy)
 }
 
 export class ModelPool {
-  private slots: ModelSlot[];
+  private slots: ModelSlot[]
 
   constructor(models: string[]) {
-    this.slots = models.map((model) => ({ model, status: "idle" }));
+    this.slots = models.map((model) => ({ model, status: "idle" }))
   }
 
   /** Get the first idle model, or null if all busy */
   acquire(solverId: string): string | null {
-    const slot = this.slots.find((s) => s.status === "idle");
-    if (!slot) return null;
-    slot.status = "busy";
-    slot.solverId = solverId;
-    return slot.model;
+    const slot = this.slots.find((s) => s.status === "idle")
+    if (!slot) return null
+    slot.status = "busy"
+    slot.solverId = solverId
+    return slot.model
   }
 
   /** Release a model back to the pool */
   release(solverId: string): void {
-    const slot = this.slots.find((s) => s.solverId === solverId);
+    const slot = this.slots.find((s) => s.solverId === solverId)
     if (slot) {
-      slot.status = "idle";
-      slot.solverId = undefined;
+      slot.status = "idle"
+      slot.solverId = undefined
     }
   }
 
   /** How many models are available */
   get available(): number {
-    return this.slots.filter((s) => s.status === "idle").length;
+    return this.slots.filter((s) => s.status === "idle").length
   }
 }
 ```
@@ -353,28 +353,28 @@ Difficulty is scored 1-5:
 
 ```typescript
 function estimateDifficulty(challenge: Challenge): number {
-  let score = 3; // Default: medium
+  let score = 3 // Default: medium
 
   // Point value (most reliable signal)
   if (challenge.points) {
-    if (challenge.points <= 100) score = 1;
-    else if (challenge.points <= 200) score = 2;
-    else if (challenge.points <= 350) score = 3;
-    else if (challenge.points <= 450) score = 4;
-    else score = 5;
+    if (challenge.points <= 100) score = 1
+    else if (challenge.points <= 200) score = 2
+    else if (challenge.points <= 350) score = 3
+    else if (challenge.points <= 450) score = 4
+    else score = 5
   }
 
   // Description keywords
-  const desc = challenge.description.toLowerCase();
+  const desc = challenge.description.toLowerCase()
   if (desc.includes("easy") || desc.includes("beginner") || desc.includes("intro"))
-    score = Math.min(score, 2);
+    score = Math.min(score, 2)
   if (desc.includes("hard") || desc.includes("advanced") || desc.includes("expert"))
-    score = Math.max(score, 4);
+    score = Math.max(score, 4)
 
   // Category adjustment
-  if (challenge.category === "misc") score = Math.max(score, 2);
+  if (challenge.category === "misc") score = Math.max(score, 2)
 
-  return score;
+  return score
 }
 ```
 
@@ -383,30 +383,30 @@ function estimateDifficulty(challenge: Challenge): number {
 Challenges are sorted by difficulty ascending. Within the same difficulty, order is preserved from the platform.
 
 ```typescript
-challenges.sort((a, b) => a.difficulty - b.difficulty);
+challenges.sort((a, b) => a.difficulty - b.difficulty)
 ```
 
 #### Step 4: Assign with Model Pool
 
 ```typescript
 export class Coordinator extends FeaturedAgent {
-  private modelPool: ModelPool;
-  private challengeQueue: Challenge[] = [];
-  private solvers: Map<string, Solver> = new Map();
+  private modelPool: ModelPool
+  private challengeQueue: Challenge[] = []
+  private solvers: Map<string, Solver> = new Map()
 
   async assignChallenges(challenges: Challenge[]): Promise<void> {
     // Sort by difficulty
-    challenges.sort((a, b) => a.difficulty - b.difficulty);
+    challenges.sort((a, b) => a.difficulty - b.difficulty)
 
     for (const challenge of challenges) {
-      const model = this.modelPool.acquire(challenge.id);
+      const model = this.modelPool.acquire(challenge.id)
 
       if (model) {
         // Model available → start solver
-        await this.startSolver(challenge, model);
+        await this.startSolver(challenge, model)
       } else {
         // All models busy → queue
-        this.challengeQueue.push(challenge);
+        this.challengeQueue.push(challenge)
       }
     }
   }
@@ -416,33 +416,33 @@ export class Coordinator extends FeaturedAgent {
       cwd: path.join(MISUZU_WORKDIR, `/ctf-${challenge.id}`),
       model: getModel(model),
       challengeDescription: challenge.description,
-    });
+    })
 
-    this.solvers.set(challenge.id, solver);
+    this.solvers.set(challenge.id, solver)
 
     // Subscribe to solver events (flag detection only)
     solver.subscribe((event) => {
       if (event.type === "message_end" && event.message.role === "flagResult") {
-        this.handleFlag(challenge.id, event.message as FlagResultMessage);
+        this.handleFlag(challenge.id, event.message as FlagResultMessage)
       }
       if (event.type === "agent_end") {
-        this.onSolverFinished(challenge.id);
+        this.onSolverFinished(challenge.id)
       }
-    });
+    })
 
     // Start solving
-    await solver.prompt(formatChallenge(challenge));
+    await solver.prompt(formatChallenge(challenge))
   }
 
   private onSolverFinished(solverId: string): void {
     // Release model back to pool
-    this.modelPool.release(solverId);
+    this.modelPool.release(solverId)
 
     // Assign next queued challenge if available
     if (this.challengeQueue.length > 0 && this.modelPool.available > 0) {
-      const next = this.challengeQueue.shift()!;
-      const model = this.modelPool.acquire(next.id);
-      this.startSolver(next, model!);
+      const next = this.challengeQueue.shift()!
+      const model = this.modelPool.acquire(next.id)
+      this.startSolver(next, model!)
     }
   }
 }
@@ -475,27 +475,27 @@ const createSolverTool: AgentTool = {
     ),
   }),
   async execute(_toolCallId, params) {
-    const model = this.modelPool.acquire(params.challengeId);
+    const model = this.modelPool.acquire(params.challengeId)
     if (!model) {
       return {
         content: [{ type: "text", text: "No models available. Challenge queued." }],
         details: { queued: true },
-      };
+      }
     }
 
     const solver = await this.startSolver(
       { ...params, difficulty: params.difficulty ?? estimateDifficulty(params) },
       model,
-    );
+    )
 
     return {
       content: [
         { type: "text", text: `Solver started for "${params.challengeName}" on model ${model}` },
       ],
       details: { model, solverId: params.challengeId },
-    };
+    }
   },
-};
+}
 ```
 
 ### Typical Coordinator Session
@@ -539,7 +539,7 @@ Initiates a new solving task. The solver adds the message and runs its agent loo
 const solver = new Solver({
   challengeDescription: "RSA with small exponent",
   cwd: path.join(MISUZU_WORKDIR, "/challenge-xx"),
-});
+})
 
 // Start solving
 await solver.prompt(`
@@ -548,7 +548,7 @@ await solver.prompt(`
   Files: chal.py, output.txt
   
   Find the flag.
-`);
+`)
 ```
 
 #### Mid-Run Hints: `steer()`
@@ -557,7 +557,7 @@ Interrupts the solver while it's running. The hint is delivered after the curren
 
 ```typescript
 // Coordinator detects solver is stuck in a loop
-solver.steer("New hint published: it might be very small (e=3). Use Hastad's broadcast attack.");
+solver.steer("New hint published: it might be very small (e=3). Use Hastad's broadcast attack.")
 ```
 
 **When `steer` is delivered:**
@@ -577,7 +577,7 @@ Queues a message for after the solver finishes its current work naturally:
 // After solver finds a partial result
 solver.followUp(
   "Now try the second part of the challenge - the decoded string looks like it needs base64 decoding.",
-);
+)
 ```
 
 **When `followUp` is delivered:**
@@ -594,7 +594,7 @@ Immediately cancels the solver's current operation:
 ```typescript
 // Flag was correct, stop all solvers
 for (const [id, solver] of this.solvers) {
-  solver.abort();
+  solver.abort()
 }
 ```
 
@@ -607,12 +607,12 @@ The Coordinator subscribes to each solver for flag results and completion events
 ```typescript
 solver.subscribe((event) => {
   if (event.type === "message_end" && event.message.role === "flagResult") {
-    this.handleFlag(challengeId, event.message as FlagResultMessage);
+    this.handleFlag(challengeId, event.message as FlagResultMessage)
   }
   if (event.type === "agent_end") {
-    this.onSolverFinished(challengeId);
+    this.onSolverFinished(challengeId)
   }
-});
+})
 ```
 
 #### Custom Messages
@@ -628,7 +628,7 @@ solver.appendMessage({
   correct: true, // Updated after Coordinator submits
   message: "Found via Hastad's broadcast attack",
   timestamp: Date.now(),
-});
+})
 ```
 
 The Coordinator only processes `FlagResultMessage` and `agent_end` events from solvers. All other solver activity is internal to the solver.
@@ -804,7 +804,7 @@ window: [
   { fp: "bash:python3 exploit_*.py", isError: true },
   { fp: "bash:python3 exploit_*.py", isError: true },
   { fp: "bash:python3 exploit_*.py", isError: true },
-];
+]
 
 // "bash:python3 exploit_*.py" appears 5 times, ALL errors → trigger
 ```
@@ -820,7 +820,7 @@ window: [
   { fp: "read:py", isError: false },
   { fp: "edit:py", isError: false },
   { fp: "bash:python3 exploit_*.py", isError: false }, // ← succeeds
-];
+]
 // Only 2 failures out of 3 occurrences → no trigger
 ```
 
@@ -875,51 +875,51 @@ Why this threshold:
 ```typescript
 class StuckDetector {
   // Signal 1: Failed command repetition
-  private window: Array<{ fp: string; isError: boolean }> = [];
-  private readonly WINDOW_SIZE = 8;
-  private readonly FP_THRESHOLD = 4;
+  private window: Array<{ fp: string; isError: boolean }> = []
+  private readonly WINDOW_SIZE = 8
+  private readonly FP_THRESHOLD = 4
 
   // Signal 2: Consecutive failure on target
-  private failureStreaks: Map<string, number> = new Map();
-  private readonly STREAK_THRESHOLD = 3;
+  private failureStreaks: Map<string, number> = new Map()
+  private readonly STREAK_THRESHOLD = 3
 
   // Cooldown
-  private lastSignalTime = 0;
-  private readonly COOLDOWN_MS = 30_000;
+  private lastSignalTime = 0
+  private readonly COOLDOWN_MS = 30_000
 
   check(toolName: string, args: Record<string, unknown>, isError: boolean): boolean {
-    if (!this.cooldownOk()) return false;
+    if (!this.cooldownOk()) return false
 
-    const fp = computeFingerprint(toolName, args);
-    const target = getTarget(toolName, args);
+    const fp = computeFingerprint(toolName, args)
+    const target = getTarget(toolName, args)
 
     // Maintain sliding window
-    this.window.push({ fp, isError });
-    if (this.window.length > this.WINDOW_SIZE) this.window.shift();
+    this.window.push({ fp, isError })
+    if (this.window.length > this.WINDOW_SIZE) this.window.shift()
 
     // Signal 1: Same fingerprint, all failures in window
-    const matching = this.window.filter((e) => e.fp === fp);
+    const matching = this.window.filter((e) => e.fp === fp)
     if (matching.length >= this.FP_THRESHOLD && matching.every((e) => e.isError)) {
-      return true;
+      return true
     }
 
     // Signal 2: Consecutive failure streak on target
     if (isError) {
-      const streak = (this.failureStreaks.get(target) ?? 0) + 1;
-      this.failureStreaks.set(target, streak);
-      if (streak >= this.STREAK_THRESHOLD) return true;
+      const streak = (this.failureStreaks.get(target) ?? 0) + 1
+      this.failureStreaks.set(target, streak)
+      if (streak >= this.STREAK_THRESHOLD) return true
     } else {
-      this.failureStreaks.delete(target);
+      this.failureStreaks.delete(target)
     }
 
-    return false;
+    return false
   }
 
   private cooldownOk(): boolean {
-    const now = Date.now();
-    if (now - this.lastSignalTime < this.COOLDOWN_MS) return false;
-    this.lastSignalTime = now;
-    return true;
+    const now = Date.now()
+    if (now - this.lastSignalTime < this.COOLDOWN_MS) return false
+    this.lastSignalTime = now
+    return true
   }
 }
 ```
@@ -1028,18 +1028,18 @@ System prompt construction is modular. The base prompt is concatenated with the 
 
 ```typescript
 function buildSystemPrompt(options: BuildSystemPromptOptions): string {
-  let prompt = options.customPrompt ?? defaultPrompt;
+  let prompt = options.customPrompt ?? defaultPrompt
 
   // Append skill catalog (protected from compaction)
   if (options.skills.length > 0) {
-    prompt += formatSkillsForPrompt(options.skills);
+    prompt += formatSkillsForPrompt(options.skills)
   }
 
   // Append date and working directory
-  prompt += `\nCurrent date: ${new Date().toISOString().slice(0, 10)}`;
-  prompt += `\nCurrent working directory: ${cwd}`;
+  prompt += `\nCurrent date: ${new Date().toISOString().slice(0, 10)}`
+  prompt += `\nCurrent working directory: ${cwd}`
 
-  return prompt;
+  return prompt
 }
 ```
 
