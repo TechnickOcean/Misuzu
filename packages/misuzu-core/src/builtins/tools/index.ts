@@ -1,10 +1,10 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { bashTool } from "./base/bash.js";
-import { readTool } from "./base/read.js";
-import { writeTool } from "./base/write.js";
-import { editTool } from "./base/edit.js";
-import { findTool } from "./base/find.js";
-import { grepTool } from "./base/grep.js";
+import { bashTool, createBashTool } from "./base/bash.js";
+import { readTool, createReadTool } from "./base/read.js";
+import { writeTool, createWriteTool } from "./base/write.js";
+import { editTool, createEditTool } from "./base/edit.js";
+import { findTool, createFindTool } from "./base/find.js";
+import { grepTool, createGrepTool } from "./base/grep.js";
 
 export {
   type BashOperations,
@@ -58,3 +58,20 @@ export const baseTools: AgentTool<any>[] = [
 
 /** Read-only tools for monitoring agents. Uses process.cwd(). */
 export const readOnlyTools: AgentTool<any>[] = [readTool, grepTool, findTool];
+
+/** Create base tools scoped to a specific working directory. */
+export function createBaseTools(cwd: string): AgentTool<any>[] {
+  return [
+    createReadTool(cwd),
+    createBashTool(cwd),
+    createEditTool(cwd),
+    createWriteTool(cwd),
+    createFindTool(cwd),
+    createGrepTool(cwd),
+  ];
+}
+
+/** Create read-only tools scoped to a specific working directory. */
+export function createReadOnlyTools(cwd: string): AgentTool<any>[] {
+  return [createReadTool(cwd), createGrepTool(cwd), createFindTool(cwd)];
+}
