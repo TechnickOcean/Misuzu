@@ -27,6 +27,7 @@ export class Solver extends FeaturedAgent {
       cwd,
       tools,
       initialState: {
+        ...options.initialState,
         model: options.model,
         systemPrompt,
       },

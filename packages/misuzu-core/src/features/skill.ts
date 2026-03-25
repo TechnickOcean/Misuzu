@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
-import { join, resolve, basename } from "node:path";
+import { join, resolve, basename, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
 /**
@@ -130,4 +131,48 @@ export function buildSkillsCatalog(skills: Skill[]): string {
 
   lines.push("</available_skills>");
   return lines.join("\n");
+}
+
+/** Synchronously load skills from a directory (no async needed since all fs ops are sync). */
+export function importSkillsFromDirectorySync(dir: string): Skill[] {
+  const resolvedDir = resolve(dir);
+  if (!existsSync(resolvedDir)) return [];
+
+  // If root dir has SKILL.md, treat as single skill
+  const rootSkill = join(resolvedDir, "SKILL.md");
+  if (existsSync(rootSkill)) {
+    const skill = loadSkill(rootSkill);
+    return skill ? [skill] : [];
+  }
+
+  // Recurse into subdirectories
+  const skills: Skill[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of readdirSync(resolvedDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name === "node_modules")
+      continue;
+    const skillFile = join(resolvedDir, entry.name, "SKILL.md");
+    if (!existsSync(skillFile)) continue;
+    try {
+      const realPath = statSync(skillFile).isSymbolicLink()
+        ? require("node:fs").realpathSync(skillFile)
+        : skillFile;
+      if (seen.has(realPath)) continue;
+      seen.add(realPath);
+    } catch {
+      continue;
+    }
+    const skill = loadSkill(skillFile);
+    if (skill) skills.push(skill);
+  }
+
+  return skills;
+}
+
+/** Load built-in skills from the package's builtins/skills directory. */
+export function loadBuiltinSkills(): Skill[] {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const skillsDir = join(here, "..", "builtins", "skills");
+  return importSkillsFromDirectorySync(skillsDir);
 }

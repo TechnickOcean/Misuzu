@@ -7,6 +7,7 @@ import { createReadOnlyTools } from "../builtins/tools/index.ts";
 import { bashTool } from "../builtins/tools/base/bash.ts";
 import { requestrepoTools } from "../builtins/tools/misuzu/requestrepo.ts";
 import type { FlagResultMessage } from "../features/messages.ts";
+import { loadBuiltinSkills, type Skill } from "../features/skill.ts";
 
 export interface ModelSlot {
   model: string;
@@ -79,6 +80,7 @@ export class Coordinator extends FeaturedAgent {
   constructor(options: CoordinatorOptions & FeaturedAgentOptions = {}) {
     const cwd = options.cwd ?? process.cwd();
     const modelPool = options.modelPool ?? new ModelPool(options.models ?? []);
+    const skills: Skill[] = [...(options.skills ?? []), ...loadBuiltinSkills()];
 
     const tools = [...createReadOnlyTools(cwd), bashTool, ...requestrepoTools];
 
@@ -87,8 +89,10 @@ export class Coordinator extends FeaturedAgent {
     super({
       ...options,
       cwd,
+      skills,
       tools,
       initialState: {
+        ...options.initialState,
         model: options.model,
         systemPrompt,
       },
@@ -199,7 +203,7 @@ function buildCoordinatorSystemPrompt(_options: CoordinatorOptions): string {
   return `You are a CTF team coordinator. Your job is to:
 
 1. Navigate to the CTF platform and fetch all challenges
-   with their titles, descriptions, attachments, categories and so on
+   with their titles, descriptions, attachments, categories, remote environment URLs and so on
 2. Estimate difficulty and sort challenges (easiest first)
 3. Assign Solver agents to challenges using create_solver
    - Each solver needs one model from the pool
@@ -213,5 +217,5 @@ Workflow:
 - Call create_solver for each challenge (easiest first)
 - The system handles model allocation and queuing automatically
 - Use bash to submit flags when solvers report them
-- Do NOT monitor solver internals. Solvers are autonomous.`;
+- Remote environment may have quantitative limits, do not try to launch a wnv again when being informed reached the limit.`;
 }
