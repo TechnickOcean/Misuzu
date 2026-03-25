@@ -1,10 +1,10 @@
 import { createInterface } from "node:readline";
 import { type KnownProvider, getModels } from "@mariozechner/pi-ai";
 import type { Model } from "@mariozechner/pi-ai";
-import { Solver } from "misuzu-core";
+import { Coordinator } from "misuzu-core";
 
 const args = process.argv.slice(2);
-const rawModel = args[0] ?? "openrouter/anthropic/claude-sonnet-4";
+const rawModel = args[0] ?? "openrouter/stepfun/step-3.5-flash:free";
 const [provider, ...modelParts] = rawModel.split("/");
 const modelId = modelParts.join("/");
 const typedProvider = provider as KnownProvider;
@@ -19,20 +19,34 @@ function loadModel(): Model<any> {
 }
 
 console.log(`misuzu-cli — model: ${rawModel}`);
-console.log("Type a prompt to chat. Commands: /history, /clear, /info, /quit\n");
+console.log("Type a prompt to chat. Commands: /history, /clear, /info, /solvers, /quit\n");
 
-let solver = new Solver({ model: loadModel(), cwd: process.cwd() });
-watchSolver(solver);
+let coordinator = createCoordinator();
 
-function watchSolver(s: Solver) {
-  s.subscribe((event) => {
+function createCoordinator(): Coordinator {
+  const c = new Coordinator({ model: loadModel(), cwd: process.cwd() });
+  // Add create_solver tool so coordinator can spawn solvers
+  c.setTools([...c.state.tools, c.getCreateSolverTool()]);
+  watchAgent(c);
+  return c;
+}
+
+function watchAgent(c: Coordinator) {
+  c.subscribe((event) => {
+    console.log(event);
     switch (event.type) {
       case "tool_execution_start":
         printGray(`  ⚙ ${event.toolName}(${truncate(JSON.stringify(event.args), 120)})`);
         break;
+
       case "tool_execution_end":
-        printGray(`  ✓ ${event.toolName} done`);
+        if (event.isError) {
+          printRed(`  ✗ ${event.toolName} failed: ${truncate(String(event.result), 200)}`);
+        } else {
+          printGray(`  ✓ ${event.toolName} done`);
+        }
         break;
+
       case "message_end": {
         const msg = event.message;
         if (msg.role === "assistant") {
@@ -42,8 +56,15 @@ function watchSolver(s: Solver) {
             }
           }
         }
+        if (msg.role === "flagResult") {
+          printGreen(`  🚩 Flag: ${(msg as any).flag}`);
+        }
         break;
       }
+
+      case "agent_end":
+        printGray("  Agent finished.");
+        break;
     }
   });
 }
@@ -65,7 +86,7 @@ rl.on("line", async (line) => {
   }
 
   try {
-    await solver.prompt(input);
+    await coordinator.prompt(input);
   } catch (e) {
     printRed(`Error: ${String(e)}`);
   }
@@ -83,14 +104,13 @@ function handleCommand(input: string) {
   if (cmd === "/quit" || cmd === "/q") process.exit(0);
 
   if (cmd === "/clear") {
-    solver = new Solver({ model: loadModel(), cwd: process.cwd() });
-    watchSolver(solver);
+    coordinator = createCoordinator();
     console.log("Context cleared.");
     return;
   }
 
   if (cmd === "/history" || cmd === "/h") {
-    const msgs = solver.state.messages;
+    const msgs = coordinator.state.messages;
     console.log(`\n${msgs.length} messages in context:\n`);
     for (const m of msgs) {
       if (m.role === "user") {
@@ -111,16 +131,34 @@ function handleCommand(input: string) {
     return;
   }
 
+  if (cmd === "/solvers") {
+    const solvers = coordinator.solvers;
+    const queue = coordinator.challengeQueue;
+    console.log(`\n  Active solvers: ${solvers.size}`);
+    for (const [id, s] of solvers) {
+      console.log(
+        `    ${id}: ${s.state.messages.length} messages, streaming=${s.state.isStreaming}`,
+      );
+    }
+    console.log(`  Queued challenges: ${queue.length}`);
+    for (const c of queue) {
+      console.log(`    ${c.challengeId}: ${c.challengeName}`);
+    }
+    console.log();
+    return;
+  }
+
   if (cmd === "/info") {
-    const s = solver.state;
+    const s = coordinator.state;
     console.log(`  Messages: ${s.messages.length}`);
     console.log(`  Streaming: ${s.isStreaming}`);
     console.log(`  Model: ${rawModel}`);
     console.log(`  Tools: ${s.tools.map((t) => t.name).join(", ")}`);
+    console.log(`  Pool available: ${coordinator.modelPool.available}`);
     return;
   }
 
-  console.log("Commands: /history, /clear, /info, /quit");
+  console.log("Commands: /history, /clear, /info, /solvers, /quit");
 }
 
 function truncate(s: string, max: number): string {
@@ -132,4 +170,7 @@ function printGray(s: string) {
 }
 function printRed(s: string) {
   console.log(`\x1b[31m${s}\x1b[0m`);
+}
+function printGreen(s: string) {
+  console.log(`\x1b[32m${s}\x1b[0m`);
 }
