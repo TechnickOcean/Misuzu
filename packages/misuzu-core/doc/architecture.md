@@ -147,8 +147,7 @@ packages/misuzu-core/src/
 ├── features/
 │   ├── compaction.ts                 # Context compaction (pure functions)
 │   ├── skill.ts                      # Skill loading and catalog building
-│   ├── messages.ts                   # Custom message types & convertToLlm
-│   └── persistence.ts               # Session save/load, competition directory
+│   └── messages.ts                   # Custom message types & convertToLlm
 ├── builtins/
 │   ├── tools/
 │   │   ├── index.ts                  # Tool barrel exports & collections
@@ -161,11 +160,7 @@ packages/misuzu-core/src/
 │   │   │   └── grep.ts               # Content search
 │   │   ├── misuzu/
 │   │   │   ├── docker.ts             # Docker container management
-│   │   │   ├── requestrepo.ts        # requestrepo.com OOB testing
-│   │   │   └── sandbox/
-│   │   │       ├── sandbox.ts        # Sandbox container interaction
-│   │   │       ├── Dockerfile.sandbox # CTF sandbox image definition
-│   │   │       └── sandboxtools.txt  # Installed tools reference
+│   │   │   └── requestrepo.ts        # requestrepo.com OOB testing
 │   │   └── utils/
 │   │       ├── truncate.ts           # Output truncation (head/tail)
 │   │       ├── file-mutation-queue.ts # Serialized file edits
