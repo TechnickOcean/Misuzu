@@ -49,6 +49,12 @@ export class FeaturedAgent {
         return _messages;
       },
     });
+
+    const state = this.agent.state;
+    console.log(
+      `\x1b[36m[FeaturedAgent]\x1b[0m model=${state.model.id} tools=${state.tools.map((t) => t.name).join(",")}`,
+    );
+    console.log(`\x1b[36m[system prompt]\x1b[0m\n${state.systemPrompt}\n`);
   }
 
   get state(): AgentState {
