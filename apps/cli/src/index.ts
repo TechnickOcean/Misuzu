@@ -25,26 +25,50 @@ console.log("Type a prompt to chat. Commands: /history, /clear, /info, /solvers,
 
 let coordinator = createCoordinator()
 
+// Streaming state
+let streamingActive = false
+let thinkingActive = false
+
 function createCoordinator(): Coordinator {
   const c = new Coordinator({
     model: loadModel(),
     cwd: process.cwd(),
   })
   c.state.thinkingLevel = "medium"
-  // Add create_solver tool so coordinator can spawn solvers
   c.setTools([...c.state.tools, c.getCreateSolverTool()])
   watchAgent(c)
   return c
 }
 
+function showThinking() {
+  if (!thinkingActive) {
+    thinkingActive = true
+    process.stdout.write("\x1b[90m  thinking...\x1b[0m")
+  }
+}
+
+function clearThinking() {
+  if (thinkingActive) {
+    thinkingActive = false
+    process.stdout.write("\r\x1b[K")
+  }
+}
+
 function watchAgent(c: Coordinator) {
   c.subscribe((event) => {
     switch (event.type) {
+      case "turn_start":
+        showThinking()
+        break
+
       case "tool_execution_start":
+        clearThinking()
         printGray(`  ⚙ ${event.toolName}(${truncate(JSON.stringify(event.args), 120)})`)
+        showThinking()
         break
 
       case "tool_execution_end":
+        clearThinking()
         if (event.isError) {
           const result = event.result as { content?: { type: string; text: string }[] }
           const text = result.content?.[0]?.text ?? JSON.stringify(result)
@@ -54,13 +78,31 @@ function watchAgent(c: Coordinator) {
         }
         break
 
+      case "message_update": {
+        const ae = event.assistantMessageEvent
+        if (ae.type === "text_delta") {
+          clearThinking()
+          streamingActive = true
+          process.stdout.write(ae.delta)
+        }
+        break
+      }
+
       case "message_end": {
         const msg = event.message
         if (msg.role === "assistant") {
-          for (const c of msg.content) {
-            if (c.type === "text" && c.text.trim()) {
-              console.log(c.text)
+          clearThinking()
+          // If no streaming happened (no text_delta events), print full text now
+          if (!streamingActive) {
+            for (const c of msg.content) {
+              if (c.type === "text" && c.text.trim()) {
+                console.log(c.text)
+              }
             }
+          } else {
+            // Streaming already showed text, just add newline if needed
+            streamingActive = false
+            process.stdout.write("\n")
           }
         }
         if (msg.role === "flagResult") {
@@ -70,7 +112,7 @@ function watchAgent(c: Coordinator) {
       }
 
       case "agent_end":
-        printGray("  Agent finished.")
+        clearThinking()
         break
     }
   })
@@ -163,10 +205,6 @@ function handleCommand(input: string) {
     console.log(`  ThinkingLevel: ${s.thinkingLevel}`)
     console.log(`  Tools: ${s.tools.map((t) => t.name).join(", ")}`)
     console.log(`  Pool available: ${coordinator.modelPool.available}`)
-    console.log(
-      `\x1b[36m[FeaturedAgent]\x1b[0m model=${s.model.id} tools=${s.tools.map((t) => t.name).join(",")}`,
-    )
-    console.log(`\x1b[36m[system prompt]\x1b[0m\n${s.systemPrompt}\n`)
     return
   }
 
