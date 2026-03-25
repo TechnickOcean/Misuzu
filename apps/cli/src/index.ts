@@ -35,7 +35,7 @@ function createCoordinator(): Coordinator {
     cwd: process.cwd(),
   })
   c.state.thinkingLevel = "medium"
-  c.setTools([...c.state.tools, c.getCreateSolverTool()])
+  c.setTools([...c.state.tools, c.getCreateSolverTool() as any])
   watchAgent(c)
   return c
 }
@@ -134,12 +134,7 @@ rl.on("line", async (line) => {
     return
   }
 
-  try {
-    await coordinator.prompt(input)
-  } catch (e) {
-    printRed(`Error: ${String(e)}`)
-  }
-
+  await runWithRetry(input)
   rl.prompt()
 })
 
@@ -147,6 +142,36 @@ rl.on("close", () => {
   console.log("\nBye!")
   process.exit(0)
 })
+
+function getLastStopReason(): string | undefined {
+  const msgs = coordinator.state.messages
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === "assistant") {
+      return (msgs[i] as any).stopReason as string | undefined
+    }
+  }
+  return undefined
+}
+
+async function runWithRetry(input: string) {
+  try {
+    await coordinator.prompt(input)
+  } catch (e) {
+    printRed(`Error: ${String(e)}`)
+    return
+  }
+
+  const stopReason = getLastStopReason()
+
+  if (stopReason === "error") {
+    printGray("  [retrying after error...]")
+    try {
+      await coordinator.continue()
+    } catch (e) {
+      printRed(`Retry failed: ${String(e)}`)
+    }
+  }
+}
 
 function handleCommand(input: string) {
   const cmd = input.toLowerCase()
@@ -205,6 +230,7 @@ function handleCommand(input: string) {
     console.log(`  ThinkingLevel: ${s.thinkingLevel}`)
     console.log(`  Tools: ${s.tools.map((t) => t.name).join(", ")}`)
     console.log(`  Pool available: ${coordinator.modelPool.available}`)
+    console.log(`  Prompt: ${s.systemPrompt}`)
     return
   }
 

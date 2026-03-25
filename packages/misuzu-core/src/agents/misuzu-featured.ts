@@ -54,47 +54,59 @@ export class FeaturedAgent {
     })
   }
 
-  get state(): AgentState {
+  get state() {
     return this.agent.state
   }
 
-  get innerAgent(): Agent {
+  get innerAgent() {
     return this.agent
   }
 
-  subscribe(fn: (e: AgentEvent) => void): () => void {
+  subscribe(fn: (e: AgentEvent) => void) {
     return this.agent.subscribe(fn)
   }
 
-  async prompt(...args: Parameters<Agent["prompt"]>): Promise<void> {
+  async prompt(...args: Parameters<Agent["prompt"]>) {
     return this.agent.prompt(...args)
   }
 
-  abort(): void {
+  abort() {
     this.agent.abort()
   }
 
-  async waitForIdle(): Promise<void> {
+  async waitForIdle() {
     return this.agent.waitForIdle()
   }
 
-  setTools(tools: AgentTool<any>[]): void {
+  setTools(tools: AgentTool<any>[]) {
     this.agent.setTools(tools)
   }
 
-  setSystemPrompt(prompt: string): void {
+  setSystemPrompt(prompt: string) {
     this.agent.setSystemPrompt(prompt)
   }
 
-  setModel(model: Model<any>): void {
+  setModel(model: Model<any>) {
     this.agent.setModel(model)
   }
 
-  replaceMessages(messages: AgentMessage[]): void {
+  replaceMessages(messages: AgentMessage[]) {
     this.agent.replaceMessages(messages)
   }
 
-  appendMessage(message: AgentMessage): void {
+  appendMessage(message: AgentMessage) {
     this.agent.appendMessage(message)
+  }
+
+  continue() {
+    return this.agent.continue()
+  }
+
+  steer(message: string) {
+    this.agent.steer({ role: "user", content: message, timestamp: Date.now() } as AgentMessage)
+  }
+
+  followUp(message: string) {
+    this.agent.followUp({ role: "user", content: message, timestamp: Date.now() } as AgentMessage)
   }
 }
