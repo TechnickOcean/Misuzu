@@ -46,7 +46,9 @@ function watchAgent(c: Coordinator) {
 
       case "tool_execution_end":
         if (event.isError) {
-          printRed(`  ✗ ${event.toolName} failed: ${truncate(String(event.result), 200)}`)
+          const result = event.result as { content?: { type: string; text: string }[] }
+          const text = result.content?.[0]?.text ?? JSON.stringify(result)
+          printRed(`  ✗ ${event.toolName} failed: ${truncate(text, 200)}`)
         } else {
           printGray(`  ✓ ${event.toolName} done`)
         }
@@ -68,7 +70,6 @@ function watchAgent(c: Coordinator) {
       }
 
       case "agent_end":
-        console.log(event)
         printGray("  Agent finished.")
         break
     }
