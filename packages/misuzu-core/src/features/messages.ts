@@ -4,19 +4,10 @@ import type { Message } from "@mariozechner/pi-ai"
 // Custom message types for CTF operations
 declare module "@mariozechner/pi-agent-core" {
   interface CustomAgentMessages {
-    sandboxExecution: SandboxExecutionMessage
     flagResult: FlagResultMessage
     challengeUpdate: ChallengeUpdateMessage
     compactionSummary: CompactionSummaryMessage
   }
-}
-
-export interface SandboxExecutionMessage {
-  role: "sandboxExecution"
-  command: string
-  output: string
-  exitCode: number | null
-  timestamp: number
 }
 
 export interface FlagResultMessage {
@@ -44,7 +35,6 @@ export interface CompactionSummaryMessage {
 }
 
 export type CustomAgentMessage =
-  | SandboxExecutionMessage
   | FlagResultMessage
   | ChallengeUpdateMessage
   | CompactionSummaryMessage
@@ -53,14 +43,6 @@ export type CustomAgentMessage =
 export function convertToLlm(messages: AgentMessage[]): Message[] {
   return messages.flatMap((m): Message[] => {
     switch (m.role) {
-      case "sandboxExecution":
-        return [
-          {
-            role: "user" as const,
-            content: `Sandbox ran: ${m.command}\n\`\`\`\n${m.output}\n\`\`\``,
-            timestamp: m.timestamp,
-          },
-        ]
       case "flagResult":
         return [
           {

@@ -9,7 +9,7 @@ import type { Model } from "@mariozechner/pi-ai"
 import { type Skill, buildSkillsCatalog } from "../features/skill.ts"
 import { convertToLlm } from "../features/messages.ts"
 import { checkCompact, compact } from "../features/compaction.ts"
-import { baseTools } from "../builtins/tools/index.ts"
+import { baseTools } from "../tools/index.ts"
 
 export interface FeaturedAgentOptions {
   initialState?: Partial<AgentState>

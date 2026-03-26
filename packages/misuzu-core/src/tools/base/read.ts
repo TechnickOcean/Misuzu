@@ -41,7 +41,7 @@ export function createReadTool(
       "Read the contents of a file. Use offset and limit to read specific line ranges. " +
       "Lines are 1-indexed. Use offset=N to skip to line N.",
     parameters: readSchema,
-    async execute(toolCallId, params: ReadToolInput) {
+    async execute(_toolCallId, params: ReadToolInput) {
       const absolutePath = resolveReadPath(params.path, cwd)
 
       try {

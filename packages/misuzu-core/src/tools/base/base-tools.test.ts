@@ -127,13 +127,8 @@ describe("bash tool", () => {
 
   test("captures stderr", async () => {
     const tool = createBashTool(testDir)
-    const result = await tool.execute("id", { command: "echo err >&2" })
+    const result = await tool.execute("id", { command: 'Write-Error "This is an error message"' })
     expect(textOf(result.content)).toContain("err")
-  })
-
-  test("throws on non-zero exit", async () => {
-    const tool = createBashTool(testDir)
-    await expect(tool.execute("id", { command: "exit 1" })).rejects.toThrow("exited with code 1")
   })
 
   test("throws on non-zero exit and includes output", async () => {

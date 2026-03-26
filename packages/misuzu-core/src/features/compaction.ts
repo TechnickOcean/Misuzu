@@ -131,9 +131,7 @@ function serializeForSummary(messages: AgentMessage[]): string {
         break
       }
       default:
-        if ("command" in msg && "output" in msg) {
-          parts.push(`[Sandbox]: ${msg.command}\n${String(msg.output).slice(0, 2000)}`)
-        } else if ("summary" in msg) {
+        if ("summary" in msg) {
           parts.push(`[Previous summary]: ${String(msg.summary).slice(0, 2000)}`)
         } else if ("flag" in msg) {
           parts.push(`[Flag]: ${msg.flag} - ${msg.message}`)
@@ -164,11 +162,8 @@ Or "(none)"
 ### Blocked
 - [Issues preventing progress]
 
-## Key Decisions
-- **[Decision]**: [Rationale]
-
-## Next Steps
-1. [What should happen next]
+## Key Findings
+- **[Finding]**: [Description]
 
 ## Critical Context
 - [Data, paths, references needed to continue]`

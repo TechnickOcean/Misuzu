@@ -52,7 +52,7 @@ export function createBashTool(
     label: "shell",
     description: `Execute a ${isWindows ? "powershell" : "bash"} command.`,
     parameters: bashSchema,
-    async execute(toolCallId, params: BashToolInput, signal?: AbortSignal) {
+    async execute(_toolCallId, params: BashToolInput, signal?: AbortSignal) {
       let output = ""
       let fullOutputPath: string | undefined
       let stream: ReturnType<typeof createWriteStream> | undefined
@@ -91,7 +91,7 @@ export function createBashTool(
       const details: BashToolDetails = { exitCode, truncation, fullOutputPath }
 
       if (exitCode !== 0) {
-        throw new Error(`Command exited with code ${exitCode}.\nOutput:\n${text}`)
+        text += `Command exited with code ${exitCode}.\nOutput:\n${text}`
       }
 
       return {

@@ -83,9 +83,6 @@ export function estimateTokens(message: AgentMessage): number {
     case "toolResult": {
       // Content text chars / 4, images counted as 4800 chars
     }
-    case "sandboxExecution": {
-      // (command + output).length / 4
-    }
     case "compactionSummary": {
       // summary.length / 4
     }
@@ -170,7 +167,6 @@ These are merged into a single summary.
 | `user`              | Yes              | Starts a new turn                 |
 | `assistant`         | Yes              | Ends a turn (tool results follow) |
 | `toolResult`        | No               | Must stay with its tool call      |
-| `sandboxExecution`  | Yes              | Treated like a user message       |
 | `custom`            | Yes              | Treated like a user message       |
 | `compactionSummary` | Yes              | Previous compaction result        |
 
@@ -258,7 +254,6 @@ Misuzu defines custom message types for CTF operations via declaration merging:
 ```typescript
 declare module "@mariozechner/pi-agent-core" {
   interface CustomAgentMessages {
-    sandboxExecution: SandboxExecutionMessage
     challengeUpdate: ChallengeUpdateMessage
     flagResult: FlagResultMessage
   }
@@ -271,14 +266,6 @@ These are converted to `user` messages by `convertToLlm` before the LLM call:
 export function convertToLlm(messages: AgentMessage[]): Message[] {
   return messages.flatMap((m) => {
     switch (m.role) {
-      case "sandboxExecution":
-        return [
-          {
-            role: "user",
-            content: `Sandbox ran: ${m.command}\n\`\`\`\n${m.output}\n\`\`\``,
-            timestamp: m.timestamp,
-          },
-        ]
       case "challengeUpdate":
         return [
           {
@@ -313,10 +300,6 @@ Custom messages that should not appear in LLM context (e.g., UI-only messages) r
 During compaction, custom messages are included in the messages-to-summarize. The `convertToLlm` function converts them to user messages before the summarization LLM call. The `estimateTokens` function handles custom message types:
 
 ```typescript
-case "sandboxExecution":
-  chars = message.command.length + message.output.length;
-  return Math.ceil(chars / 4);
-
 case "challengeUpdate":
 case "flagResult":
   chars = message.details.length;

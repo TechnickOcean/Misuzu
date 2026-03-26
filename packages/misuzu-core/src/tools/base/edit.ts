@@ -45,7 +45,7 @@ export function createEditTool(
       "Replace exact text in a file. oldText must match exactly (whitespace matters). " +
       "Use for surgical edits. Use write for overwriting entire files.",
     parameters: editSchema,
-    async execute(toolCallId, params: EditToolInput) {
+    async execute(_toolCallId, params: EditToolInput) {
       const absolutePath = resolveToCwd(params.path, cwd)
 
       try {

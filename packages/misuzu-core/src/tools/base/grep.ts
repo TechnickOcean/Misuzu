@@ -47,7 +47,7 @@ export function createGrepTool(cwd: string): AgentTool<typeof grepSchema> {
       "Search file contents with regex or literal matching. " +
       "Returns matching lines with file paths and line numbers.",
     parameters: grepSchema,
-    async execute(toolCallId, params: GrepToolInput) {
+    async execute(_toolCallId, params: GrepToolInput) {
       const searchPath = params.path ? resolve(cwd, params.path) : cwd
       const limit = params.limit ?? 100
 

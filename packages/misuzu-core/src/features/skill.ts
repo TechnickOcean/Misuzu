@@ -1,6 +1,5 @@
 import { readdirSync, readFileSync, statSync, existsSync, realpathSync } from "node:fs"
-import { join, resolve, basename, dirname } from "node:path"
-import { fileURLToPath } from "node:url"
+import { join, resolve, basename } from "node:path"
 import { parse as parseYaml } from "yaml"
 
 /**
@@ -170,7 +169,7 @@ export function importSkillsFromDirectorySync(dir: string): Skill[] {
 
 /** Load built-in skills from the package's builtins/skills directory. */
 export function loadBuiltinSkills(): Skill[] {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const skillsDir = join(here, "..", "builtins", "skills")
+  const skillsDir = "E:/dev/my-projects/Misuzu/.misuzu/skills/playwright-cli"
+  //TODO: 我说先写死你二龙吗
   return importSkillsFromDirectorySync(skillsDir)
 }

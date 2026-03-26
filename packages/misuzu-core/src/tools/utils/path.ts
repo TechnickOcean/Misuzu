@@ -4,20 +4,20 @@ import { isAbsolute, resolve as resolvePath } from "node:path"
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g
 const NARROW_NO_BREAK_SPACE = "\u202F"
-function normalizeUnicodeSpaces(str: string): string {
+function normalizeUnicodeSpaces(str: string) {
   return str.replace(UNICODE_SPACES, " ")
 }
 
-function tryMacOSScreenshotPath(filePath: string): string {
+function tryMacOSScreenshotPath(filePath: string) {
   return filePath.replace(/ (AM|PM)\./g, `${NARROW_NO_BREAK_SPACE}$1.`)
 }
 
-function tryNFDVariant(filePath: string): string {
+function tryNFDVariant(filePath: string) {
   // macOS stores filenames in NFD (decomposed) form, try converting user input to NFD
   return filePath.normalize("NFD")
 }
 
-function tryCurlyQuoteVariant(filePath: string): string {
+function tryCurlyQuoteVariant(filePath: string) {
   // macOS uses U+2019 (right single quotation mark) in screenshot names like "Capture d'écran"
   // Users typically type U+0027 (straight apostrophe)
   return filePath.replace(/'/g, "\u2019")
@@ -32,11 +32,11 @@ function fileExists(filePath: string): boolean {
   }
 }
 
-function normalizeAtPrefix(filePath: string): string {
+function normalizeAtPrefix(filePath: string) {
   return filePath.startsWith("@") ? filePath.slice(1) : filePath
 }
 
-export function expandPath(filePath: string): string {
+export function expandPath(filePath: string) {
   const normalized = normalizeUnicodeSpaces(normalizeAtPrefix(filePath))
   if (normalized === "~") {
     return os.homedir()
@@ -51,7 +51,7 @@ export function expandPath(filePath: string): string {
  * Resolve a path relative to the given cwd.
  * Handles ~ expansion and absolute paths.
  */
-export function resolveToCwd(filePath: string, cwd: string): string {
+export function resolveToCwd(filePath: string, cwd: string) {
   const expanded = expandPath(filePath)
   if (isAbsolute(expanded)) {
     return expanded
@@ -59,7 +59,7 @@ export function resolveToCwd(filePath: string, cwd: string): string {
   return resolvePath(cwd, expanded)
 }
 
-export function resolveReadPath(filePath: string, cwd: string): string {
+export function resolveReadPath(filePath: string, cwd: string) {
   const resolved = resolveToCwd(filePath, cwd)
 
   if (fileExists(resolved)) {

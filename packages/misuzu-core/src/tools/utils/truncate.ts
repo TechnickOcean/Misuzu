@@ -115,13 +115,13 @@ export function truncateTail(content: string, options?: TruncateOptions): Trunca
 }
 
 /** Truncate a single line if it exceeds maxBytes. */
-export function truncateLine(line: string, maxBytes: number): string {
+export function truncateLine(line: string, maxBytes: number) {
   if (Buffer.byteLength(line, "utf-8") <= maxBytes) return line
   return line.slice(0, maxBytes) + "\n[...line truncated]"
 }
 
 /** Human-readable size formatting. */
-export function formatSize(bytes: number): string {
+export function formatSize(bytes: number) {
   if (bytes < 1024) return `${bytes}B`
   if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)}KB`
   return `${(bytes / 1048576).toFixed(1)}MB`

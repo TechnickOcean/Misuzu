@@ -42,7 +42,7 @@ export function createFindTool(
       "Search for files matching a glob pattern. " +
       "Examples: '*.py', 'src/**/*.ts', '**/Dockerfile'.",
     parameters: findSchema,
-    async execute(toolCallId, params: FindToolInput) {
+    async execute(_toolCallId, params: FindToolInput) {
       const searchPath = params.path ? resolve(cwd, params.path) : cwd
       const limit = params.limit ?? 1000
 

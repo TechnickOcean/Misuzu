@@ -1,7 +1,7 @@
 import type { Model } from "@mariozechner/pi-ai"
 import { FeaturedAgent, type FeaturedAgentOptions } from "./misuzu-featured.ts"
-import { createBaseTools } from "../builtins/tools/index.ts"
-import { dockerTools } from "../builtins/tools/misuzu/docker.ts"
+import { createBaseTools } from "../tools/index.ts"
+import { dockerTools } from "../tools/misuzu/docker.ts"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
 
 export interface SolverOptions {
@@ -34,12 +34,12 @@ export class Solver extends FeaturedAgent {
     })
   }
 
-  async solve(challenge: string): Promise<void> {
+  async solve(challenge: string) {
     return this.prompt(challenge)
   }
 }
 
-function buildSolverSystemPrompt(_options: SolverOptions, sandboxImage: string): string {
+function buildSolverSystemPrompt(_options: SolverOptions, sandboxImage: string) {
   return `You are an expert CTF player. Your goal is to find the flag for the given challenge. The flag format is typically CTF{...} or flag{...}.
 
 You have access to an isolated Docker container (image: ${sandboxImage}) for local testing and exploit development. 

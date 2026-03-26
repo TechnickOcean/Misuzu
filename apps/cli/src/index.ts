@@ -133,8 +133,7 @@ rl.on("line", async (line) => {
     rl.prompt()
     return
   }
-
-  await runWithRetry(input)
+  await coordinator.prompt(input)
   rl.prompt()
 })
 
@@ -142,36 +141,6 @@ rl.on("close", () => {
   console.log("\nBye!")
   process.exit(0)
 })
-
-function getLastStopReason(): string | undefined {
-  const msgs = coordinator.state.messages
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i].role === "assistant") {
-      return (msgs[i] as any).stopReason as string | undefined
-    }
-  }
-  return undefined
-}
-
-async function runWithRetry(input: string) {
-  try {
-    await coordinator.prompt(input)
-  } catch (e) {
-    printRed(`Error: ${String(e)}`)
-    return
-  }
-
-  const stopReason = getLastStopReason()
-
-  if (stopReason === "error") {
-    printGray("  [retrying after error...]")
-    try {
-      await coordinator.continue()
-    } catch (e) {
-      printRed(`Retry failed: ${String(e)}`)
-    }
-  }
-}
 
 function handleCommand(input: string) {
   const cmd = input.toLowerCase()

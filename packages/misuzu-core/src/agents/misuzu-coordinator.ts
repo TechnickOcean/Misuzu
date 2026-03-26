@@ -1,11 +1,10 @@
 import { Type } from "@sinclair/typebox"
-import type { AgentTool } from "@mariozechner/pi-agent-core"
 import type { Model } from "@mariozechner/pi-ai"
 import { FeaturedAgent, type FeaturedAgentOptions } from "./misuzu-featured.ts"
 import { Solver } from "./misuzu-solver.ts"
-import { createReadOnlyTools } from "../builtins/tools/index.ts"
-import { bashTool } from "../builtins/tools/base/bash.ts"
-import { requestrepoTools } from "../builtins/tools/misuzu/requestrepo.ts"
+import { createReadOnlyTools } from "../tools/index.ts"
+import { bashTool } from "../tools/base/bash.ts"
+import { requestrepoTools } from "../tools/misuzu/requestrepo.ts"
 import type { FlagResultMessage } from "../features/messages.ts"
 import { loadBuiltinSkills, type Skill } from "../features/skill.ts"
 
@@ -101,7 +100,7 @@ export class Coordinator extends FeaturedAgent {
     this.modelPool = modelPool
   }
 
-  getCreateSolverTool(): AgentTool {
+  getCreateSolverTool() {
     const solverParams = Type.Object({
       challengeId: Type.String({ description: "Challenge ID from the platform" }),
       challengeName: Type.String({ description: "Challenge name" }),
@@ -173,7 +172,7 @@ export class Coordinator extends FeaturedAgent {
         return {
           content: [
             {
-              type: "text" as const,
+              type: "text",
               text: `Solver started for "${params.challengeName}" on model ${model}`,
             },
           ],
@@ -183,7 +182,7 @@ export class Coordinator extends FeaturedAgent {
     }
   }
 
-  private onSolverFinished(solverId: string): void {
+  private onSolverFinished(solverId: string) {
     this.modelPool.release(solverId)
     this.solvers.delete(solverId)
 
@@ -191,7 +190,7 @@ export class Coordinator extends FeaturedAgent {
       const next = this.challengeQueue.shift()!
       // Queue follow-up to create next solver
       this.appendMessage({
-        role: "user" as const,
+        role: "user",
         content: `Model freed. Create a solver for queued challenge: ${next.challengeName} (ID: ${next.challengeId})`,
         timestamp: Date.now(),
       } as any)
@@ -199,7 +198,7 @@ export class Coordinator extends FeaturedAgent {
   }
 }
 
-function buildCoordinatorSystemPrompt(_options: CoordinatorOptions): string {
+function buildCoordinatorSystemPrompt(_options: CoordinatorOptions) {
   return `You are a CTF team coordinator. Your job is to:
 
 1. Navigate to the CTF platform and fetch all challenges

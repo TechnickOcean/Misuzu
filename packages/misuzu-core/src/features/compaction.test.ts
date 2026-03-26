@@ -51,16 +51,6 @@ function toolResult(content: string): AgentMessage {
   } as AgentMessage
 }
 
-function sandbox(command: string, output: string): AgentMessage {
-  return {
-    role: "sandboxExecution",
-    command,
-    output,
-    exitCode: 0,
-    timestamp: Date.now(),
-  } as AgentMessage
-}
-
 describe("estimateTokens", () => {
   test("user", () => {
     expect(estimateTokens(user("a".repeat(400)))).toBe(100)
@@ -72,11 +62,6 @@ describe("estimateTokens", () => {
 
   test("toolResult", () => {
     expect(estimateTokens(toolResult("a".repeat(400)))).toBe(100)
-  })
-
-  test("sandboxExecution", () => {
-    // 2 + 400 = 402, /4 = 100.5, ceil = 101
-    expect(estimateTokens(sandbox("ls", "a".repeat(400)))).toBe(101)
   })
 })
 
@@ -127,17 +112,6 @@ describe("findCutPoint", () => {
     const idx = findCutPoint(messages)
     expect(idx).toBeGreaterThan(0)
     expect(idx).toBeLessThan(messages.length)
-    expect(messages[idx].role).not.toBe("toolResult")
-  })
-
-  test("sandboxExecution is a valid cut point", () => {
-    const messages: AgentMessage[] = [
-      user("x".repeat(100_000)),
-      sandbox("ls", "out"),
-      user("recent"),
-    ]
-    const idx = findCutPoint(messages)
-    expect(idx).toBeGreaterThan(0)
     expect(messages[idx].role).not.toBe("toolResult")
   })
 })
