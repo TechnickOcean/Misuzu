@@ -32,6 +32,9 @@ export {
   type CompactionSummaryMessage,
 } from "./features/messages.js"
 
+// Providers
+export { ProxyProvider, type ProxyProviderOptions } from "./providers/index.js"
+
 // Tools
 export {
   baseTools,

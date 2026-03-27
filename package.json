@@ -36,5 +36,10 @@
   "engines": {
     "node": ">=22.12.0"
   },
-  "packageManager": "pnpm@10.32.1"
+  "packageManager": "pnpm@10.32.1",
+  "pnpm": {
+    "patchedDependencies": {
+      "@mariozechner/pi-ai@0.62.0": "patches/@mariozechner__pi-ai@0.62.0.patch"
+    }
+  }
 }

@@ -2,14 +2,32 @@
 import { createInterface } from "node:readline"
 import { type KnownProvider, getModels } from "@mariozechner/pi-ai"
 import type { Model } from "@mariozechner/pi-ai"
-import { Coordinator } from "misuzu-core"
+import { Coordinator, ProxyProvider } from "misuzu-core"
 import "dotenv/config"
 
+const rightCodeProvider = new ProxyProvider({
+  provider: "rightcode",
+  baseProvider: "openai",
+  baseUrl: "https://www.right.codes/codex/v1",
+  apiKeyEnvVar: "RIGHTCODE_API_KEY",
+  modelMappings: [
+    "gpt-5.4",
+    "gpt-5.3-codex",
+    {
+      sourceModelId: "gpt-5.2",
+      targetModelId: "gpt-5.2-xhigh",
+      targetModelName: "GPT-5.2 XHigh",
+    },
+  ],
+})
+rightCodeProvider.register()
+
 const args = process.argv.slice(2)
-const rawModel = args[0] ?? "openrouter/stepfun/step-3.5-flash:free"
+const rawModel = args[0] ?? "rightcode/gpt-5.4"
 const [provider, ...modelParts] = rawModel.split("/")
 const modelId = modelParts.join("/")
 const typedProvider = provider as KnownProvider
+const defaultThinkingLevel = rawModel === "rightcode/gpt-5.2-xhigh" ? "xhigh" : "medium"
 
 function loadModel(): Model<any> {
   const models = getModels(typedProvider)
@@ -34,7 +52,7 @@ function createCoordinator(): Coordinator {
     model: loadModel(),
     cwd: process.cwd(),
   })
-  c.state.thinkingLevel = "medium"
+  c.state.thinkingLevel = defaultThinkingLevel
   c.setTools([...c.state.tools, c.getCreateSolverTool() as any])
   watchAgent(c)
   return c
