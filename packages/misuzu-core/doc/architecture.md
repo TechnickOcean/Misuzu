@@ -1,6 +1,6 @@
 # Architecture
 
-Misuzu-core is a CTF (Capture The Flag) agent framework built on [`@mariozechner/pi-agent-core`](https://github.com/mariozechner/pi-agent-core) and [`@mariozechner/pi-ai`](https://github.com/mariozechner/pi-ai). It provides a multi-agent system where a Coordinator assigns challenges to Solver agents that operate in isolated sandbox containers.
+Misuzu-core is a CTF (Capture The Flag) agent framework built on [`@mariozechner/pi-agent-core`](https://github.com/mariozechner/pi-agent-core) and [`@mariozechner/pi-ai`](https://github.com/mariozechner/pi-ai). It provides a multi-agent system where a Coordinator assigns challenges to Solver agents with per-solver workspaces.
 
 ## Table of Contents
 
@@ -16,8 +16,10 @@ Misuzu-core is a CTF (Capture The Flag) agent framework built on [`@mariozechner
 Misuzu solves CTF challenges through a hierarchy of agents:
 
 - **Coordinator**: Discovers challenges on the CTF platform, assigns them to Solver agents, receives flags, and submits them. Acts as the team manager.
-- **Solver**: An expert CTF player agent that operates on individual challenges. Uses sandbox containers, Docker, and standard file/network tools to analyze and exploit challenges.
+- **Solver**: An expert CTF player agent that operates on individual challenges. Uses Docker and standard file/network tools to analyze and exploit challenges.
 - **FeaturedAgent**: The base class both agents extend. Wraps `pi-agent-core`'s `Agent` with automatic skill loading, context compaction, and custom message type handling.
+
+Coordinator assignments are non-blocking: `create_solver` initializes solver workspace files under `.misuzu/workspaces/.../coordinator/solvers/<solver-id>/`, starts the Solver loop in the background, and immediately returns control so additional challenges can be dispatched.
 
 ## Layer Diagram
 
@@ -27,13 +29,13 @@ Misuzu solves CTF challenges through a hierarchy of agents:
 │  - Challenge discovery & assignment                             │
 │  - Flag submission                                              │
 │  - Solver supervision (steer, followUp, abort)                  │
-│  Tools: bash, read, find, grep, requestrepo, docker             │
+│  Tools: bash, read, find, grep                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                         Solver Agent                            │
 │  - Expert CTF player persona                                    │
-│  - Sandbox interaction (exec, upload, download)                 │
 │  - Docker container builds for challenge services                │
-│  Tools: bash, read, write, edit, find, grep, sandbox, docker    │
+│  - Per-solver artifacts (attachments/scripts/writeup)            │
+│  Tools: bash, read, write, edit, find, grep, docker              │
 ├─────────────────────────────────────────────────────────────────┤
 │                      FeaturedAgent (base)                       │
 │  - Skill catalog (in system prompt)                             │
@@ -118,7 +120,7 @@ See [agents.md](agents.md) for the full communication design.
 │  ┌───────────────────────────────────┐  │
 │  │  Base persona & instructions      │  │
 │  │  <available_skills>               │  │  ← Skill catalog lives here
-│  │    <skill>agent-browser</skill>   │  │
+│  │    <skill>playwright-cli</skill>  │  │
 │  │  </available_skills>              │  │
 │  └───────────────────────────────────┘  │
 ├─────────────────────────────────────────┤
@@ -142,46 +144,40 @@ packages/misuzu-core/src/
 ├── index.ts                          # Public API exports
 ├── agents/
 │   ├── misuzu-featured.ts            # FeaturedAgent base class
-│   ├── misuzu-solver.ts              # Solver agent (self-recovery)
+│   ├── misuzu-solver.ts              # Solver agent
 │   └── misuzu-coordinator.ts         # Coordinator agent (model pool, assignment)
 ├── features/
 │   ├── compaction.ts                 # Context compaction (pure functions)
 │   ├── skill.ts                      # Skill loading and catalog building
-│   └── messages.ts                   # Custom message types & convertToLlm
-├── builtins/
-│   ├── tools/
-│   │   ├── index.ts                  # Tool barrel exports & collections
-│   │   ├── base/
-│   │   │   ├── bash.ts               # Shell command execution
-│   │   │   ├── read.ts               # File reading
-│   │   │   ├── write.ts              # File writing
-│   │   │   ├── edit.ts               # Surgical text replacement
-│   │   │   ├── find.ts               # Glob file search
-│   │   │   └── grep.ts               # Content search
-│   │   ├── misuzu/
-│   │   │   ├── docker.ts             # Docker container management
-│   │   │   └── requestrepo.ts        # requestrepo.com OOB testing
-│   │   └── utils/
-│   │       ├── truncate.ts           # Output truncation (head/tail)
-│   │       ├── file-mutation-queue.ts # Serialized file edits
-│   │       └── path.ts               # Path resolution utilities
-│   └── skills/
-│       └── agent-browser/            # Browser automation skill
-│           ├── SKILL.md
-│           ├── references/
-│           └── templates/
+│   ├── messages.ts                   # Custom message types & convertToLlm
+│   └── persistence.ts                # Session/state persistence helpers
+├── tools/
+│   ├── index.ts                      # Tool barrel exports & collections
+│   ├── base/
+│   │   ├── bash.ts                   # Shell command execution
+│   │   ├── read.ts                   # File reading
+│   │   ├── write.ts                  # File writing
+│   │   ├── edit.ts                   # Surgical text replacement
+│   │   ├── find.ts                   # Glob file search
+│   │   └── grep.ts                   # Content search
+│   ├── misuzu/
+│   │   └── docker.ts                 # Docker container management
+│   └── utils/
+│       ├── truncate.ts               # Output truncation (head/tail)
+│       ├── file-mutation-queue.ts    # Serialized file edits
+│       └── path.ts                   # Path resolution utilities
 ```
 
 ## Documentation
 
-| Document                           | Content                                                  |
-| ---------------------------------- | -------------------------------------------------------- |
-| [architecture.md](architecture.md) | This file — system overview                              |
-| [tools.md](tools.md)               | Tool system, base tools, CTF tools                       |
-| [compaction.md](compaction.md)     | Context compaction, skill catalog protection             |
-| [skills.md](skills.md)             | Skill discovery, frontmatter, system prompt integration  |
-| [agents.md](agents.md)             | Agent definitions, model pool, assignment, self-recovery |
-| [persistence.md](persistence.md)   | Session persistence, competition directory, resume flow  |
+| Document                           | Content                                                 |
+| ---------------------------------- | ------------------------------------------------------- |
+| [architecture.md](architecture.md) | This file — system overview                             |
+| [tools.md](tools.md)               | Tool system, base tools, and skill-first OOB workflows  |
+| [compaction.md](compaction.md)     | Context compaction, skill catalog protection            |
+| [skills.md](skills.md)             | Skill discovery, frontmatter, system prompt integration |
+| [agents.md](agents.md)             | Agent definitions, model pool, assignment               |
+| [persistence.md](persistence.md)   | Session persistence, competition directory, resume flow |
 
 ## Dependencies
 

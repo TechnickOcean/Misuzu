@@ -11,6 +11,7 @@ Skills are self-contained capability packages that provide the agent with specia
 - [Skill Structure](#skill-structure)
 - [Frontmatter](#frontmatter)
 - [Discovery](#discovery)
+- [Skill Sources and Roles](#skill-sources-and-roles)
 - [System Prompt Integration](#system-prompt-integration)
 - [Built-in Skills](#built-in-skills)
 
@@ -25,8 +26,8 @@ System prompt (always in context):
 │                                            │
 │  <available_skills>                        │
 │    <skill>                                 │
-│      <name>agent-browser</name>            │  ← Name + description always visible
-│      <description>Browser automation...</des│
+│      <name>playwright-cli</name>           │  ← Name + description always visible
+│      <description>Browser automation...</de│
 │      <location>/path/to/SKILL.md</loc>     │  ← Path tells agent where to load
 │    </skill>                                │
 │  </available_skills>                       │
@@ -40,17 +41,41 @@ This keeps the context footprint minimal while providing access to arbitrarily l
 
 ## How Skills Work
 
-1. At agent construction, misuzu scans skill directories for `SKILL.md` files
+1. At agent construction, misuzu loads built-in and workspace skill directories for the current agent role
 2. Names and descriptions are formatted as XML in the system prompt
 3. When a task matches, the agent uses `read` to load the full `SKILL.md`
 4. The agent follows the instructions, resolving relative paths against the skill's base directory
+
+## Skill Sources and Roles
+
+Misuzu splits skills by **source** and **agent role**:
+
+- **Built-in skills**: shipped with Misuzu and discovered from the built-in skill root
+- **Workspace skills**: discovered from the CLI launch directory when a workspace marker exists (`<cli-cwd>/.misuzu/`)
+- **Shared role**: loaded by both Coordinator and Solver
+- **Coordinator role**: only coordinator skills are loaded
+- **Solver role**: only solver skills are loaded
+
+Recommended workspace layout:
+
+```text
+<workspace>/.misuzu/skills/
+├── shared/
+│   └── <skill-name>/SKILL.md
+├── coordinator/
+│   └── <skill-name>/SKILL.md
+└── solver/
+    └── <skill-name>/SKILL.md
+```
+
+Built-in skills follow the same role split under Misuzu's own `.misuzu/skills` directory.
 
 ## Skill Structure
 
 A skill is a directory containing a `SKILL.md` file:
 
 ```
-agent-browser/
+playwright-cli/
 ├── SKILL.md                    # Skill definition (required)
 ├── references/                 # Reference docs (optional)
 │   ├── commands.md
@@ -63,20 +88,20 @@ agent-browser/
 
 ```markdown
 ---
-name: agent-browser
+name: playwright-cli
 description: Browser automation CLI for AI agents. Use when the user needs
   to interact with websites.
-allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*)
+allowed-tools: Bash(playwright-cli:*)
 ---
 
-# Browser Automation with agent-browser
+# Browser Automation with playwright-cli
 
 The CLI uses Chrome/Chromium via CDP directly.
 
 ## Core Workflow
 
-1. **Navigate**: `agent-browser open <url>`
-2. **Snapshot**: `agent-browser snapshot -i`
+1. **Navigate**: `playwright-cli open <url>`
+2. **Snapshot**: `playwright-cli snapshot`
 3. **Interact**: Use refs to click, fill, select
    ...
 ```
@@ -147,6 +172,15 @@ export function importSkillsFromDirectory(dir: string): Skill[] {
 }
 ```
 
+For role-based loading, Misuzu resolves candidate directories in this order:
+
+1. Built-in shared directory (`<misuzu-root>/.misuzu/skills/shared`)
+2. Built-in role directory (`<misuzu-root>/.misuzu/skills/<role>`)
+3. Workspace shared directory (`<cli-cwd>/.misuzu/skills/shared`) when workspace marker exists and `<cli-cwd> != <misuzu-root>`
+4. Workspace role directory (`<cli-cwd>/.misuzu/skills/<role>`) under the same condition
+
+When duplicate skill names exist, workspace skills override built-ins.
+
 ### Loading Order
 
 1. Scan the provided directory
@@ -178,7 +212,7 @@ Skills are formatted as XML in the system prompt. This is the only place skills 
 ```xml
 <available_skills>
   <skill>
-    <name>agent-browser</name>
+    <name>playwright-cli</name>
     <description>Browser automation CLI for AI agents...</description>
     <location>/absolute/path/to/SKILL.md</location>
   </skill>

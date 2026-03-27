@@ -9,7 +9,6 @@ Misuzu uses a multi-agent architecture where a Coordinator manages multiple Solv
 - [Coordinator](#coordinator)
 - [Inter-Agent Communication](#inter-agent-communication)
 - [Event Flow](#event-flow)
-- [Self-Recovery](#self-recovery)
 - [System Prompts](#system-prompts)
 
 ## FeaturedAgent
@@ -91,7 +90,7 @@ setModel(model: Model<any>): void;
 
 ## Solver
 
-An expert CTF player agent. Extends `FeaturedAgent` with sandbox and Docker tools.
+An expert CTF player agent. Extends `FeaturedAgent` with Docker and base file/shell tools.
 
 ```typescript
 export interface SolverOptions {
@@ -108,23 +107,14 @@ export interface SolverOptions {
 ```typescript
 export class Solver extends FeaturedAgent {
   constructor(options: SolverOptions) {
-    const cwd = options.cwd ?? "/tmp/ctf-solver"
+    const solverId = options.solverId ?? "solver"
+    const cwd = options.cwd ?? resolve(process.cwd(), ".misuzu", "solvers", solverId)
     const sandboxImage = options.sandboxImage ?? "ctf-sandbox"
 
     super({
       ...options,
       cwd,
-      tools: [
-        ...createBaseTools(cwd),
-        sandboxStartTool,
-        sandboxExecTool,
-        sandboxUploadTool,
-        sandboxDownloadTool,
-        sandboxStopTool,
-        dockerBuildTool,
-        dockerRunTool,
-        dockerExecTool,
-      ],
+      tools: [...createBaseTools(cwd), ...dockerTools],
       initialState: {
         model: options.model,
         systemPrompt: buildSolverSystemPrompt(options),
@@ -146,13 +136,12 @@ The Solver's system prompt establishes the CTF expert persona:
 You are an expert CTF player. Your goal is to find the flag for the given
 challenge. The flag format is typically CTF{...} or flag{...}.
 
-// todo: perfect the prompts below
-You have access to create an isolated Docker container with is used for local
-test or used as a sandbox environment with pre-installed CTF tools (image-id: {build and fill}).
+You have access to an isolated Docker container used for local testing and
+exploit development.
 
 Strategy:
-1. Analyze the challenge description and attachments
-2. Build and run exploits in the sandbox
+1. Read `ENVIRONMENT.md` and local `attachments/` first
+2. Build and run exploits in the Docker environment
 3. Keep trying until you capture the flag
 
 Never give up. If one approach fails, try another.
@@ -161,22 +150,22 @@ Never give up. If one approach fails, try another.
 ### Solver Workflow
 
 ```
-1. Receive challenge description & attachments
+1. Receive challenge assignment and initialize solver workspace
        │
        ▼
-2. Analyze files if have (read, file, strings, binwalk)
+2. Read `ENVIRONMENT.md` and analyze `attachments/`
        │
        ▼
-3. Start sandbox if needed (sandbox_start)
+3. Build/start challenge containers if needed (docker_build/docker_run)
        │
        ▼
-4. Exploit
+4. Develop and store scripts under `scripts/`, exploit target
        │
        ▼
-5. Extract flag
+5. Extract flag and report to Coordinator
        │
        ▼
-6. Emit FlagResultMessage ──► Coordinator receives it
+6. After Coordinator confirms correctness, write reproducible `Writeups.md`
 ```
 
 ## Coordinator
@@ -186,9 +175,13 @@ The team manager agent. Extends `FeaturedAgent` with platform interaction tools 
 ```typescript
 export interface CoordinatorOptions {
   cwd?: string
+  workspaceRoot?: string
+  workspaceId?: string
   ctfPlatformUrl?: string
+  models?: string[]
+  modelConcurrency?: number
   model?: Model<any>
-  solvers?: Map<string, Solver>
+  modelResolver?: (modelId: string) => Model<any> | undefined
 }
 ```
 
@@ -204,14 +197,7 @@ export class Coordinator extends FeaturedAgent {
     super({
       ...options,
       cwd,
-      tools: [
-        ...createReadOnlyTools(cwd),
-        bashTool,
-        requestrepoCreateTool,
-        requestrepoWaitTool,
-        requestrepoSetFileTool,
-        requestrepoAddDnsTool,
-      ],
+      tools: [...createReadOnlyTools(cwd), bashTool],
       initialState: {
         model: options.model,
         systemPrompt: buildCoordinatorSystemPrompt(options),
@@ -239,7 +225,7 @@ You are a CTF team coordinator. Your job is to:
 6. Notify the user of progress
 
 Workflow:
-- Use agent-browser to navigate and extract challenge information
+- Use `playwright-cli` skill (or `bash`) to navigate and extract challenge information
 - Call create_solver for each challenge (easiest first)
 - The system handles model allocation and queuing automatically
 - Use bash to submit flags when solvers report them
@@ -248,19 +234,57 @@ Workflow:
 
 ### Coordinator Capabilities
 
-| Capability       | Implementation                             |
-| ---------------- | ------------------------------------------ |
-| Fetch challenges | `bash` tool or `agent-browser` skill       |
-| Assign solver    | `create_solver` tool (with model pool)     |
-| Send hint        | `solver.steer(hintMessage)`                |
-| Listen for flags | `solver.subscribe` for `FlagResultMessage` |
-| Receive flags    | `FlagResultMessage` custom messages        |
-| Submit flag      | `bash` tool (curl to platform API)         |
-| Notify user      | Custom event emission                      |
+| Capability       | Implementation                                          |
+| ---------------- | ------------------------------------------------------- |
+| Fetch challenges | `bash` tool or `playwright-cli` skill                   |
+| Assign solver    | `create_solver` tool (with model pool)                  |
+| Create workspace | Initializes `.misuzu/workspaces/...` and solver subdirs |
+| Maintain env     | `update_solver_environment` + URL validation            |
+| Poll updates     | Script scaffold at `scripts/poll-platform-updates.sh`   |
+| Send hint        | `solver.steer(hintMessage)`                             |
+| Listen for flags | `solver.subscribe` for `FlagResultMessage`              |
+| Receive flags    | `FlagResultMessage` custom messages                     |
+| Confirm flag     | `confirm_solver_flag` (correct/rejected branches)       |
+| Submit flag      | `bash` tool (curl to platform API)                      |
+| Notify user      | Custom event emission                                   |
+
+### Platform Polling Script Timing
+
+`create_solver` completion is the trigger point for polling automation scaffold:
+
+1. Coordinator creates solver workspace and copies attachments.
+2. Coordinator writes `ENVIRONMENT.md` + `scripts/poll-platform-updates.sh`.
+3. Solver may run the script manually (or schedule with cron/timer) via existing `bash` tool.
+4. Script writes detected updates to `scripts/platform-updates.queue.md`.
+5. Agent promotes relevant updates through `notify_coordinator` / `update_solver_environment`.
+
+### Failure Branches
+
+- **Flag rejected**: `confirm_solver_flag(correct=false)` keeps solver in solving state, records rejection, and steers solver to continue.
+- **Environment URL validation failed**: coordinator records failure in `ENVIRONMENT.md`, does not overwrite current URL, and asks for a fresh URL.
+
+### Resume API
+
+Coordinator can be rehydrated from persisted workspace state:
+
+```typescript
+const coordinator = Coordinator.resumeFromWorkspace({
+  workspaceDir: "<launch-cwd>/.misuzu/workspaces/<workspace-id>",
+  autoContinueSolvers: true,
+})
+```
+
+- Rebuilds coordinator message context from `coordinator/session.jsonl`.
+- Restores queue/model pool from `coordinator/state.json`.
+- Rehydrates solver agents from `coordinator/solvers/*` session/state files.
 
 ### Model Pool
 
-The Coordinator manages a pool of models provided by the user. Each model can run one solver at a time. When all models are busy, new challenges are queued.
+The Coordinator manages a pool of model slots. By default, each listed model gets one slot (runs one solver at a time). Set `modelConcurrency` to allow each model to run multiple solvers concurrently.
+
+If `models` is omitted but `model` is provided, the Coordinator automatically seeds the pool with that model ID so `create_solver` does not stall on an empty pool.
+
+Example: `new Coordinator({ models: ["rightcode/gpt-5.4"], modelConcurrency: 3 })` allows three concurrent solvers on the same model entry.
 
 ```typescript
 export interface ModelSlot {
@@ -272,8 +296,11 @@ export interface ModelSlot {
 export class ModelPool {
   private slots: ModelSlot[]
 
-  constructor(models: string[]) {
-    this.slots = models.map((model) => ({ model, status: "idle" }))
+  constructor(models: string[], options: { maxConcurrencyPerModel?: number } = {}) {
+    const perModel = Math.max(1, Math.floor(options.maxConcurrencyPerModel ?? 1))
+    this.slots = models.flatMap((model) =>
+      Array.from({ length: perModel }, () => ({ model, status: "idle" as const })),
+    )
   }
 
   /** Get the first idle model, or null if all busy */
@@ -329,11 +356,11 @@ The Coordinator follows this workflow to discover, prioritize, and assign challe
 
 #### Step 1: Fetch Challenges
 
-The Coordinator uses the `agent-browser` skill or `bash` tool to scrape/fetch the challenge list:
+The Coordinator uses the `playwright-cli` skill or `bash` tool to scrape/fetch the challenge list:
 
 ```typescript
 // Coordinator's system prompt includes instructions:
-// "Use agent-browser to navigate the platform, snapshot the challenge list,
+// "Use playwright-cli to navigate the platform, snapshot the challenge list,
 //  and extract: challenge ID, name, category, description, files available."
 ```
 
@@ -402,8 +429,8 @@ export class Coordinator extends FeaturedAgent {
       const model = this.modelPool.acquire(challenge.id)
 
       if (model) {
-        // Model available → start solver
-        await this.startSolver(challenge, model)
+        // Model available → start solver (non-blocking)
+        this.startSolver(challenge, model)
       } else {
         // All models busy → queue
         this.challengeQueue.push(challenge)
@@ -411,10 +438,10 @@ export class Coordinator extends FeaturedAgent {
     }
   }
 
-  private async startSolver(challenge: Challenge, model: string): Promise<void> {
+  private startSolver(challenge: Challenge, model: string): void {
     const solver = new Solver({
-      cwd: path.join(MISUZU_WORKDIR, `/ctf-${challenge.id}`),
-      model: getModel(model),
+      cwd: path.join(MISUZU_WORKDIR, ".misuzu", "solvers", challenge.id),
+      model: this.resolveModel?.(model) ?? this.state.model,
       challengeDescription: challenge.description,
     })
 
@@ -430,8 +457,10 @@ export class Coordinator extends FeaturedAgent {
       }
     })
 
-    // Start solving
-    await solver.prompt(formatChallenge(challenge))
+    // Start solving in background so Coordinator can keep dispatching.
+    void solver.prompt(formatChallenge(challenge)).catch((error) => {
+      this.handleSolverError(challenge.id, error)
+    })
   }
 
   private onSolverFinished(solverId: string): void {
@@ -475,24 +504,24 @@ const createSolverTool: AgentTool = {
     ),
   }),
   async execute(_toolCallId, params) {
-    const model = this.modelPool.acquire(params.challengeId)
-    if (!model) {
+    const modelId = this.modelPool.acquire(params.challengeId)
+    if (!modelId) {
       return {
         content: [{ type: "text", text: "No models available. Challenge queued." }],
         details: { queued: true },
       }
     }
 
-    const solver = await this.startSolver(
+    this.startSolver(
       { ...params, difficulty: params.difficulty ?? estimateDifficulty(params) },
-      model,
+      modelId,
     )
 
     return {
       content: [
-        { type: "text", text: `Solver started for "${params.challengeName}" on model ${model}` },
+        { type: "text", text: `Solver started for "${params.challengeName}" on model ${modelId}` },
       ],
-      details: { model, solverId: params.challengeId },
+      details: { model: modelId, solverId: params.challengeId },
     }
   },
 }
@@ -718,7 +747,7 @@ solver.prompt("Solve challenge 42")
 ├─ message_end     { user }
 ├─ message_start   { assistant: "Let me analyze..." }
 ├─ ...
-├─ tool_execution_start  { toolName: "sandbox_exec", args: {...} }
+├─ tool_execution_start  { toolName: "docker_exec", args: {...} }
 ├─ tool_execution_end    { result: "output..." }
 ├─ turn_end
 │
@@ -727,7 +756,6 @@ solver.prompt("Solve challenge 42")
 ├─ turn_end
 │
 │  // Solver emits FlagResultMessage via appendMessage
-│  // Solver self-recovery may fire if stuck (self-steer)
 │
 └─ agent_end       { messages: [...] }
 ```
@@ -739,7 +767,7 @@ coordinator.prompt("Start CTF at https://ctf.example.com")
 ├─ agent_start
 ├─ turn_start
 ├─ message_start      { assistant: "Navigating to platform..." }
-├─ tool_execution     { agent-browser: open, snapshot, extract challenges }
+├─ tool_execution     { bash/playwright-cli: fetch challenge list }
 ├─ message_end        { assistant: "Found 5 challenges. Sorting by difficulty..." }
 │
 │  // Coordinator calls create_solver for each challenge
@@ -765,260 +793,6 @@ coordinator.prompt("Start CTF at https://ctf.example.com")
 ├─ turn_end
 └─ agent_end
 ```
-
-## Self-Recovery (will implement later)
-
-The Solver is fully autonomous. It detects stuck conditions locally and self-recovers by injecting a reflection prompt into its own context. The Coordinator never monitors, evaluates, or intervenes in the solving process.
-
-### Design Rationale
-
-The Coordinator is a dispatcher — it assigns challenges, forwards platform hints, and submits flags. It does not understand individual challenges or solver strategies. Therefore, all stuck detection and recovery must be self-contained within the Solver.
-
-Self-recovery works by having the Solver call `steer()` on itself. `steer()` queues a user-role message that is delivered after current tool calls finish, before the next LLM turn. The Solver's LLM sees its full history plus the reflection prompt, which redirects its attention without losing context.
-
-```
-Normal solver turn:
-  [tool call] → [tool call] → [assistant: reasoning] → [next turn]
-
-After self-recovery:
-  [tool call] → [tool call] → [steer: reflection prompt] → [assistant: reassesses] → [next turn]
-                                ↑
-                     injected by Solver itself
-```
-
-### Triggering Conditions
-
-Triggers are purely behavioral — no text parsing, no semantic analysis. Two signals, each with strict thresholds.
-
-#### Signal 1: Failed Command Repetition
-
-The same command is called repeatedly in a sliding window, and **all occurrences are failures**. This distinguishes debugging (run, fail, fix, run, succeed) from being stuck (run, fail, run, fail, run, fail).
-
-```typescript
-// Sliding window of last 8 tool calls, each stored as { fingerprint, isError }
-window: [
-  { fp: "bash:python3 exploit_*.py", isError: true },
-  { fp: "read:py", isError: false },
-  { fp: "edit:py", isError: false },
-  { fp: "bash:python3 exploit_*.py", isError: true },
-  { fp: "bash:python3 exploit_*.py", isError: true },
-  { fp: "bash:python3 exploit_*.py", isError: true },
-  { fp: "bash:python3 exploit_*.py", isError: true },
-]
-
-// "bash:python3 exploit_*.py" appears 5 times, ALL errors → trigger
-```
-
-Contrast with normal debugging:
-
-```typescript
-window: [
-  { fp: "bash:python3 exploit_*.py", isError: true },
-  { fp: "read:py", isError: false },
-  { fp: "edit:py", isError: false },
-  { fp: "bash:python3 exploit_*.py", isError: true },
-  { fp: "read:py", isError: false },
-  { fp: "edit:py", isError: false },
-  { fp: "bash:python3 exploit_*.py", isError: false }, // ← succeeds
-]
-// Only 2 failures out of 3 occurrences → no trigger
-```
-
-**Fingerprint computation** normalizes volatile parts of arguments:
-
-| Tool           | Fingerprint                         | Normalization                                                                  |
-| -------------- | ----------------------------------- | ------------------------------------------------------------------------------ |
-| `bash`         | `bash:<normalized-command>`         | Strip numbers, collapse paths: `python3 exploit_2.py` → `python3 exploit_*.py` |
-| `sandbox_exec` | `sandbox_exec:<normalized-command>` | Same as bash                                                                   |
-| `read`         | `read:<extension>`                  | Group by file type: `read /tmp/flag.txt` → `read:txt`                          |
-| `write`        | `write:<extension>`                 | Same as read                                                                   |
-| `edit`         | `edit:<extension>`                  | Same as read                                                                   |
-
-**Threshold: ≥4 occurrences of the same fingerprint in a window of 8, all with `isError=true`.**
-
-Why this threshold:
-
-- Running `python3 exploit.py` 3 times, all failing: still debugging, might find the bug on the 4th run
-- Running it 4+ times, all failing: the script itself is wrong, not a transient bug
-- One success anywhere in the window breaks the pattern: the model is making progress
-
-**Cooldown: 30 seconds between signals.** Prevents signal spam during a single stuck episode.
-
-#### Signal 2: Consecutive Failure on Target
-
-The same target (file path, URL, hostname) fails consecutively across different commands.
-
-```typescript
-// Per-target failure counter
-failureStreaks: { "/api/login": 1, "/api/users": 3 }
-// "/api/users" failed 3 times in a row with different commands → trigger
-```
-
-The target is extracted from tool arguments:
-
-- `bash`/`sandbox_exec`: target = first meaningful argument (URL, file path, hostname)
-- `read`/`write`/`edit`: target = file path
-- Other tools: target = tool name
-
-Success on a target resets its streak.
-
-**Threshold: 3 consecutive failures on the same target.**
-
-Why this threshold:
-
-- 1 failure: Expected (probing, trying paths)
-- 2 failures: Might be a transient issue or wrong assumption
-- 3+ failures: The approach to this target is definitively wrong
-
-### Detection State Machine
-
-```typescript
-class StuckDetector {
-  // Signal 1: Failed command repetition
-  private window: Array<{ fp: string; isError: boolean }> = []
-  private readonly WINDOW_SIZE = 8
-  private readonly FP_THRESHOLD = 4
-
-  // Signal 2: Consecutive failure on target
-  private failureStreaks: Map<string, number> = new Map()
-  private readonly STREAK_THRESHOLD = 3
-
-  // Cooldown
-  private lastSignalTime = 0
-  private readonly COOLDOWN_MS = 30_000
-
-  check(toolName: string, args: Record<string, unknown>, isError: boolean): boolean {
-    if (!this.cooldownOk()) return false
-
-    const fp = computeFingerprint(toolName, args)
-    const target = getTarget(toolName, args)
-
-    // Maintain sliding window
-    this.window.push({ fp, isError })
-    if (this.window.length > this.WINDOW_SIZE) this.window.shift()
-
-    // Signal 1: Same fingerprint, all failures in window
-    const matching = this.window.filter((e) => e.fp === fp)
-    if (matching.length >= this.FP_THRESHOLD && matching.every((e) => e.isError)) {
-      return true
-    }
-
-    // Signal 2: Consecutive failure streak on target
-    if (isError) {
-      const streak = (this.failureStreaks.get(target) ?? 0) + 1
-      this.failureStreaks.set(target, streak)
-      if (streak >= this.STREAK_THRESHOLD) return true
-    } else {
-      this.failureStreaks.delete(target)
-    }
-
-    return false
-  }
-
-  private cooldownOk(): boolean {
-    const now = Date.now()
-    if (now - this.lastSignalTime < this.COOLDOWN_MS) return false
-    this.lastSignalTime = now
-    return true
-  }
-}
-```
-
-### Why Only Two Signals
-
-Adding more signals increases false positive risk. These two signals cover the most common stuck patterns:
-
-| Stuck pattern                                | Detected by | Not triggered by                                        |
-| -------------------------------------------- | ----------- | ------------------------------------------------------- |
-| Debugging a broken script (run/fail/fix/run) | Signal 1    | Running, fixing, running again (success breaks pattern) |
-| Trying wrong paths/endpoints                 | Signal 2    | Probing 2 different paths (streak resets on success)    |
-| Fuzzing with variations                      | Signal 1    | Successful findings break the pattern                   |
-| Heavy reverse engineering                    | Neither     | Different targets, different commands, mixed success    |
-
-### Recovery: Self-Steer with Reflection
-
-When any trigger fires, the Solver injects a reflection prompt into itself via `steer()`:
-
-```typescript
-private selfRecover(): void {
-  const summary = this.summarizeRecentContext();
-
-  this.innerAgent.steer(
-    `Your recent approach seems unproductive.\n\n` +
-    `Summary of recent steps:\n${summary}\n\n` +
-    `Stop. Reflect:\n` +
-    `1. What have you actually learned from the results?\n` +
-    `2. What assumption might be wrong?\n` +
-    `3. What haven't you tried?\n\n` +
-    `State your new plan before executing.`
-  );
-}
-```
-
-#### Cheap Context Summary
-
-The summary embedded in the reflection prompt is generated from recent messages using string extraction — no LLM call needed:
-
-```typescript
-private summarizeRecentContext(): string {
-  const recent = this.state.messages.slice(-8); // Last ~4 turns
-  const lines: string[] = [];
-
-  for (const msg of recent) {
-    if (msg.role === "assistant") {
-      const text = extractAssistantText(msg).slice(0, 200);
-      const tools = extractToolCalls(msg);
-      if (text) lines.push(`Thought: ${text}`);
-      for (const t of tools) lines.push(`Tried: ${t.name}(${formatArgs(t.arguments)})`);
-    }
-    if (msg.role === "toolResult") {
-      lines.push(`Result: ${extractText(msg).slice(0, 100)}`);
-    }
-  }
-
-  return lines.slice(-10).join("\n");
-}
-```
-
-Token cost: **zero** (string slicing from existing messages). The summary is ~500 characters. The full reflection prompt is ~600 characters.
-
-### Wiring in Solver
-
-```typescript
-class Solver extends FeaturedAgent {
-  private detector = new StuckDetector();
-
-  constructor(options: SolverOptions) {
-    super({ ... });
-
-    // Per-tool-call: detection via afterToolCall hook
-    this.innerAgent.setAfterToolCall(async (ctx) => {
-      if (this.detector.check(ctx.toolCall.name, ctx.args, ctx.isError)) {
-        this.selfRecover();
-      }
-      return undefined;
-    });
-  }
-}
-```
-
-### What Self-Recovery Is NOT
-
-- **Not compaction**: The Solver's messages are not truncated or summarized. The full context remains. The reflection prompt is additive.
-- **Not a Coordinator intervention**: The Coordinator is never involved. It doesn't see detection signals or recovery actions.
-- **Not a system prompt change**: The reflection prompt is a user-role message (via `steer`), not a modification of the system prompt. The Solver's persona and instructions remain unchanged.
-- **Not guaranteed to work**: The model might ignore the reflection prompt or continue the same approach. If it does, the detector fires again after cooldown, and another reflection prompt is injected. Eventually, repeated reflection prompts will shift the model's attention, or the Solver will exhaust its attempts and report failure.
-
-### Token Budget
-
-| Component                        | Token cost | Frequency                        |
-| -------------------------------- | ---------- | -------------------------------- |
-| Detection (fingerprint, streak)  | **0**      | Every tool call                  |
-| Context summary (string slicing) | **0**      | On trigger only                  |
-| Reflection prompt                | **~150**   | On trigger only (max ~1 per 30s) |
-| **Total per stuck event**        | **~150**   | —                                |
-
-Compared to the naive approach of the Coordinator reading all events: **~50,000 tokens saved per stuck event.**
 
 ## System Prompts
 
@@ -1047,10 +821,10 @@ function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 The two agents differ in persona, tools, and strategy guidance but share the same infrastructure:
 
-| Aspect  | Solver                      | Coordinator                    |
-| ------- | --------------------------- | ------------------------------ |
-| Persona | Expert CTF player           | Team manager                   |
-| Tools   | All base + sandbox + docker | Read-only + bash + requestrepo |
-| Goal    | Find flags                  | Assign, supervise, submit      |
-| Sandbox | Direct access               | No direct access               |
-| Browser | Not typically needed        | Uses agent-browser skill       |
+| Aspect  | Solver               | Coordinator                 |
+| ------- | -------------------- | --------------------------- |
+| Persona | Expert CTF player    | Team manager                |
+| Tools   | All base + docker    | Read-only + bash            |
+| Goal    | Find flags           | Assign, supervise, submit   |
+| Sandbox | Direct access        | No direct access            |
+| Browser | Not typically needed | Uses `playwright-cli` skill |

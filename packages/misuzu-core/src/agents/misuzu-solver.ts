@@ -1,11 +1,19 @@
 import type { Model } from "@mariozechner/pi-ai"
+import { existsSync, mkdirSync, readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import { FeaturedAgent, type FeaturedAgentOptions } from "./misuzu-featured.ts"
 import { createBaseTools } from "../tools/index.ts"
 import { dockerTools } from "../tools/misuzu/docker.ts"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
+import { loadAgentSkills } from "../features/skill.ts"
 
 export interface SolverOptions {
+  solverId?: string
   cwd?: string
+  workspaceRoot?: string
+  environmentFilePath?: string
+  scriptsDir?: string
+  writeupPath?: string
   challengeDescription?: string
   challengeUrl?: string
   sandboxImage?: string
@@ -14,17 +22,32 @@ export interface SolverOptions {
 }
 
 export class Solver extends FeaturedAgent {
+  readonly solverId: string
+  readonly environmentFilePath?: string
+  readonly scriptsDir?: string
+  readonly writeupPath?: string
+
   constructor(options: SolverOptions & FeaturedAgentOptions = {}) {
-    const cwd = options.cwd ?? "/tmp/ctf-solver"
+    const solverId = options.solverId ?? "solver"
     const sandboxImage = options.sandboxImage ?? "ctf-sandbox"
+    const workspaceRoot = options.workspaceRoot ?? process.cwd()
+    const cwd = resolve(options.cwd ?? resolve(workspaceRoot, ".misuzu", "solvers", solverId))
+
+    mkdirSync(cwd, { recursive: true })
 
     const tools = options.tools ?? [...createBaseTools(cwd), ...dockerTools]
+    const skills = loadAgentSkills({
+      role: "solver",
+      launchDir: workspaceRoot,
+      extraSkills: options.skills,
+    })
 
     const systemPrompt = buildSolverSystemPrompt(options, sandboxImage)
 
     super({
       ...options,
       cwd,
+      skills,
       tools,
       initialState: {
         ...options.initialState,
@@ -32,10 +55,71 @@ export class Solver extends FeaturedAgent {
         systemPrompt,
       },
     })
+
+    this.solverId = solverId
+    this.environmentFilePath = options.environmentFilePath
+    this.scriptsDir = options.scriptsDir
+    this.writeupPath = options.writeupPath
   }
 
   async solve(challenge: string) {
-    return this.prompt(challenge)
+    const prompt = this.buildChallengePrompt(challenge)
+    return this.prompt(prompt)
+  }
+
+  refreshEnvironmentContext(reason: string) {
+    const envContent = this.loadEnvironmentSnapshot()
+    if (!envContent || !this.environmentFilePath) return
+
+    this.steer(
+      [
+        `Coordinator updated environment context (${reason}).`,
+        `Re-read and follow ${this.environmentFilePath}.`,
+        "",
+        envContent,
+      ].join("\n"),
+    )
+  }
+
+  notifyFlagConfirmed(message = "") {
+    const writeupPath = this.writeupPath ?? "Writeups.md"
+    const scriptsDir = this.scriptsDir ?? "scripts"
+
+    this.steer(
+      [
+        "Coordinator confirmed your submitted flag is CORRECT.",
+        "Immediately write a reproducible solution to Writeups.md.",
+        `Writeup file: ${writeupPath}`,
+        `Store executable artifacts under: ${scriptsDir}`,
+        message ? `Notes: ${message}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    )
+  }
+
+  private buildChallengePrompt(challenge: string): string {
+    const envSnapshot = this.loadEnvironmentSnapshot()
+    if (!envSnapshot || !this.environmentFilePath) {
+      return challenge
+    }
+
+    return [
+      `Primary challenge context is maintained in ${this.environmentFilePath}.`,
+      "Always align your actions with that file.",
+      "",
+      "ENVIRONMENT.md snapshot:",
+      envSnapshot,
+      "",
+      "Task:",
+      challenge,
+    ].join("\n")
+  }
+
+  private loadEnvironmentSnapshot(): string | undefined {
+    if (!this.environmentFilePath) return undefined
+    if (!existsSync(this.environmentFilePath)) return undefined
+    return readFileSync(this.environmentFilePath, "utf-8")
   }
 }
 
@@ -44,6 +128,10 @@ function buildSolverSystemPrompt(_options: SolverOptions, sandboxImage: string) 
 
 You have access to an isolated Docker container (image: ${sandboxImage}) for local testing and exploit development. 
 The sandbox has pre-installed CTF tools including pwntools, pycryptodome, z3-solver, RsaCtfTool, radare2, angr, and many more (check out \`/tools.txt\` in the container to get a full list).
+
+Use ENVIRONMENT.md as the source of truth for challenge environment data. If remote URL expires or platform notices/hints change, notify the coordinator and wait for ENVIRONMENT.md updates.
+Copy downloaded/received attachments into attachments/, write exploit helpers into scripts/, and produce final reproducible writeup in Writeups.md once a flag is confirmed correct.
+If needed, use scripts/poll-platform-updates.sh (created during solver bootstrap) to poll predictable platform updates and then sync them through notify_coordinator/update_solver_environment.
 
 Strategy:
 1. Analyze the challenge description and attachments

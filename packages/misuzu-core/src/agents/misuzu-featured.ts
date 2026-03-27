@@ -9,6 +9,7 @@ import type { Model } from "@mariozechner/pi-ai"
 import { type Skill, buildSkillsCatalog } from "../features/skill.ts"
 import { convertToLlm } from "../features/messages.ts"
 import { checkCompact, compact } from "../features/compaction.ts"
+import { AgentSessionRecorder, type SessionManager } from "../features/persistence.ts"
 import { baseTools } from "../tools/index.ts"
 
 export interface FeaturedAgentOptions {
@@ -16,6 +17,7 @@ export interface FeaturedAgentOptions {
   skills?: Skill[]
   cwd?: string
   tools?: AgentTool<any>[]
+  sessionManager?: SessionManager
   convertToLlm?: (messages: AgentMessage[]) => ReturnType<typeof convertToLlm>
   transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>
   [key: string]: unknown
@@ -23,11 +25,14 @@ export interface FeaturedAgentOptions {
 
 export class FeaturedAgent {
   private agent: Agent
+  private detachSessionRecorder?: () => void
+  private sessionRecorder?: AgentSessionRecorder
 
   constructor({
     skills = [],
     cwd: _cwd,
     tools,
+    sessionManager,
     convertToLlm: customConvertToLlm,
     transformContext: customTransformContext,
     ...opts
@@ -52,6 +57,11 @@ export class FeaturedAgent {
           return messages
         }),
     })
+
+    if (sessionManager) {
+      this.sessionRecorder = new AgentSessionRecorder(sessionManager)
+      this.detachSessionRecorder = this.sessionRecorder.attach(this)
+    }
   }
 
   get state() {
@@ -108,5 +118,17 @@ export class FeaturedAgent {
 
   followUp(message: string) {
     this.agent.followUp({ role: "user", content: message, timestamp: Date.now() } as AgentMessage)
+  }
+
+  flushSession(): number {
+    return this.sessionRecorder?.flush(this.agent.state.messages) ?? 0
+  }
+
+  detachSessionPersistence() {
+    if (this.detachSessionRecorder) {
+      this.detachSessionRecorder()
+      this.detachSessionRecorder = undefined
+    }
+    this.sessionRecorder = undefined
   }
 }

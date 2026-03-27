@@ -2,7 +2,12 @@ import { expect, test, describe } from "vite-plus/test"
 import { mkdir, writeFile, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { extractSkillFrontmatter, importSkillsFromDirectory, buildSkillsCatalog } from "./skill.js"
+import {
+  extractSkillFrontmatter,
+  importSkillsFromDirectory,
+  buildSkillsCatalog,
+  loadAgentSkills,
+} from "./skill.js"
 import type { Skill } from "./skill.ts"
 
 let testDir: string
@@ -161,5 +166,163 @@ describe("buildSkillsCatalog", () => {
     expect(catalog).toContain("a&amp;b")
     expect(catalog).toContain("&lt;tag&gt;")
     expect(catalog).toContain("&quot;quotes&quot;")
+  })
+})
+
+describe("loadAgentSkills", () => {
+  test("loads built-in shared + role skills", async () => {
+    const root = join(tmpdir(), `misuzu-skill-test-${Date.now()}`)
+    const misuzuRoot = join(root, "misuzu")
+
+    await createSkill(
+      join(misuzuRoot, ".misuzu", "skills", "shared"),
+      "playwright-cli",
+      `---
+name: playwright-cli
+description: shared browser skill
+---
+builtin`,
+    )
+    await createSkill(
+      join(misuzuRoot, ".misuzu", "skills", "coordinator"),
+      "coord-only",
+      `---
+name: coord-only
+description: coordinator skill
+---
+builtin`,
+    )
+
+    const skills = loadAgentSkills({
+      role: "coordinator",
+      misuzuRoot,
+      launchDir: misuzuRoot,
+    })
+
+    expect(skills.map((s) => s.name).sort()).toEqual(["coord-only", "playwright-cli"])
+
+    await rm(root, { recursive: true, force: true })
+  })
+
+  test("loads workspace skills only when launch dir is not misuzu root", async () => {
+    const root = join(tmpdir(), `misuzu-skill-test-${Date.now()}`)
+    const misuzuRoot = join(root, "misuzu")
+    const launchDir = join(root, "workspace")
+
+    await createSkill(
+      join(misuzuRoot, ".misuzu", "skills", "coordinator"),
+      "dup-skill",
+      `---
+name: dup-skill
+description: builtin
+---
+builtin`,
+    )
+
+    await createSkill(
+      join(launchDir, ".misuzu", "skills", "coordinator"),
+      "dup-skill",
+      `---
+name: dup-skill
+description: workspace
+---
+workspace`,
+    )
+
+    const skills = loadAgentSkills({
+      role: "coordinator",
+      misuzuRoot,
+      launchDir,
+    })
+
+    const resolved = skills.find((s) => s.name === "dup-skill")
+    expect(resolved?.description).toBe("workspace")
+
+    const noWorkspace = loadAgentSkills({
+      role: "coordinator",
+      misuzuRoot,
+      launchDir: misuzuRoot,
+    })
+    expect(noWorkspace.find((s) => s.name === "dup-skill")?.description).toBe("builtin")
+
+    await rm(root, { recursive: true, force: true })
+  })
+
+  test("solver loads shared + solver and excludes coordinator", async () => {
+    const root = join(tmpdir(), `misuzu-skill-test-${Date.now()}`)
+    const misuzuRoot = join(root, "misuzu")
+
+    await createSkill(
+      join(misuzuRoot, ".misuzu", "skills", "coordinator"),
+      "coord-only",
+      `---
+name: coord-only
+description: coordinator only
+---
+coord`,
+    )
+    await createSkill(
+      join(misuzuRoot, ".misuzu", "skills", "solver"),
+      "solver-only",
+      `---
+name: solver-only
+description: solver only
+---
+solver`,
+    )
+    await createSkill(
+      join(misuzuRoot, ".misuzu", "skills", "shared"),
+      "shared-skill",
+      `---
+name: shared-skill
+description: shared only
+---
+shared`,
+    )
+
+    const skills = loadAgentSkills({
+      role: "solver",
+      misuzuRoot,
+      launchDir: misuzuRoot,
+    })
+
+    expect(skills.map((s) => s.name).sort()).toEqual(["shared-skill", "solver-only"])
+
+    await rm(root, { recursive: true, force: true })
+  })
+
+  test("accepts .mizusu workspace marker alias", async () => {
+    const root = join(tmpdir(), `misuzu-skill-test-${Date.now()}`)
+    const misuzuRoot = join(root, "misuzu")
+    const launchDir = join(root, "workspace")
+
+    await createSkill(
+      join(misuzuRoot, ".misuzu", "skills", "solver"),
+      "builtin-solver",
+      `---
+name: builtin-solver
+description: builtin solver
+---
+builtin`,
+    )
+    await createSkill(
+      join(launchDir, ".mizusu", "skills", "solver"),
+      "workspace-solver",
+      `---
+name: workspace-solver
+description: workspace solver
+---
+workspace`,
+    )
+
+    const skills = loadAgentSkills({
+      role: "solver",
+      misuzuRoot,
+      launchDir,
+    })
+
+    expect(skills.map((s) => s.name).sort()).toEqual(["builtin-solver", "workspace-solver"])
+
+    await rm(root, { recursive: true, force: true })
   })
 })

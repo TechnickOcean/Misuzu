@@ -4,6 +4,7 @@ export { Solver, type SolverOptions } from "./agents/misuzu-solver.js"
 export {
   Coordinator,
   type CoordinatorOptions,
+  type ResumeCoordinatorOptions,
   ModelPool,
   type ModelSlot,
   type Challenge,
@@ -20,11 +21,34 @@ export {
 } from "./features/compaction.js"
 export {
   type Skill,
+  type SkillRole,
   type SkillFrontmatter,
+  type AgentSkillLoadOptions,
   extractSkillFrontmatter,
   importSkillsFromDirectory,
+  importSkillsFromDirectorySync,
+  resolveMisuzuRoot,
+  loadAgentSkills,
+  loadBuiltinSkills,
+  loadWorkspaceSkills,
   buildSkillsCatalog,
 } from "./features/skill.js"
+export {
+  type SessionEntryBase,
+  type MessageEntry,
+  type CompactionEntry,
+  type ChallengeStateEntry,
+  type SessionEntry,
+  type CompetitionManifest,
+  type CompetitionPersistenceCreateOptions,
+  SessionManager,
+  AgentSessionRecorder,
+  CompetitionPersistence,
+  createWorkspaceId,
+  defaultWorkspacesRoot,
+  createCompetitionId,
+  defaultCompetitionsRoot,
+} from "./features/persistence.js"
 export {
   convertToLlm,
   type FlagResultMessage,
@@ -81,10 +105,3 @@ export {
   dockerStopTool,
   dockerRmTool,
 } from "./tools/misuzu/docker.js"
-export {
-  requestrepoTools,
-  requestrepoCreateTool,
-  requestrepoWaitTool,
-  requestrepoSetFileTool,
-  requestrepoAddDnsTool,
-} from "./tools/misuzu/requestrepo.js"

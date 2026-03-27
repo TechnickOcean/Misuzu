@@ -51,9 +51,9 @@ function createCoordinator(): Coordinator {
   const c = new Coordinator({
     model: loadModel(),
     cwd: process.cwd(),
+    workspaceRoot: process.cwd(),
   })
   c.state.thinkingLevel = defaultThinkingLevel
-  c.setTools([...c.state.tools, c.getCreateSolverTool() as any])
   watchAgent(c)
   return c
 }

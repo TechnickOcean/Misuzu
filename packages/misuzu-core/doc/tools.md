@@ -1,6 +1,6 @@
 # Tool System
 
-Misuzu-core provides base tools for file operations and shell access, plus CTF-specific tools for sandbox interaction, Docker management, and out-of-band testing. All tools implement the `AgentTool` interface from `@mariozechner/pi-agent-core`.
+Misuzu-core provides base tools for file operations and shell access, plus CTF-specific Docker tooling. All tools implement the `AgentTool` interface from `@mariozechner/pi-agent-core`.
 
 ## Table of Contents
 
@@ -24,7 +24,7 @@ Every tool in misuzu-core follows the same structure:
 4. **Factory function** that accepts a `cwd` parameter
 5. **Default instance** using `process.cwd()`
 
-This pattern enables tools to run locally or delegate execution to remote systems (sandbox containers, SSH) by swapping the operations implementation.
+This pattern enables tools to run locally or delegate execution to remote systems (for example Docker containers or SSH hosts) by swapping the operations implementation.
 
 ## Tool Definition Pattern
 
@@ -115,12 +115,12 @@ export const readTool = createReadTool(process.cwd())
 This pattern enables:
 
 - Creating tools scoped to a specific directory
-- Passing custom operations for sandbox/remote execution
+- Passing custom operations for container/remote execution
 - Testing with isolated working directories
 
 ```typescript
 // Solver agent creates tools scoped to challenge directory
-const tools = createBaseTools("/tmp/challenge-42")
+const tools = createBaseTools(resolve(process.cwd(), ".misuzu", "solvers", "challenge-42"))
 
 // Coordinator creates tools with default cwd
 const tools = createBaseTools(process.cwd())
@@ -178,23 +178,23 @@ const defaultEditOperations: EditOperations = {
 }
 ```
 
-### Sandbox Delegation
+### Container Delegation
 
-The Solver agent can swap operations to run tools inside a sandbox container:
+The Solver agent can swap operations to run tools inside a container:
 
 ```typescript
-// Create sandbox-backed operations
-const sandboxOps: EditOperations = {
-  readFile: (path) => sandboxExec(`cat ${path}`),
-  writeFile: (path, content) => sandboxExec(`cat > ${path}`, content),
-  access: (path) => sandboxExec(`test -f ${path}`),
+// Create container-backed operations
+const containerOps: EditOperations = {
+  readFile: (path) => dockerExec(`ctf-box`, `cat ${path}`),
+  writeFile: (path, content) => dockerExec(`ctf-box`, `cat > ${path}`, content),
+  access: (path) => dockerExec(`ctf-box`, `test -f ${path}`),
 }
 
-// Create tools that execute inside the sandbox
-const editTool = createEditTool("/challenge", { operations: sandboxOps })
+// Create tools that execute inside the container
+const editTool = createEditTool("/challenge", { operations: containerOps })
 ```
 
-This is the key mechanism that allows Solver agents to operate on challenge files inside isolated containers.
+This mechanism allows Solver agents to operate on challenge files inside isolated containers.
 
 ### Tool Operations Reference
 
@@ -463,22 +463,12 @@ Docker container management tools for building and running challenge services.
 | `docker_stop`  | `container: string`                                                 | Stop a container             |
 | `docker_rm`    | `container: string`                                                 | Remove a container           |
 
-All docker tools use `BashOperations` under the hood (delegating to sandbox if configured).
+All docker tools use `BashOperations` under the hood.
 
-Specially you can use sandbox image which is built in misuzu core. The sandbox image includes: pwntools, pycryptodome, z3-solver, RsaCtfTool, radare2, Ghidra, angr, capstone, volatility3, and many more CTF tools. See `builtins/tools/misuzu/sandbox/sandboxtools.txt` for the full list.
+## Built-in Skills
 
-### requestrepo
-
-Out-of-band (OOB) interaction testing via [requestrepo.com](https://requestrepo.com).
-
-| Tool                   | Parameters                                                              | Purpose                                     |
-| ---------------------- | ----------------------------------------------------------------------- | ------------------------------------------- |
-| `requestrepo_create`   | `token?: string`                                                        | Create a new session, returns subdomain URL |
-| `requestrepo_wait`     | `subdomain: string, timeout?: number`                                   | Wait for incoming HTTP request              |
-| `requestrepo_set_file` | `subdomain: string, path: string, content: string, statusCode?: number` | Set custom HTTP response                    |
-| `requestrepo_add_dns`  | `subdomain: string, recordType: string, value: string`                  | Add DNS record                              |
-
-Useful for SSRF testing, blind SQLi callbacks, and DNS rebinding attacks.
+- `shared/playwright-cli`: available to both Coordinator and Solver
+- `solver/requestrepo-oob`: available to Solver only
 
 ## Tool Collections
 
@@ -501,12 +491,11 @@ export const readOnlyTools: AgentTool<any>[] = [readTool, grepTool, findTool]
 // Factory collections (accept cwd)
 export function createBaseTools(cwd: string): AgentTool<any>[]
 export function createReadOnlyTools(cwd: string): AgentTool<any>[]
-export function createCtfTools(cwd: string): AgentTool<any>[] // base + docker + sandbox
 ```
 
 ### Agent Tool Assignments
 
-| Agent       | Tools                                                 |
-| ----------- | ----------------------------------------------------- |
-| Solver      | `createBaseTools(cwd)` + sandbox tools + docker tools |
-| Coordinator | `createReadOnlyTools(cwd)` + bash + requestrepo tools |
+| Agent       | Tools                                 |
+| ----------- | ------------------------------------- |
+| Solver      | `createBaseTools(cwd)` + docker tools |
+| Coordinator | `createReadOnlyTools(cwd)` + bash     |

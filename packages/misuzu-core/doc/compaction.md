@@ -318,7 +318,7 @@ The skill catalog is **inherently protected** from compaction because of where i
 │                                             │
 │  <available_skills>                         │  ← Skill catalog
 │    <skill>                                  │
-│      <name>agent-browser</name>             │
+│      <name>playwright-cli</name>            │
 │      <description>Browser automation...</desc│
 │      <location>/path/to/SKILL.md</location> │
 │    </skill>                                 │
