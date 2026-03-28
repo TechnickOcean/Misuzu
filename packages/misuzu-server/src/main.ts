@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path"
 import { getModels, type Api, type KnownProvider, type Model } from "@mariozechner/pi-ai"
 import { Coordinator, defaultWorkspacesRoot } from "misuzu-core"
 import { startMisuzuServer } from "./server.ts"
-import { MisuzuRuntimeHost } from "./runtime.ts"
+import { MisuzuRuntimeHost, type WorkspaceLoadOptions } from "./runtime.ts"
 import { loadProviderRegistryPlugins } from "./provider-registry.ts"
 
 interface CliOptions {
@@ -20,6 +20,7 @@ interface CliOptions {
   eventBufferSize: number
   sseHeartbeatMs: number
   autoContinueSolvers: boolean
+  idle: boolean
   token?: string
   tokenFile?: string
 }
@@ -44,41 +45,75 @@ async function main() {
   const modelResolver = (modelId: string) => modelMap.get(modelId)
   const defaultModel = options.models[0] ? modelMap.get(options.models[0]) : undefined
 
-  const coordinator = options.workspace
-    ? Coordinator.resumeFromWorkspace({
-        workspaceDir: options.workspace,
-        autoContinueSolvers: options.autoContinueSolvers,
-        workspaceRoot: options.workspaceRoot,
-        ctfPlatformUrl: options.ctfPlatformUrl,
-        models: options.models.length > 0 ? options.models : undefined,
-        model: defaultModel,
-        modelResolver,
-      })
-    : new Coordinator({
-        cwd: options.workspaceRoot,
-        workspaceRoot: options.workspaceRoot,
-        ctfPlatformUrl: options.ctfPlatformUrl,
-        models: options.models.length > 0 ? options.models : undefined,
-        modelConcurrency: options.modelConcurrency,
-        model: defaultModel,
-        modelResolver,
-      })
+  const onLoadWorkspace = async (loadOptions: WorkspaceLoadOptions): Promise<Coordinator> => {
+    const coordinator = Coordinator.resumeFromWorkspace({
+      workspaceDir: loadOptions.workspaceDir,
+      autoContinueSolvers: loadOptions.autoContinueSolvers ?? options.autoContinueSolvers,
+      workspaceRoot: options.workspaceRoot,
+      ctfPlatformUrl: options.ctfPlatformUrl,
+      models: options.models.length > 0 ? options.models : undefined,
+      model: defaultModel,
+      modelResolver,
+    })
 
-  const poolModelIds = Array.from(new Set(coordinator.modelPool.toJSON().map((slot) => slot.model)))
-  for (const modelId of poolModelIds) {
-    ensureModelLoaded(modelMap, modelId)
+    const poolModelIds = Array.from(
+      new Set(coordinator.modelPool.toJSON().map((slot) => slot.model)),
+    )
+    for (const modelId of poolModelIds) {
+      ensureModelLoaded(modelMap, modelId)
+    }
+
+    return coordinator
   }
 
-  const workspacesRoot = options.workspace
-    ? resolve(dirname(options.workspace))
+  let coordinator: Coordinator | null = null
+
+  if (!options.idle) {
+    coordinator = options.workspace
+      ? Coordinator.resumeFromWorkspace({
+          workspaceDir: options.workspace,
+          autoContinueSolvers: options.autoContinueSolvers,
+          workspaceRoot: options.workspaceRoot,
+          ctfPlatformUrl: options.ctfPlatformUrl,
+          models: options.models.length > 0 ? options.models : undefined,
+          model: defaultModel,
+          modelResolver,
+        })
+      : new Coordinator({
+          cwd: options.workspaceRoot,
+          workspaceRoot: options.workspaceRoot,
+          ctfPlatformUrl: options.ctfPlatformUrl,
+          models: options.models.length > 0 ? options.models : undefined,
+          modelConcurrency: options.modelConcurrency,
+          model: defaultModel,
+          modelResolver,
+        })
+
+    const poolModelIds = Array.from(
+      new Set(coordinator.modelPool.toJSON().map((slot) => slot.model)),
+    )
+    for (const modelId of poolModelIds) {
+      ensureModelLoaded(modelMap, modelId)
+    }
+  }
+
+  const workspacesRoot = coordinator
+    ? options.workspace
+      ? resolve(dirname(options.workspace))
+      : defaultWorkspacesRoot(options.workspaceRoot)
     : defaultWorkspacesRoot(options.workspaceRoot)
 
   let requestRestart = () => {}
 
   const runtime = new MisuzuRuntimeHost(coordinator, {
     workspacesRoot,
+    workspaceRoot: options.workspaceRoot,
     replayLimit: options.eventBufferSize,
-    startupEventType: options.workspace ? "runtime.resumed" : "runtime.started",
+    startupEventType: options.idle
+      ? "runtime.idle"
+      : options.workspace
+        ? "runtime.resumed"
+        : "runtime.started",
     ensureModelAvailable: async (modelId) => {
       ensureModelLoaded(modelMap, modelId)
     },
@@ -87,9 +122,10 @@ async function main() {
         requestRestart()
       }, 80)
     },
+    onLoadWorkspace,
   })
 
-  const { token, tokenPath } = ensureAuthToken(coordinator, options)
+  const { token, tokenPath } = ensureAuthTokenForIdle(coordinator, options)
   const { server } = startMisuzuServer(runtime, {
     hostname: options.host,
     port: options.port,
@@ -97,9 +133,13 @@ async function main() {
     sseHeartbeatMs: options.sseHeartbeatMs,
   })
 
-  const manifest = coordinator.persistence.readManifest()
-  console.log(`[misuzu-server] listening on http://${options.host}:${options.port}`)
-  console.log(`[misuzu-server] workspace: ${manifest.id}`)
+  if (coordinator) {
+    const manifest = coordinator.persistence.readManifest()
+    console.log(`[misuzu-server] listening on http://${options.host}:${options.port}`)
+    console.log(`[misuzu-server] workspace: ${manifest.id}`)
+  } else {
+    console.log(`[misuzu-server] listening on http://${options.host}:${options.port} (idle mode)`)
+  }
   console.log(`[misuzu-server] token file: ${tokenPath}`)
   if (options.models.length > 0) {
     console.log(`[misuzu-server] models: ${options.models.join(", ")}`)
@@ -111,7 +151,7 @@ async function main() {
     if (shuttingDown) return
     shuttingDown = true
     runtime.close()
-    coordinator.persistence.close()
+    coordinator?.persistence.close()
     server.close(() => {
       process.exit(0)
     })
@@ -187,6 +227,7 @@ function parseCliOptions(argv: string[]): CliOptions {
       15000,
     ),
     autoContinueSolvers: !flags.has("no-auto-continue-solvers"),
+    idle: flags.has("idle"),
     token: values.get("token") ?? process.env.MISUZU_SERVER_TOKEN,
     tokenFile: values.get("token-file") ?? process.env.MISUZU_SERVER_TOKEN_FILE,
   }
@@ -274,13 +315,13 @@ function loadModel(modelRef: string): Model<Api> {
   )
 }
 
-function ensureAuthToken(
-  coordinator: Coordinator,
+function ensureAuthTokenForIdle(
+  coordinator: Coordinator | null,
   options: Pick<CliOptions, "token" | "tokenFile" | "workspaceRoot">,
 ) {
-  const manifest = coordinator.persistence.readManifest()
+  const workspaceId = coordinator ? coordinator.persistence.readManifest().id : "idle"
   const tokenFilePath = resolve(
-    options.tokenFile ?? join(options.workspaceRoot, ".misuzu", "runtime", manifest.id, "token"),
+    options.tokenFile ?? join(options.workspaceRoot, ".misuzu", "runtime", workspaceId, "token"),
   )
 
   mkdirSync(dirname(tokenFilePath), { recursive: true })
