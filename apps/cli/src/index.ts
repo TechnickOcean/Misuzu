@@ -56,6 +56,7 @@ interface SolverSnapshot {
 
 interface RuntimeSnapshot {
   protocolVersion: number
+  coordinatorStatus: "active" | "idle"
   workspaceId?: string
   workspaceRoot: string
   modelPool: {
@@ -111,14 +112,37 @@ interface ServerRestartPayload {
   graceful?: boolean
 }
 
+interface SolverStopPayload {
+  solverId: string
+}
+
+interface LoadWorkspacePayload {
+  workspaceDir: string
+  autoContinueSolvers?: boolean
+}
+
+interface ShutdownCoordinatorPayload {
+  graceful?: boolean
+}
+
+interface WorkspaceSummary {
+  workspaceId: string
+  workspaceDir: string
+  platformUrl?: string
+  updatedAt?: string
+}
+
 interface RuntimeCommandPayloadMap {
   coordinator_prompt: CoordinatorPromptPayload
   solver_steer: SolverSteerPayload
   solver_abort: SolverAbortPayload
   solver_continue: SolverContinuePayload
+  solver_stop: SolverStopPayload
   add_model_to_pool: AddModelToPoolPayload
   set_model_concurrency: SetModelConcurrencyPayload
   server_restart: ServerRestartPayload
+  load_workspace: LoadWorkspacePayload
+  shutdown_coordinator: ShutdownCoordinatorPayload
 }
 
 type RuntimeCommandName = keyof RuntimeCommandPayloadMap
@@ -280,6 +304,38 @@ class MisuzuServerClient {
     })
   }
 
+  async checkHealth(signal?: AbortSignal): Promise<{
+    ok: boolean
+    coordinatorStatus: "active" | "idle"
+    workspaceId?: string
+  }> {
+    const response = await fetch(`${this.serverUrl}/health`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+      signal,
+    })
+    return (await response.json()) as {
+      ok: boolean
+      coordinatorStatus: "active" | "idle"
+      workspaceId?: string
+    }
+  }
+
+  async listWorkspaces(signal?: AbortSignal): Promise<{
+    ok: boolean
+    workspaces: WorkspaceSummary[]
+  }> {
+    const response = await fetch(`${this.serverUrl}/workspaces`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+      signal,
+    })
+    return (await response.json()) as {
+      ok: boolean
+      workspaces: WorkspaceSummary[]
+    }
+  }
+
   private buildHeaders(): Record<string, string> {
     if (!this.token) return {}
     return {
@@ -313,6 +369,9 @@ class MisuzuCliApp {
   private refreshTimer?: NodeJS.Timeout
   private refreshInFlight = false
   private lastSeq = 0
+  private mode: "dashboard" | "workspace-picker" = "dashboard"
+  private workspaceOptions: WorkspaceSummary[] = []
+  private workspaceCursor = 0
 
   constructor(options: CliOptions) {
     this.options = options
@@ -328,15 +387,70 @@ class MisuzuCliApp {
           { name: "steer", description: "Send hint to selected solver" },
           { name: "abort", description: "Abort selected solver" },
           { name: "continue", description: "Continue selected solver" },
+          { name: "stop", description: "Stop solver [id]" },
           { name: "models", description: "Manage model pool and concurrency" },
           { name: "server", description: "Server operations (restart)" },
+          { name: "kernel", description: "Kernel operations (stop)" },
           { name: "prompt", description: "Send prompt to coordinator" },
+          { name: "resume", description: "Select and resume workspace" },
           { name: "clear-events", description: "Clear local event panel" },
           { name: "quit", description: "Quit TUI" },
         ],
         process.cwd(),
       ),
     )
+  }
+
+  async checkHealth(): Promise<{
+    ok: boolean
+    coordinatorStatus: "active" | "idle"
+    workspaceId?: string
+  }> {
+    return this.client.checkHealth()
+  }
+
+  async startInWorkspacePicker() {
+    this.editor.onSubmit = (input) => {
+      void this.handleUserInput(input)
+    }
+
+    this.helpText.setText(this.renderHelpText())
+    this.tui.addChild(this.dashboardText)
+    this.tui.addChild(this.statusText)
+    this.tui.addChild(this.helpText)
+    this.tui.addChild(this.editor)
+    this.tui.setFocus(this.editor)
+
+    this.tui.addInputListener((data) => {
+      if (matchesKey(data, Key.ctrl("c"))) {
+        this.stop(0)
+        return { consume: true }
+      }
+
+      if (this.mode === "workspace-picker") {
+        if (matchesKey(data, Key.up) || matchesKey(data, Key.alt("k"))) {
+          this.moveWorkspaceCursor(-1)
+          return { consume: true }
+        }
+        if (matchesKey(data, Key.down) || matchesKey(data, Key.alt("j"))) {
+          this.moveWorkspaceCursor(1)
+          return { consume: true }
+        }
+        if (matchesKey(data, Key.enter)) {
+          void this.handleWorkspacePickerSelect()
+          return { consume: true }
+        }
+        return { consume: true }
+      }
+
+      return undefined
+    })
+
+    this.tui.start()
+    this.setStatus("Server is idle. No active coordinator.", "yellow")
+    this.render()
+
+    await this.enterWorkspacePicker()
   }
 
   async start() {
@@ -354,6 +468,23 @@ class MisuzuCliApp {
     this.tui.addInputListener((data) => {
       if (matchesKey(data, Key.ctrl("c"))) {
         this.stop(0)
+        return { consume: true }
+      }
+
+      // Workspace picker navigation
+      if (this.mode === "workspace-picker") {
+        if (matchesKey(data, Key.up) || matchesKey(data, Key.alt("k"))) {
+          this.moveWorkspaceCursor(-1)
+          return { consume: true }
+        }
+        if (matchesKey(data, Key.down) || matchesKey(data, Key.alt("j"))) {
+          this.moveWorkspaceCursor(1)
+          return { consume: true }
+        }
+        if (matchesKey(data, Key.enter)) {
+          void this.handleWorkspacePickerSelect()
+          return { consume: true }
+        }
         return { consume: true }
       }
 
@@ -433,7 +564,7 @@ class MisuzuCliApp {
       case "":
       case "help":
         this.setStatus(
-          "Commands: /help /refresh /tab /select /steer /abort /continue /models /server restart /prompt /clear-events /quit",
+          "Commands: /help /refresh /tab /select /steer /abort /continue /stop /models /server restart /kernel stop /resume /prompt /clear-events /quit",
         )
         return
 
@@ -490,6 +621,18 @@ class MisuzuCliApp {
 
       case "restart-server":
         await this.handleServerCommand("restart")
+        return
+
+      case "stop":
+        await this.handleSolverStopCommand(rest)
+        return
+
+      case "kernel":
+        await this.handleKernelCommand(rest)
+        return
+
+      case "resume":
+        await this.enterWorkspacePicker()
         return
 
       default:
@@ -763,6 +906,153 @@ class MisuzuCliApp {
     return this.state.snapshot.solvers.find((solver) => solver.solverId === value)?.solverId
   }
 
+  private async handleSolverStopCommand(argument: string) {
+    const solverId = this.resolveSolverId(argument.trim()) ?? this.state.selectedSolverId
+    if (!solverId) {
+      this.setStatus("No solver selected. Use /stop <solver-id>.", "yellow")
+      return
+    }
+
+    const response = await this.client.sendCommand({
+      command: "solver_stop",
+      payload: { solverId },
+    })
+    this.handleCommandResponse(response, `Solver ${solverId} stopped.`)
+  }
+
+  private async handleKernelCommand(argument: string) {
+    const action = argument.trim().toLowerCase()
+    if (action !== "stop") {
+      this.setStatus("Usage: /kernel stop", "yellow")
+      return
+    }
+
+    const response = await this.client.sendCommand({
+      command: "shutdown_coordinator",
+      payload: { graceful: true },
+    })
+
+    if (!response.ok) {
+      this.setStatus(`Kernel stop failed: ${response.error ?? "request failed"}`, "red")
+      return
+    }
+
+    this.setStatus("Coordinator stopped. Server is idle.", "green")
+    this.state.snapshot = undefined
+    this.state.selectedSolverId = undefined
+    this.state.events = []
+    this.render()
+    await this.enterWorkspacePicker()
+  }
+
+  async enterWorkspacePicker() {
+    this.mode = "workspace-picker"
+    this.workspaceCursor = 0
+    this.setStatus("Fetching available workspaces...")
+
+    try {
+      const result = await this.client.listWorkspaces()
+      this.workspaceOptions = result.workspaces
+      this.renderWorkspacePicker()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "failed to list workspaces"
+      this.setStatus(`Workspace list error: ${message}`, "red")
+      this.mode = "dashboard"
+      this.render()
+    }
+  }
+
+  private moveWorkspaceCursor(direction: number) {
+    const maxIndex = this.workspaceOptions.length // last index = "Create new"
+    this.workspaceCursor = Math.max(0, Math.min(maxIndex, this.workspaceCursor + direction))
+    this.renderWorkspacePicker()
+  }
+
+  private renderWorkspacePicker() {
+    const lines: string[] = []
+    lines.push(
+      `${ANSI.bold}misuzu-cli${ANSI.reset}  ${ANSI.gray}${this.options.serverUrl}${ANSI.reset}`,
+    )
+    lines.push("")
+
+    if (this.workspaceOptions.length === 0) {
+      lines.push("No workspaces found.")
+      lines.push("")
+      lines.push(`${ANSI.cyan}>${ANSI.reset} ${ANSI.yellow}[Create new workspace]${ANSI.reset}`)
+    } else {
+      lines.push("Select a workspace to resume:")
+      lines.push("")
+
+      for (let i = 0; i < this.workspaceOptions.length; i++) {
+        const ws = this.workspaceOptions[i]
+        const prefix = i === this.workspaceCursor ? `${ANSI.cyan}>${ANSI.reset}` : " "
+        const updated = ws.updatedAt ? ws.updatedAt.slice(0, 19) : "n/a"
+        lines.push(`  ${prefix} ${ws.workspaceId}  ${ANSI.gray}(updated: ${updated})${ANSI.reset}`)
+      }
+
+      const createIdx = this.workspaceOptions.length
+      const createPrefix = this.workspaceCursor === createIdx ? `${ANSI.cyan}>${ANSI.reset}` : " "
+      lines.push(`  ${createPrefix} ${ANSI.yellow}[Create new workspace]${ANSI.reset}`)
+    }
+
+    lines.push("")
+    lines.push(`${ANSI.gray}Up/Down: navigate  Enter: select  Ctrl+C: quit${ANSI.reset}`)
+
+    this.dashboardText.setText(lines.join("\n"))
+    this.tui.requestRender()
+  }
+
+  private async handleWorkspacePickerSelect() {
+    const isCreateNew = this.workspaceCursor === this.workspaceOptions.length
+
+    if (isCreateNew) {
+      this.setStatus("Creating new workspace...", "yellow")
+      this.mode = "dashboard"
+      this.state.connection = "connected"
+      this.render()
+
+      // Start a fresh coordinator via the server
+      const response = await this.client.sendCommand({
+        command: "load_workspace",
+        payload: { workspaceDir: "" },
+      })
+      if (!response.ok) {
+        this.setStatus(
+          `New workspace creation requires server restart. Use: /server restart`,
+          "yellow",
+        )
+      }
+      return
+    }
+
+    const selected = this.workspaceOptions[this.workspaceCursor]
+    if (!selected) return
+
+    this.setStatus(`Loading workspace ${selected.workspaceId}...`, "yellow")
+
+    try {
+      const response = await this.client.sendCommand({
+        command: "load_workspace",
+        payload: { workspaceDir: selected.workspaceDir },
+      })
+
+      if (!response.ok) {
+        this.setStatus(`Load failed: ${response.error ?? "request failed"}`, "red")
+        return
+      }
+
+      this.setStatus(`Workspace ${selected.workspaceId} loaded.`, "green")
+      this.mode = "dashboard"
+      this.state.connection = "connected"
+      this.lastSeq = 0
+      await this.refreshSnapshot("workspace loaded")
+      void this.runEventLoop()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "load failed"
+      this.setStatus(`Load error: ${message}`, "red")
+    }
+  }
+
   private async runEventLoop() {
     while (!this.stopped) {
       this.state.connection = this.state.snapshot ? "reconnecting" : "connecting"
@@ -866,9 +1156,13 @@ class MisuzuCliApp {
       return lines.join("\n")
     }
 
+    const coordStatus =
+      snapshot.coordinatorStatus === "active"
+        ? `${ANSI.green}active${ANSI.reset}`
+        : `${ANSI.yellow}idle${ANSI.reset}`
     const usedSlots = snapshot.modelPool.total - snapshot.modelPool.available
     lines.push(
-      `Workspace: ${snapshot.workspaceId ?? "n/a"} | Slots: ${usedSlots}/${snapshot.modelPool.total} | Solvers: ${snapshot.solvers.length} | Queue: ${snapshot.challengeQueue.length} | URL Pending: ${snapshot.urlPendingQueue.length}`,
+      `Coordinator: ${coordStatus} | Workspace: ${snapshot.workspaceId ?? "n/a"} | Slots: ${usedSlots}/${snapshot.modelPool.total} | Solvers: ${snapshot.solvers.length} | Queue: ${snapshot.challengeQueue.length} | URL Pending: ${snapshot.urlPendingQueue.length}`,
     )
 
     const poolByModel = summarizeModelPool(snapshot.modelPool.slots)
@@ -970,7 +1264,7 @@ class MisuzuCliApp {
   private renderHelpText(): string {
     return [
       `${ANSI.gray}Shortcuts:${ANSI.reset} Ctrl+C quit | Ctrl+R refresh | Alt+1 coordinator tab | Alt+2 solver tab | Alt+J/Alt+K select solver`,
-      `${ANSI.gray}Commands:${ANSI.reset} /help /refresh /tab coordinator|solver [id] /select <id|next|prev> /steer [id] <msg> /abort [id] /continue [id] /models add <model> [n] /models concurrency <model> <n> /server restart /prompt <msg> /clear-events /quit`,
+      `${ANSI.gray}Commands:${ANSI.reset} /help /refresh /tab coordinator|solver [id] /select <id|next|prev> /steer [id] <msg> /abort [id] /continue [id] /stop [id] /models add <model> [n] /models concurrency <model> <n> /server restart /kernel stop /resume /prompt <msg> /clear-events /quit`,
       `${ANSI.gray}Input:${ANSI.reset} plain text sends coordinator_prompt`,
     ].join("\n")
   }
@@ -1179,7 +1473,7 @@ function launchDaemon(options: CliOptions, token: string): DaemonLaunchResult {
     "--host",
     endpoint.host,
     "--model",
-    "rightcode/gpt-5.4",
+    "swpumc/gpt-5.2-codex",
     "--port",
     String(endpoint.port),
     "--workspace-root",
@@ -1384,6 +1678,18 @@ async function main() {
     ...options,
     token,
   })
+
+  // Check if server is idle before starting TUI
+  try {
+    const health = await app.checkHealth()
+    if (health.coordinatorStatus === "idle") {
+      // Start TUI in workspace picker mode
+      await app.startInWorkspacePicker()
+      return
+    }
+  } catch {
+    // Health check failed, proceed with normal start
+  }
 
   await app.start()
 }
