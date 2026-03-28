@@ -788,3 +788,62 @@ describe("Coordinator queue dispatch", () => {
     await rm(launchDir, { recursive: true, force: true })
   })
 })
+
+describe("Coordinator flag hygiene", () => {
+  test("trims whitespace before persisting confirmed flag", async () => {
+    const launchDir = join(tmpdir(), `misuzu-flag-trim-${Date.now()}`)
+    await mkdir(launchDir, { recursive: true })
+
+    const coordinator = new Coordinator({
+      cwd: launchDir,
+      workspaceRoot: launchDir,
+      models: ["rightcode/gpt-5.4"],
+      modelPool: new ModelPool(["rightcode/gpt-5.4"]),
+    })
+
+    coordinator.confirmSolverFlag("flag-1", "  CTF{trim-me}  ", true)
+
+    const state = coordinator.persistence.loadSolverState<{ flag?: string; status?: string }>(
+      "flag-1",
+    )
+    expect(state?.status).toBe("solved")
+    expect(state?.flag).toBe("CTF{trim-me}")
+
+    coordinator.persistence.close()
+    await rm(launchDir, { recursive: true, force: true })
+  })
+
+  test("marks suspicious reported flags in tool response", async () => {
+    const launchDir = join(tmpdir(), `misuzu-flag-shape-${Date.now()}`)
+    await mkdir(launchDir, { recursive: true })
+
+    const coordinator = new Coordinator({
+      cwd: launchDir,
+      workspaceRoot: launchDir,
+      models: ["rightcode/gpt-5.4"],
+      modelPool: new ModelPool(["rightcode/gpt-5.4"]),
+    })
+
+    const internal = coordinator as unknown as {
+      createSolverReportFlagTool: (challengeId: string) => {
+        execute: (
+          toolCallId: string,
+          params: { flag: string; details?: string },
+        ) => Promise<{ content: Array<{ type: string; text?: string }> }>
+      }
+    }
+
+    const tool = internal.createSolverReportFlagTool("flag-shape-1")
+    const result = await tool.execute("tool-flag-shape", { flag: "  no-braces-flag  " })
+    const text = result.content.find((chunk) => chunk.type === "text")?.text ?? ""
+    expect(text).toContain("suspicious")
+
+    const flagMessage = coordinator.state.messages.find(
+      (message) => message.role === "flagResult",
+    ) as { role: "flagResult"; flag: string } | undefined
+    expect(flagMessage?.flag).toBe("no-braces-flag")
+
+    coordinator.persistence.close()
+    await rm(launchDir, { recursive: true, force: true })
+  })
+})

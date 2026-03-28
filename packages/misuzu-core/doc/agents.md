@@ -124,6 +124,7 @@ On finalize:
 - `update_solver_environment`: verify/apply URL or notes to solver environment file
 - `confirm_solver_flag`: confirm/reject solver flag and update state/writeup flow
 - `create_solver` without attachments requires a remote URL, otherwise challenge enters `url_pending`
+- Flag submission hygiene: trim candidate flags and reject obviously malformed values before platform submit
 
 ## URL Pending Queue
 

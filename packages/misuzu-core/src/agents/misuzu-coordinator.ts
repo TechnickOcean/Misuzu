@@ -1012,20 +1012,32 @@ export class Coordinator extends FeaturedAgent {
     return tool
   }
 
+  private normalizeFlagInput(flag: string): {
+    normalized: string
+    trimmedWhitespace: boolean
+    plausible: boolean
+  } {
+    const normalized = flag.trim()
+    const trimmedWhitespace = normalized !== flag
+    const plausible = /^[^\s{}]{1,32}\{[^\s].+\}$/.test(normalized)
+    return { normalized, trimmedWhitespace, plausible }
+  }
+
   confirmSolverFlag(challengeId: string, flag: string, correct: boolean, message?: string) {
     const solver = this.solvers.get(challengeId)
     const timestamp = new Date().toISOString()
+    const normalized = this.normalizeFlagInput(flag)
 
     if (correct) {
       this.persistence.appendSolverEnvironmentNote(
         challengeId,
-        `Coordinator confirmed flag correctness: ${flag}`,
+        `Coordinator confirmed flag correctness: ${normalized.normalized}`,
       )
       this.persistence.appendSolverWriteup(
         challengeId,
         [
           `## Flag Confirmed (${timestamp})`,
-          `- flag: ${flag}`,
+          `- flag: ${normalized.normalized}`,
           message ? `- notes: ${message}` : "- notes: (none)",
           "",
           "### Repro Steps",
@@ -1037,30 +1049,48 @@ export class Coordinator extends FeaturedAgent {
       this.persistence.saveSolverState(challengeId, {
         solverId: challengeId,
         status: "solved",
-        flag,
+        flag: normalized.normalized,
         message,
+        trimmedWhitespace: normalized.trimmedWhitespace,
+        plausibleFlagShape: normalized.plausible,
         updatedAt: timestamp,
       })
       solver?.notifyFlagConfirmed(message)
     } else {
       this.persistence.appendSolverEnvironmentNote(
         challengeId,
-        `Coordinator rejected submitted flag: ${flag}`,
+        `Coordinator rejected submitted flag: ${normalized.normalized}`,
       )
       this.persistence.saveSolverState(challengeId, {
         solverId: challengeId,
         status: "solving",
-        lastRejectedFlag: flag,
-        flag,
+        lastRejectedFlag: normalized.normalized,
+        flag: normalized.normalized,
         message,
+        trimmedWhitespace: normalized.trimmedWhitespace,
+        plausibleFlagShape: normalized.plausible,
         updatedAt: timestamp,
       })
       solver?.steer(
         [
-          `Coordinator rejected submitted flag: ${flag}`,
+          `Coordinator rejected submitted flag: ${normalized.normalized}`,
           message ? `Reason: ${message}` : "No rejection reason provided.",
           "Continue solving and update scripts as needed.",
         ].join("\n"),
+      )
+    }
+
+    if (normalized.trimmedWhitespace) {
+      this.persistence.appendSolverEnvironmentNote(
+        challengeId,
+        `Flag hygiene: trimmed leading/trailing whitespace before processing (${normalized.normalized}).`,
+      )
+    }
+
+    if (!normalized.plausible) {
+      this.persistence.appendSolverEnvironmentNote(
+        challengeId,
+        `Flag hygiene warning: submitted flag looks suspicious (${normalized.normalized}).`,
       )
     }
 
@@ -1126,11 +1156,20 @@ export class Coordinator extends FeaturedAgent {
       parameters: schema,
       execute: async (_toolCallId, params: ReportFlagParams) => {
         const now = Date.now()
+        const normalized = this.normalizeFlagInput(params.flag)
+        const hygieneNotes = [
+          normalized.trimmedWhitespace
+            ? `Whitespace was trimmed before submission: ${normalized.normalized}`
+            : undefined,
+          !normalized.plausible
+            ? "Flag shape looks suspicious (expected token-with-braces style)."
+            : undefined,
+        ].filter((item): item is string => Boolean(item))
 
         this.appendMessage({
           role: "flagResult",
           challengeId,
-          flag: params.flag,
+          flag: normalized.normalized,
           correct: false,
           message:
             params.details ??
@@ -1141,8 +1180,10 @@ export class Coordinator extends FeaturedAgent {
         this.persistence.saveSolverState(challengeId, {
           solverId: challengeId,
           status: "solving",
-          latestSubmittedFlag: params.flag,
+          latestSubmittedFlag: normalized.normalized,
           details: params.details,
+          trimmedWhitespace: normalized.trimmedWhitespace,
+          plausibleFlagShape: normalized.plausible,
           updatedAt: new Date(now).toISOString(),
         })
         this.persistCoordinatorState()
@@ -1151,12 +1192,17 @@ export class Coordinator extends FeaturedAgent {
           content: [
             {
               type: "text" as const,
-              text: `Flag submitted to coordinator: ${params.flag}`,
+              text: [
+                `Flag submitted to coordinator: ${normalized.normalized}`,
+                ...hygieneNotes,
+              ].join("\n"),
             },
           ],
           details: {
             challengeId,
-            flag: params.flag,
+            flag: normalized.normalized,
+            trimmedWhitespace: normalized.trimmedWhitespace,
+            plausibleFlagShape: normalized.plausible,
           },
         }
       },

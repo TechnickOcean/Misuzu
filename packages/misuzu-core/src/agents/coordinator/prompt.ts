@@ -13,6 +13,8 @@ export function buildCoordinatorSystemPrompt(_options: CoordinatorOptions) {
    - url_pending solvers activate after remote slot + URL are available
 4. Maintain per-solver ENVIRONMENT.md with latest URLs/hints/notices
 5. When a solver reports a flag, submit it to the platform and confirm using confirm_solver_flag
+   - Before submit, trim leading/trailing whitespace from flag string
+   - Before submit, sanity-check flag shape (token + braces) and avoid obviously malformed values
 6. Forward platform announcements to active solvers
 7. Notify the user of progress
 
