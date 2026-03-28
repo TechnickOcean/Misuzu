@@ -27,6 +27,7 @@ export interface EventQuery {
 const IMPORTANT_EVENT_TYPES = new Set<string>([
   "runtime.started",
   "runtime.resumed",
+  "runtime.idle",
   "runtime.command.accepted",
   "runtime.command.executed",
   "error",
@@ -39,6 +40,7 @@ const IMPORTANT_EVENT_TYPES = new Set<string>([
   "solver.tool.end",
   "solver.flag.reported",
   "solver.stopped",
+  "coordinator.shutdown",
 ])
 
 function isRuntimeJsonObject(
@@ -170,6 +172,14 @@ export function formatImportantEvent(event: RuntimeEventEnvelope): string {
   if (event.type === "error") {
     const message = payloadString(event.payload, "message") ?? compactJson(event.payload)
     return `${time} [ERR] ${truncate(message, 100)}`
+  }
+
+  if (event.type === "runtime.idle") {
+    return `${time} [IDLE] server is idle, no coordinator loaded`
+  }
+
+  if (event.type === "coordinator.shutdown") {
+    return `${time} [SHUTDOWN] coordinator stopped`
   }
 
   return `${time} [${event.type}] ${truncate(compactJson(event.payload), 80)}`

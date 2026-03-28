@@ -36,6 +36,7 @@ export interface SolverSnapshot {
 
 export interface RuntimeSnapshot {
   protocolVersion: number
+  coordinatorStatus: "active" | "idle"
   workspaceId?: string
   workspaceRoot: string
   modelPool: {
@@ -124,9 +125,12 @@ export interface RuntimeCommandPayloadMap {
   solver_steer: SolverSteerCommandPayload
   solver_abort: SolverAbortCommandPayload
   solver_continue: SolverContinueCommandPayload
+  solver_stop: SolverStopCommandPayload
   server_restart: ServerRestartCommandPayload
   add_model_to_pool: AddModelToPoolCommandPayload
   set_model_concurrency: SetModelConcurrencyCommandPayload
+  load_workspace: LoadWorkspaceCommandPayload
+  shutdown_coordinator: ShutdownCoordinatorCommandPayload
 }
 
 export type RuntimeCommandName = keyof RuntimeCommandPayloadMap
@@ -146,6 +150,23 @@ export interface RuntimeCommandResponse<TPayload extends RuntimeJsonValue = Runt
   requestId?: string
   payload?: TPayload
   error?: string
+}
+
+export interface LoadWorkspaceCommandPayload {
+  workspaceDir: string
+  autoContinueSolvers?: boolean
+}
+
+export interface SolverStopCommandPayload {
+  solverId: string
+}
+
+export interface ShutdownCoordinatorCommandPayload {
+  graceful?: boolean
+}
+
+export interface LoadWorkspaceResultPayload {
+  workspaceId: string
 }
 
 export interface WorkspaceSummary {

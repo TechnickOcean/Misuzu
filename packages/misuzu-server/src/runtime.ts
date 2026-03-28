@@ -3,6 +3,7 @@ import { join, resolve } from "node:path"
 import type { AgentEvent, AgentMessage, AgentTool } from "@mariozechner/pi-agent-core"
 import { Coordinator, defaultWorkspacesRoot, type Solver } from "misuzu-core"
 import type {
+  LoadWorkspaceResultPayload,
   RuntimeCommandRequest,
   RuntimeCommandRequestFor,
   RuntimeCommandResponse,
@@ -14,12 +15,19 @@ import type {
 } from "./protocol.ts"
 import type { RuntimeHost } from "./runtime-host.ts"
 
+export interface WorkspaceLoadOptions {
+  workspaceDir: string
+  autoContinueSolvers?: boolean
+}
+
 export interface MisuzuRuntimeHostOptions {
   workspacesRoot?: string
+  workspaceRoot?: string
   replayLimit?: number
-  startupEventType?: "runtime.started" | "runtime.resumed"
+  startupEventType?: "runtime.started" | "runtime.resumed" | "runtime.idle"
   ensureModelAvailable?: (modelId: string) => Promise<void> | void
   onServerRestartRequested?: () => Promise<void> | void
+  onLoadWorkspace?: (options: WorkspaceLoadOptions) => Promise<Coordinator>
 }
 
 interface WorkspaceManifestRecord {
@@ -44,39 +52,147 @@ interface UrlPendingSnapshotItem {
 
 type CoordinatorToolName = "create_solver" | "update_solver_environment" | "confirm_solver_flag"
 
+interface CoordinatorWithQueues {
+  challengeQueue: Array<{
+    challengeId: string
+    challengeName: string
+    category: string
+    difficulty?: number
+  }>
+  urlPendingQueue: Array<{
+    challengeId: string
+    challengeName: string
+    category: string
+    difficulty?: number
+  }>
+  dispatchQueuedChallenges: () => Promise<void>
+}
+
 export class MisuzuRuntimeHost implements RuntimeHost {
   private readonly listeners = new Set<(event: RuntimeEventEnvelope) => void>()
   private readonly events: RuntimeEventEnvelope[] = []
   private readonly solverSubscriptions = new Map<string, () => void>()
   private readonly replayLimit: number
   private readonly workspacesRoot: string
+  private readonly workspaceRoot: string
   private readonly ensureModelAvailable?: (modelId: string) => Promise<void> | void
   private readonly onServerRestartRequested?: () => Promise<void> | void
+  private readonly onLoadWorkspace?: (options: WorkspaceLoadOptions) => Promise<Coordinator>
   private coordinatorSubscription?: () => void
+  private coordinator: Coordinator | null
   private seq = 0
   private commandQueue: Promise<void> = Promise.resolve()
 
-  constructor(
-    private readonly coordinator: Coordinator,
-    options: MisuzuRuntimeHostOptions = {},
-  ) {
+  constructor(coordinator: Coordinator | null, options: MisuzuRuntimeHostOptions = {}) {
+    this.coordinator = coordinator
+    this.workspaceRoot = options.workspaceRoot ?? coordinator?.workspaceRoot ?? process.cwd()
     this.workspacesRoot = resolve(
-      options.workspacesRoot ?? defaultWorkspacesRoot(this.coordinator.workspaceRoot),
+      options.workspacesRoot ?? defaultWorkspacesRoot(this.workspaceRoot),
     )
     this.replayLimit = Math.max(100, options.replayLimit ?? 1000)
     this.ensureModelAvailable = options.ensureModelAvailable
     this.onServerRestartRequested = options.onServerRestartRequested
+    this.onLoadWorkspace = options.onLoadWorkspace
 
-    this.coordinatorSubscription = this.coordinator.subscribe((event) => {
-      this.handleCoordinatorEvent(event)
+    if (this.coordinator) {
+      this.coordinatorSubscription = this.coordinator.subscribe((event) => {
+        this.handleCoordinatorEvent(event)
+        this.syncSolverSubscriptions()
+      })
       this.syncSolverSubscriptions()
+    }
+
+    const eventType = this.coordinator
+      ? (options.startupEventType ?? "runtime.started")
+      : "runtime.idle"
+
+    this.publish("server", eventType, {
+      workspaceId: this.tryWorkspaceId() ?? "unavailable",
+      workspaceRoot: this.workspaceRoot,
+    })
+  }
+
+  setCoordinator(coordinator: Coordinator | null): void {
+    // Unsubscribe from old coordinator
+    if (this.coordinatorSubscription) {
+      this.coordinatorSubscription()
+      this.coordinatorSubscription = undefined
+    }
+
+    for (const unsubscribe of this.solverSubscriptions.values()) {
+      unsubscribe()
+    }
+    this.solverSubscriptions.clear()
+
+    this.coordinator = coordinator
+
+    if (this.coordinator) {
+      this.coordinatorSubscription = this.coordinator.subscribe((event) => {
+        this.handleCoordinatorEvent(event)
+        this.syncSolverSubscriptions()
+      })
+      this.syncSolverSubscriptions()
+
+      this.publish("server", "runtime.resumed", {
+        workspaceId: this.tryWorkspaceId() ?? "unavailable",
+        workspaceRoot: this.coordinator.workspaceRoot,
+      })
+    } else {
+      this.publish("server", "runtime.idle", {
+        workspaceId: "unavailable",
+        workspaceRoot: this.workspaceRoot,
+      })
+    }
+  }
+
+  async shutdownCoordinator(): Promise<void> {
+    if (!this.coordinator) return
+
+    // Abort all active solvers and persist their states
+    for (const [solverId, solver] of this.coordinator.solvers) {
+      try {
+        solver.abort()
+      } catch {
+        // Best-effort abort
+      }
+      try {
+        this.coordinator.persistence.saveSolverState(solverId, {
+          ...this.coordinator.persistence.loadSolverState(solverId),
+          status: "stopped",
+          updatedAt: new Date().toISOString(),
+        })
+      } catch {
+        // Best-effort persist
+      }
+    }
+
+    // Persist coordinator state via persistence API (bypasses private method)
+    try {
+      this.coordinator.persistence.saveCoordinatorState({
+        workspaceRoot: this.coordinator.workspaceRoot,
+        modelPool: this.coordinator.modelPool.toJSON(),
+        solvers: Array.from(this.coordinator.solvers.keys()),
+        challengeQueue: (this.coordinator as unknown as CoordinatorWithQueues).challengeQueue ?? [],
+        urlPendingQueue:
+          (this.coordinator as unknown as CoordinatorWithQueues).urlPendingQueue ?? [],
+        updatedAt: new Date().toISOString(),
+      })
+    } catch {
+      // Best-effort
+    }
+
+    // Close persistence
+    try {
+      this.coordinator.persistence.close()
+    } catch {
+      // Best-effort
+    }
+
+    this.publish("server", "coordinator.shutdown", {
+      workspaceId: this.tryWorkspaceId() ?? "unknown",
     })
 
-    this.syncSolverSubscriptions()
-    this.publish("server", options.startupEventType ?? "runtime.started", {
-      workspaceId: this.tryWorkspaceId() ?? "unavailable",
-      workspaceRoot: this.coordinator.workspaceRoot,
-    })
+    this.setCoordinator(null)
   }
 
   close() {
@@ -93,6 +209,21 @@ export class MisuzuRuntimeHost implements RuntimeHost {
   }
 
   getSnapshot(): RuntimeSnapshot {
+    if (!this.coordinator) {
+      return {
+        protocolVersion: 1,
+        coordinatorStatus: "idle",
+        workspaceId: undefined,
+        workspaceRoot: this.workspaceRoot,
+        modelPool: { slots: [], available: 0, total: 0 },
+        challengeQueue: [],
+        urlPendingQueue: [],
+        solvers: [],
+        generatedAt: new Date().toISOString(),
+        lastSeq: this.seq,
+      }
+    }
+
     const slots = this.coordinator.modelPool.toJSON()
     const workspaceId = this.tryWorkspaceId()
     const solvers: SolverSnapshot[] = []
@@ -132,6 +263,7 @@ export class MisuzuRuntimeHost implements RuntimeHost {
 
     return {
       protocolVersion: 1,
+      coordinatorStatus: "active",
       workspaceId,
       workspaceRoot: this.coordinator.workspaceRoot,
       modelPool: {
@@ -211,6 +343,10 @@ export class MisuzuRuntimeHost implements RuntimeHost {
     return summaries
   }
 
+  private requireCoordinator(): Coordinator | null {
+    return this.coordinator
+  }
+
   private enqueueCommand(
     operation: () => Promise<RuntimeCommandResponse>,
   ): Promise<RuntimeCommandResponse> {
@@ -227,6 +363,12 @@ export class MisuzuRuntimeHost implements RuntimeHost {
   ): Promise<RuntimeCommandResponse> {
     try {
       switch (request.command) {
+        case "load_workspace":
+          return await this.executeLoadWorkspace(request)
+
+        case "shutdown_coordinator":
+          return await this.executeShutdownCoordinator(request)
+
         case "coordinator_prompt":
           return this.executeCoordinatorPrompt(request)
 
@@ -243,6 +385,9 @@ export class MisuzuRuntimeHost implements RuntimeHost {
 
         case "solver_continue":
           return this.executeSolverContinue(request)
+
+        case "solver_stop":
+          return this.executeSolverStop(request)
 
         case "server_restart":
           return this.executeServerRestart(request)
@@ -264,9 +409,83 @@ export class MisuzuRuntimeHost implements RuntimeHost {
     }
   }
 
+  private async executeLoadWorkspace(
+    request: RuntimeCommandRequestFor<"load_workspace">,
+  ): Promise<RuntimeCommandResponse> {
+    const { workspaceDir, autoContinueSolvers = true } = request.payload
+
+    if (!workspaceDir || workspaceDir.trim().length === 0) {
+      return { ok: false, requestId: request.requestId, error: "payload.workspaceDir is required" }
+    }
+
+    const manifestPath = join(workspaceDir, "manifest.json")
+    if (!existsSync(manifestPath)) {
+      return {
+        ok: false,
+        requestId: request.requestId,
+        error: `workspace not found: ${workspaceDir}`,
+      }
+    }
+
+    // If a coordinator is already active, shut it down first
+    if (this.coordinator) {
+      await this.shutdownCoordinator()
+    }
+
+    if (!this.onLoadWorkspace) {
+      return {
+        ok: false,
+        requestId: request.requestId,
+        error: "workspace loading is not configured on this server (no onLoadWorkspace handler)",
+      }
+    }
+
+    const coordinator = await this.onLoadWorkspace({ workspaceDir, autoContinueSolvers })
+    this.setCoordinator(coordinator)
+
+    const workspaceId = coordinator.persistence.readManifest().id
+    this.publish("server", "runtime.command.executed", {
+      requestId: request.requestId ?? "",
+      command: request.command,
+      workspaceId,
+    })
+
+    return {
+      ok: true,
+      requestId: request.requestId,
+      payload: { workspaceId } satisfies LoadWorkspaceResultPayload,
+    }
+  }
+
+  private async executeShutdownCoordinator(
+    request: RuntimeCommandRequestFor<"shutdown_coordinator">,
+  ): Promise<RuntimeCommandResponse> {
+    if (!this.coordinator) {
+      return { ok: false, requestId: request.requestId, error: "no active coordinator" }
+    }
+
+    this.publish("server", "runtime.command.accepted", {
+      requestId: request.requestId ?? "",
+      command: request.command,
+    })
+
+    await this.shutdownCoordinator()
+
+    return {
+      ok: true,
+      requestId: request.requestId,
+      payload: { message: "coordinator stopped, server is now idle" },
+    }
+  }
+
   private executeCoordinatorPrompt(
     request: RuntimeCommandRequestFor<"coordinator_prompt">,
   ): RuntimeCommandResponse {
+    const coordinator = this.requireCoordinator()
+    if (!coordinator) {
+      return { ok: false, requestId: request.requestId, error: "no active coordinator" }
+    }
+
     const message = request.payload.message.trim()
     if (message.length === 0) {
       return { ok: false, requestId: request.requestId, error: "payload.message is required" }
@@ -277,7 +496,7 @@ export class MisuzuRuntimeHost implements RuntimeHost {
       command: request.command,
     })
 
-    void this.coordinator.prompt(message).catch((error) => {
+    void coordinator.prompt(message).catch((error) => {
       this.publish("server", "error", {
         source: "coordinator_prompt",
         message: formatError(error),
@@ -294,6 +513,11 @@ export class MisuzuRuntimeHost implements RuntimeHost {
   private async executeCoordinatorTool(
     request: RuntimeCommandRequestFor<CoordinatorToolName>,
   ): Promise<RuntimeCommandResponse> {
+    const coordinator = this.requireCoordinator()
+    if (!coordinator) {
+      return { ok: false, requestId: request.requestId, error: "no active coordinator" }
+    }
+
     const tool = this.findCoordinatorTool(request.command)
     if (!tool) {
       return {
@@ -319,7 +543,12 @@ export class MisuzuRuntimeHost implements RuntimeHost {
   private executeSolverSteer(
     request: RuntimeCommandRequestFor<"solver_steer">,
   ): RuntimeCommandResponse {
-    const solver = this.coordinator.solvers.get(request.payload.solverId)
+    const coordinator = this.requireCoordinator()
+    if (!coordinator) {
+      return { ok: false, requestId: request.requestId, error: "no active coordinator" }
+    }
+
+    const solver = coordinator.solvers.get(request.payload.solverId)
     if (!solver) {
       return {
         ok: false,
@@ -334,13 +563,29 @@ export class MisuzuRuntimeHost implements RuntimeHost {
       command: request.command,
       solverId: request.payload.solverId,
     })
+
+    if (!solver.state.isStreaming) {
+      void solver.continue().catch((error) => {
+        this.publish("server", "error", {
+          source: "solver_steer",
+          solverId: request.payload.solverId,
+          message: formatError(error),
+        })
+      })
+    }
+
     return { ok: true, requestId: request.requestId }
   }
 
   private executeSolverAbort(
     request: RuntimeCommandRequestFor<"solver_abort">,
   ): RuntimeCommandResponse {
-    const solver = this.coordinator.solvers.get(request.payload.solverId)
+    const coordinator = this.requireCoordinator()
+    if (!coordinator) {
+      return { ok: false, requestId: request.requestId, error: "no active coordinator" }
+    }
+
+    const solver = coordinator.solvers.get(request.payload.solverId)
     if (!solver) {
       return {
         ok: false,
@@ -361,7 +606,12 @@ export class MisuzuRuntimeHost implements RuntimeHost {
   private executeSolverContinue(
     request: RuntimeCommandRequestFor<"solver_continue">,
   ): RuntimeCommandResponse {
-    const solver = this.coordinator.solvers.get(request.payload.solverId)
+    const coordinator = this.requireCoordinator()
+    if (!coordinator) {
+      return { ok: false, requestId: request.requestId, error: "no active coordinator" }
+    }
+
+    const solver = coordinator.solvers.get(request.payload.solverId)
     if (!solver) {
       return {
         ok: false,
@@ -384,6 +634,55 @@ export class MisuzuRuntimeHost implements RuntimeHost {
       solverId: request.payload.solverId,
     })
     return { ok: true, requestId: request.requestId, payload: { accepted: true } }
+  }
+
+  private executeSolverStop(
+    request: RuntimeCommandRequestFor<"solver_stop">,
+  ): RuntimeCommandResponse {
+    const coordinator = this.requireCoordinator()
+    if (!coordinator) {
+      return { ok: false, requestId: request.requestId, error: "no active coordinator" }
+    }
+
+    const solverId = request.payload.solverId
+    const solver = coordinator.solvers.get(solverId)
+    if (!solver) {
+      return {
+        ok: false,
+        requestId: request.requestId,
+        error: `solver not found: ${solverId}`,
+      }
+    }
+
+    // Persist state with status=stopped before aborting
+    try {
+      coordinator.persistence.saveSolverState(solverId, {
+        ...coordinator.persistence.loadSolverState(solverId),
+        status: "stopped",
+        updatedAt: new Date().toISOString(),
+      })
+    } catch {
+      // Best-effort persist
+    }
+
+    solver.abort()
+    coordinator.solvers.delete(solverId)
+
+    // Release model slot
+    coordinator.modelPool.release(solverId)
+
+    // Dispatch queued challenges since a slot freed up (private method)
+    void (coordinator as unknown as CoordinatorWithQueues).dispatchQueuedChallenges()
+
+    this.publish("server", "runtime.command.executed", {
+      requestId: request.requestId ?? "",
+      command: request.command,
+      solverId,
+    })
+
+    this.publish("solver", "solver.removed", { solverId })
+
+    return { ok: true, requestId: request.requestId }
   }
 
   private executeServerRestart(
@@ -420,6 +719,11 @@ export class MisuzuRuntimeHost implements RuntimeHost {
   private async executeAddModelToPool(
     request: RuntimeCommandRequestFor<"add_model_to_pool">,
   ): Promise<RuntimeCommandResponse> {
+    const coordinator = this.requireCoordinator()
+    if (!coordinator) {
+      return { ok: false, requestId: request.requestId, error: "no active coordinator" }
+    }
+
     const modelId = request.payload.modelId.trim()
     const concurrency = request.payload.concurrency ?? 1
 
@@ -435,14 +739,14 @@ export class MisuzuRuntimeHost implements RuntimeHost {
       await this.ensureModelAvailable(modelId)
     }
 
-    const result = this.coordinator.addModelToPool(modelId, concurrency)
+    const result = coordinator.addModelToPool(modelId, concurrency)
     this.publish("server", "runtime.command.executed", {
       requestId: request.requestId ?? "",
       command: request.command,
       modelId,
       concurrency,
       totalSlotsForModel: result.total,
-      totalPoolSlots: this.coordinator.modelPool.total,
+      totalPoolSlots: coordinator.modelPool.total,
     })
 
     return {
@@ -455,6 +759,11 @@ export class MisuzuRuntimeHost implements RuntimeHost {
   private async executeSetModelConcurrency(
     request: RuntimeCommandRequestFor<"set_model_concurrency">,
   ): Promise<RuntimeCommandResponse> {
+    const coordinator = this.requireCoordinator()
+    if (!coordinator) {
+      return { ok: false, requestId: request.requestId, error: "no active coordinator" }
+    }
+
     const modelId = request.payload.modelId.trim()
     const concurrency = request.payload.concurrency
 
@@ -470,7 +779,7 @@ export class MisuzuRuntimeHost implements RuntimeHost {
       await this.ensureModelAvailable(modelId)
     }
 
-    const result = this.coordinator.setModelPoolConcurrency(modelId, concurrency)
+    const result = coordinator.setModelPoolConcurrency(modelId, concurrency)
     this.publish("server", "runtime.command.executed", {
       requestId: request.requestId ?? "",
       command: request.command,
@@ -478,7 +787,7 @@ export class MisuzuRuntimeHost implements RuntimeHost {
       concurrency,
       totalSlotsForModel: result.total,
       busySlotsForModel: result.busy,
-      totalPoolSlots: this.coordinator.modelPool.total,
+      totalPoolSlots: coordinator.modelPool.total,
     })
 
     return {
@@ -489,10 +798,12 @@ export class MisuzuRuntimeHost implements RuntimeHost {
   }
 
   private findCoordinatorTool(name: CoordinatorToolName): AgentTool | undefined {
-    return this.coordinator.state.tools.find((tool) => tool.name === name)
+    return this.coordinator?.state.tools.find((tool) => tool.name === name)
   }
 
   private syncSolverSubscriptions() {
+    if (!this.coordinator) return
+
     const activeSolverIds = new Set(this.coordinator.solvers.keys())
 
     for (const solverId of activeSolverIds) {
@@ -545,7 +856,7 @@ export class MisuzuRuntimeHost implements RuntimeHost {
 
       case "agent_end": {
         this.publish("coordinator", "coordinator.stopped", {
-          messageCount: this.coordinator.state.messages.length,
+          messageCount: this.coordinator?.state.messages.length ?? 0,
         })
         break
       }
@@ -611,6 +922,7 @@ export class MisuzuRuntimeHost implements RuntimeHost {
   }
 
   private readPersistedSolverState(solverId: string): PersistedSolverState {
+    if (!this.coordinator) return {}
     const raw = this.coordinator.persistence.loadSolverState(solverId)
     if (!raw) return {}
 
@@ -624,13 +936,15 @@ export class MisuzuRuntimeHost implements RuntimeHost {
 
   private tryWorkspaceId(): string | undefined {
     try {
-      return this.coordinator.persistence.readManifest().id
+      return this.coordinator?.persistence.readManifest().id
     } catch {
       return undefined
     }
   }
 
   private readUrlPendingQueue(): UrlPendingSnapshotItem[] {
+    if (!this.coordinator) return []
+
     const coordinatorWithQueue = this.coordinator as unknown as {
       urlPendingQueue?: Array<{
         challengeId?: string
