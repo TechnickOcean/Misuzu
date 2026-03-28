@@ -4,9 +4,10 @@ import { spawn } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { getModels, type Api, type KnownProvider, type Model } from "@mariozechner/pi-ai"
-import { Coordinator, ProxyProvider, defaultWorkspacesRoot } from "misuzu-core"
+import { Coordinator, defaultWorkspacesRoot } from "misuzu-core"
 import { startMisuzuServer } from "./server.ts"
 import { MisuzuRuntimeHost } from "./runtime.ts"
+import { loadProviderRegistryPlugins } from "./provider-registry.ts"
 
 interface CliOptions {
   host: string
@@ -24,8 +25,21 @@ interface CliOptions {
 }
 
 async function main() {
-  registerDefaultProxyProviders()
   const options = parseCliOptions(process.argv.slice(2))
+  const providerRegistry = await loadProviderRegistryPlugins(options.workspaceRoot)
+  if (providerRegistry.discovered === 0) {
+    console.log("[misuzu-server] provider plugins: none found in .misuzu/providers")
+  } else {
+    console.log(
+      `[misuzu-server] provider plugins: loaded ${providerRegistry.loaded}/${providerRegistry.discovered}`,
+    )
+  }
+  if (providerRegistry.errors.length > 0) {
+    for (const error of providerRegistry.errors) {
+      console.warn(`[misuzu-server] provider plugin warning: ${error}`)
+    }
+  }
+
   const modelMap = loadModels(options.models)
   const modelResolver = (modelId: string) => modelMap.get(modelId)
   const defaultModel = options.models[0] ? modelMap.get(options.models[0]) : undefined
@@ -286,25 +300,4 @@ function ensureAuthToken(
   const token = randomBytes(24).toString("hex")
   writeFileSync(tokenFilePath, `${token}\n`, { encoding: "utf-8", mode: 0o600 })
   return { token, tokenPath: tokenFilePath }
-}
-
-function registerDefaultProxyProviders() {
-  const hasRightCodeApiKey = Boolean(process.env.RIGHTCODE_API_KEY)
-  if (!hasRightCodeApiKey) return
-
-  new ProxyProvider({
-    provider: "rightcode",
-    baseProvider: "openai",
-    baseUrl: "https://www.right.codes/codex/v1",
-    apiKeyEnvVar: "RIGHTCODE_API_KEY",
-    modelMappings: [
-      "gpt-5.4",
-      "gpt-5.3-codex",
-      {
-        sourceModelId: "gpt-5.2",
-        targetModelId: "gpt-5.2-xhigh",
-        targetModelName: "GPT-5.2 XHigh",
-      },
-    ],
-  }).register()
 }

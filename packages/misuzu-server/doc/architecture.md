@@ -112,7 +112,7 @@ Server keeps an in-memory ring buffer for short-term replay and initial catch-up
 `src/main.ts` boot sequence:
 
 1. parse CLI/env options
-2. register default proxy provider (RightCode) when available
+2. load provider registry plugins from `.misuzu/providers/*.ts`
 3. create or resume `Coordinator`
 4. create `MisuzuRuntimeHost`
 5. start Hono server via `@hono/node-server`

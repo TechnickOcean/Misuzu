@@ -11,6 +11,7 @@
   },
   "scripts": {
     "start": "tsx src/main.ts",
+    "test": "vp test",
     "check": "vp check",
     "build": "vp pack"
   },
