@@ -44,6 +44,17 @@ export interface BashToolOptions {
   operations?: BashOperations
 }
 
+export interface ShellSpawnConfig {
+  shell: string
+  args: string[]
+  options: {
+    cwd: string
+    env: NodeJS.ProcessEnv
+    stdio: ["pipe", "pipe", "pipe"]
+    windowsHide: boolean
+  }
+}
+
 const isWindows = process.platform === "win32"
 
 function formatUnknownError(error: unknown): string {
@@ -179,16 +190,9 @@ export function createBashTool(
 export const defaultBashOperations: BashOperations = {
   exec(command, cwd, { onData, signal, timeout, env }) {
     return new Promise((resolve, reject) => {
-      const shell = isWindows ? "pwsh.exe" : "/bin/bash"
-      const shellArgs = isWindows
-        ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
-        : ["-c", command]
+      const config = buildShellSpawnConfig(cwd, command, env)
 
-      const child = spawn(shell, shellArgs, {
-        cwd,
-        env: { ...process.env, ...env },
-        stdio: ["pipe", "pipe", "pipe"],
-      })
+      const child = spawn(config.shell, config.args, config.options)
 
       child.stdout.on("data", onData)
       child.stderr.on("data", onData)
@@ -239,6 +243,28 @@ export const defaultBashOperations: BashOperations = {
       })
     })
   },
+}
+
+export function buildShellSpawnConfig(
+  cwd: string,
+  command = "",
+  env: NodeJS.ProcessEnv = {},
+): ShellSpawnConfig {
+  const shell = isWindows ? "pwsh.exe" : "/bin/bash"
+  const args = isWindows
+    ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
+    : ["-c", command]
+
+  return {
+    shell,
+    args,
+    options: {
+      cwd,
+      env: { ...process.env, ...env },
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    },
+  }
 }
 
 export const bashTool = createBashTool(process.cwd())

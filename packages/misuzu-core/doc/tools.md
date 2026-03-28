@@ -48,6 +48,7 @@ Base tool behavior:
 
 - `read`, `write`, `edit`, `find`, `grep`: throw for invalid operations (missing files, ambiguous edits, etc.)
 - `shell`: does not rely on non-zero exit throwing; it returns explicit failure metadata
+- `shell` uses hidden/background process execution so tool calls do not spawn interactive terminal windows
 
 ## `shell` Result Contract
 

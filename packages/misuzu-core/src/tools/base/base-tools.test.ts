@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { createReadTool } from "./read.js"
 import { createWriteTool } from "./write.js"
 import { createEditTool } from "./edit.js"
-import { createBashTool } from "./bash.js"
+import { buildShellSpawnConfig, createBashTool } from "./bash.js"
 
 let testDir: string
 
@@ -118,6 +118,13 @@ describe("edit tool", () => {
 })
 
 describe("bash tool", () => {
+  test("builds hidden spawn options for shell execution", () => {
+    const config = buildShellSpawnConfig(testDir)
+    expect(config.options.cwd).toBe(testDir)
+    expect(config.options.windowsHide).toBe(true)
+    expect(config.options.stdio).toEqual(["pipe", "pipe", "pipe"])
+  })
+
   test("executes a simple command", async () => {
     const tool = createBashTool(testDir)
     const result = await tool.execute("id", { command: "echo hello" })
