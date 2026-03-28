@@ -22,7 +22,7 @@ Per-solver files:
 - `session.jsonl`
 - `ENVIRONMENT.md`
 - `attachments/`
-- `scripts/` (includes `poll-platform-updates.sh` and queue file)
+- `scripts/` (solver-authored exploit/helpers only)
 - `Writeups.md`
 
 ## Behavioral Guarantees

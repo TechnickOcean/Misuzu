@@ -139,7 +139,6 @@ If remote URL is expired/unreachable, immediately call notify_coordinator with k
 Coordinator must refresh instance URL through browser workflow on platform challenge page and then call update_solver_environment.
 Do not invent, guess, or auto-rotate instance URLs yourself.
 Copy downloaded/received attachments into attachments/, write exploit helpers into scripts/, and produce final reproducible writeup in Writeups.md once a flag is confirmed correct.
-If needed, use scripts/poll-platform-updates.sh (created during solver bootstrap) only for platform announcements/hints and report them via notify_coordinator.
 
 Strategy:
 1. Analyze the challenge description and attachments

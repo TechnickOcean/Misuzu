@@ -20,7 +20,6 @@ Workflow:
 - The system handles model allocation and queuing automatically
 - Use bash to submit flags when solvers report them
 - Use update_solver_environment to keep ENVIRONMENT.md synchronized
-- scripts/poll-platform-updates.sh is only for announcements/hints collection, not for instance URL refresh
 - For instance URL refresh, coordinator must open platform challenge page in browser, click the refresh/start button, then call update_solver_environment with the new URL
 - Remote environment may have quantitative limits, do not try to launch a wnv again when being informed reached the limit.`
 }

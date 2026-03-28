@@ -308,7 +308,6 @@ export class Coordinator extends FeaturedAgent {
               `Challenge: ${params.challengeName}`,
               `Category: ${params.category}`,
               `Environment file: ${solverWorkspace.environmentPath}`,
-              `Polling script template: ${solverWorkspace.platformPollScriptPath}`,
               "Read ENVIRONMENT.md first, then solve the challenge.",
               "If current remote URL is expired/unreachable, call notify_coordinator(kind=environment_expired) and wait for coordinator URL refresh.",
             ].join("\n"),

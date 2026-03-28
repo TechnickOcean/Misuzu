@@ -54,7 +54,6 @@ export interface SolverWorkspace {
   environmentPath: string
   attachmentsDir: string
   scriptsDir: string
-  platformPollScriptPath: string
   writeupPath: string
   statePath: string
   session: SessionManager
@@ -148,74 +147,12 @@ function renderEnvironmentMarkdown(input: {
   return lines.join("\n")
 }
 
-function renderPlatformPollScript(solverId: string): string {
-  return [
-    "#!/usr/bin/env bash",
-    "set -euo pipefail",
-    "",
-    `# Poll platform announcements/hints for solver ${solverId}.`,
-    "# This script is NOT for refreshing challenge instance URLs.",
-    "# Instance URL refresh must be done by coordinator via browser workflow.",
-    "# Configure:",
-    "#   SOURCE_URL  - announcements/hints endpoint/page to poll",
-    "#   INTERVAL    - polling interval in seconds (default: 180)",
-    '#   AUTH_HEADER - optional HTTP header, e.g. "Authorization: Bearer ..."',
-    "",
-    'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
-    'ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/../ENVIRONMENT.md}"',
-    'QUEUE_FILE="${QUEUE_FILE:-$SCRIPT_DIR/platform-announcements.queue.md}"',
-    'STATE_FILE="${STATE_FILE:-$SCRIPT_DIR/.platform-announcements.sha1}"',
-    'SOURCE_URL="${SOURCE_URL:-}"',
-    'INTERVAL="${INTERVAL:-180}"',
-    'AUTH_HEADER="${AUTH_HEADER:-}"',
-    "",
-    'if [[ -z "$SOURCE_URL" ]]; then',
-    '  echo "SOURCE_URL is not set."',
-    `  echo "Example: SOURCE_URL=https://ctf.example.com/challenge/${solverId}/hints ./poll-platform-updates.sh"`,
-    "  exit 1",
-    "fi",
-    "",
-    'touch "$QUEUE_FILE"',
-    "",
-    "while true; do",
-    '  if [[ -n "$AUTH_HEADER" ]]; then',
-    '    BODY="$(curl -fsSL -H "$AUTH_HEADER" "$SOURCE_URL" || true)"',
-    "  else",
-    '    BODY="$(curl -fsSL "$SOURCE_URL" || true)"',
-    "  fi",
-    "",
-    '  if [[ -n "$BODY" ]]; then',
-    '    HASH="$(printf "%s" "$BODY" | sha1sum | cut -d " " -f 1)"',
-    '    LAST_HASH="$(cat "$STATE_FILE" 2>/dev/null || true)"',
-    "",
-    '    if [[ "$HASH" != "$LAST_HASH" ]]; then',
-    '      TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"',
-    '      printf "- [%s] [platform_announcement] %s\\n" "$TS" "$BODY" >> "$QUEUE_FILE"',
-    '      printf "%s" "$HASH" > "$STATE_FILE"',
-    "",
-    "      # Append a lightweight marker in ENVIRONMENT.md for agent visibility.",
-    '      printf "- [%s] [platform_announcement] New notice captured in scripts/platform-announcements.queue.md\\n" "$TS" >> "$ENV_FILE"',
-    "",
-    '      echo "[$TS] New platform announcement captured"',
-    "    fi",
-    "  fi",
-    "",
-    '  sleep "$INTERVAL"',
-    "done",
-    "",
-  ].join("\n")
-}
-
 function renderScriptsReadme(): string {
   return `# Solver Scripts
 
 - Put exploit and helper scripts in this directory.
-- Optional polling helper: \`poll-platform-updates.sh\`
-  - Run it manually or with cron/systemd timer.
-  - It writes newly detected notices/hints to \`platform-announcements.queue.md\`.
-  - Use these entries for platform notices/hints only.
-  - Do NOT treat this script output as a fresh instance URL source.
-  - If target URL is expired/inaccessible, notify coordinator with \`notify_coordinator(kind=environment_expired)\` and wait for coordinator browser refresh + \`update_solver_environment\`.
+- Prefer deterministic, runnable scripts over ad-hoc shell history.
+- Keep scripts scoped to this challenge and document usage in Writeups.md.
 `
 }
 
@@ -416,13 +353,6 @@ export class CompetitionPersistence {
       )
     }
 
-    const platformPollScriptPath = join(scriptsDir, "poll-platform-updates.sh")
-    if (!existsSync(platformPollScriptPath)) {
-      writeFileSync(platformPollScriptPath, renderPlatformPollScript(options.solverId), {
-        encoding: "utf-8",
-      })
-    }
-
     const scriptsReadmePath = join(scriptsDir, "README.md")
     if (!existsSync(scriptsReadmePath)) {
       writeFileSync(scriptsReadmePath, renderScriptsReadme(), "utf-8")
@@ -436,7 +366,6 @@ export class CompetitionPersistence {
       model: options.model,
       cwd: rootDir,
       environmentPath,
-      platformPollScriptPath,
       updatedAt: nowIso(),
     })
 
@@ -446,7 +375,6 @@ export class CompetitionPersistence {
       environmentPath,
       attachmentsDir,
       scriptsDir,
-      platformPollScriptPath,
       writeupPath,
       statePath,
       session: this.getSolverSession(options.solverId),

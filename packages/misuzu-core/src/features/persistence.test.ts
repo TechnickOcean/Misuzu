@@ -161,17 +161,13 @@ describe("CompetitionPersistence", () => {
 
     expect(existsSync(solverWorkspace.environmentPath)).toBe(true)
     expect(existsSync(join(solverWorkspace.attachmentsDir, "attachment.txt"))).toBe(true)
-    expect(existsSync(solverWorkspace.platformPollScriptPath)).toBe(true)
     expect(existsSync(join(solverWorkspace.scriptsDir, "README.md"))).toBe(true)
     expect(existsSync(solverWorkspace.writeupPath)).toBe(true)
-
-    const pollScript = await readFile(solverWorkspace.platformPollScriptPath, "utf-8")
-    expect(pollScript).toContain("NOT for refreshing challenge instance URLs")
-    expect(pollScript).toContain("platform-announcements.queue.md")
+    expect(existsSync(join(solverWorkspace.scriptsDir, "poll-platform-updates.sh"))).toBe(false)
 
     const scriptsReadme = await readFile(join(solverWorkspace.scriptsDir, "README.md"), "utf-8")
-    expect(scriptsReadme).toContain("platform-announcements.queue.md")
-    expect(scriptsReadme).toContain("notify_coordinator(kind=environment_expired)")
+    expect(scriptsReadme).toContain("Put exploit and helper scripts")
+    expect(scriptsReadme).not.toContain("poll-platform-updates.sh")
 
     solverWorkspace.session.appendMessage(userMessage("resume me"))
     persistence.appendSolverEnvironmentNote("challenge-1", "Remote URL expired")
