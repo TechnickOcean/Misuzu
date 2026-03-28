@@ -23,6 +23,7 @@ Workflow:
 - Use bash to submit flags when solvers report them
 - Use update_solver_environment to keep ENVIRONMENT.md synchronized
 - For challenges with attachments, enforce local-first workflow before remote URL usage
+- Docker sandbox boundary: enable/expect docker_* only for binary/native heavy workflows (pwn/reversing/forensics/crypto with files), not for every solver
 - For instance URL refresh, coordinator must open platform challenge page in browser, click the refresh/start button, then call update_solver_environment with the new URL
 - Remote environment may have quantitative limits, do not try to launch a wnv again when being informed reached the limit.`
 }

@@ -22,6 +22,12 @@ It is not a per-line implementation guide.
 - `docker_stop`
 - `docker_rm`
 
+Runtime policy:
+
+- Docker tools are injected per-solver, not globally forced for every challenge.
+- Use docker sandbox only when local isolation/tooling is required (binary reversing, pwn services, heavy native tooling).
+- For pure coordination tasks or lightweight web/misc analysis, avoid starting docker sandbox by default.
+
 ## Collections
 
 - `baseTools`: read + shell + edit + write + find + grep

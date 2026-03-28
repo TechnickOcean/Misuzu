@@ -19,6 +19,7 @@ describe("Solver prompts", () => {
     expect(prompt).toContain("notify_coordinator with kind=environment_expired")
     expect(prompt).toContain("Coordinator must refresh instance URL through browser workflow")
     expect(prompt).toContain("Do not invent, guess, or auto-rotate instance URLs yourself")
+    expect(prompt).toContain("Docker sandbox is optional")
     expect(prompt).not.toContain("poll-platform-updates.sh")
 
     await rm(root, { recursive: true, force: true })

@@ -17,6 +17,7 @@ export interface SolverOptions {
   challengeDescription?: string
   challengeUrl?: string
   sandboxImage?: string
+  enableDockerSandbox?: boolean
   model?: Model<any>
   tools?: AgentTool<any>[]
 }
@@ -30,19 +31,23 @@ export class Solver extends FeaturedAgent {
   constructor(options: SolverOptions & FeaturedAgentOptions = {}) {
     const solverId = options.solverId ?? "solver"
     const sandboxImage = options.sandboxImage ?? "2d4e4aeb76eb"
+    const enableDockerSandbox = options.enableDockerSandbox ?? false
     const workspaceRoot = options.workspaceRoot ?? process.cwd()
     const cwd = resolve(options.cwd ?? resolve(workspaceRoot, ".misuzu", "solvers", solverId))
 
     mkdirSync(cwd, { recursive: true })
 
-    const tools = options.tools ?? [...createBaseTools(cwd), ...dockerTools]
+    const tools = options.tools ?? [
+      ...createBaseTools(cwd),
+      ...(enableDockerSandbox ? dockerTools : []),
+    ]
     const skills = loadAgentSkills({
       role: "solver",
       launchDir: workspaceRoot,
       extraSkills: options.skills,
     })
 
-    const systemPrompt = buildSolverSystemPrompt(options, sandboxImage)
+    const systemPrompt = buildSolverSystemPrompt(options, sandboxImage, enableDockerSandbox)
 
     super({
       ...options,
@@ -128,11 +133,19 @@ export class Solver extends FeaturedAgent {
   }
 }
 
-function buildSolverSystemPrompt(_options: SolverOptions, sandboxImage: string) {
+function buildSolverSystemPrompt(
+  _options: SolverOptions,
+  sandboxImage: string,
+  enableDockerSandbox: boolean,
+) {
   return `You are an expert CTF player. Your goal is to find the flag for the given challenge. The flag format is typically CTF{...} or flag{...}.
 
-You have access to an isolated Docker container (image: ${sandboxImage}) for local testing and exploit development. 
-The sandbox has pre-installed CTF tools including pwntools, pycryptodome, z3-solver, RsaCtfTool, radare2, angr, and many more (check out \`/tools.txt\` in the container to get a full list).
+Docker sandbox is optional. Use docker_* tools only when local isolation or native CTF tooling is required.
+${
+  enableDockerSandbox
+    ? `This solver currently has Docker tools enabled (image: ${sandboxImage}). Use them for pwn/reversing/native workflows when needed.`
+    : "This solver currently does not expose Docker tools. Prefer local scripts and direct tooling in workspace."
+}
 
 Use ENVIRONMENT.md as the source of truth for challenge environment data.
 If remote URL is expired/unreachable, immediately call notify_coordinator with kind=environment_expired and PAUSE remote attacks until coordinator updates ENVIRONMENT.md.

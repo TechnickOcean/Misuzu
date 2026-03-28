@@ -71,6 +71,7 @@ export interface PersistedSolverState extends JsonObject {
   model?: string
   remoteUrl?: string
   requiresRemoteUrl?: boolean
+  dockerSandboxEnabled?: boolean
   cwd?: string
   environmentPath?: string
   scriptsDir?: string

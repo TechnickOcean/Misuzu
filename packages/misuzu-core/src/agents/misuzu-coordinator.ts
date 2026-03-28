@@ -163,10 +163,31 @@ export class Coordinator extends FeaturedAgent {
     })
   }
 
-  private createSolverTools(challengeId: string, solverRoot: string) {
+  private shouldEnableDockerSandbox(category: string, hasAttachments: boolean): boolean {
+    const normalized = category.trim().toLowerCase()
+    if (normalized === "pwn" || normalized === "reversing" || normalized === "forensics") {
+      return true
+    }
+
+    if (normalized === "crypto") {
+      return hasAttachments
+    }
+
+    return false
+  }
+
+  private createSolverTools(
+    challengeId: string,
+    solverRoot: string,
+    context: { category: string; hasAttachments: boolean },
+  ) {
+    const tools = [...createBaseTools(solverRoot)]
+    if (this.shouldEnableDockerSandbox(context.category, context.hasAttachments)) {
+      tools.push(...dockerTools)
+    }
+
     return [
-      ...createBaseTools(solverRoot),
-      ...dockerTools,
+      ...tools,
       this.createSolverNotifyCoordinatorTool(challengeId),
       this.createSolverReportFlagTool(challengeId),
     ]
@@ -341,6 +362,10 @@ export class Coordinator extends FeaturedAgent {
       status: "url_pending",
       remoteUrl: params.remoteUrl,
       requiresRemoteUrl: true,
+      dockerSandboxEnabled: this.shouldEnableDockerSandbox(
+        params.category,
+        this.hasAttachments(params.files),
+      ),
       cwd: workspace.rootDir,
       environmentPath: workspace.environmentPath,
       scriptsDir: workspace.scriptsDir,
@@ -392,6 +417,9 @@ export class Coordinator extends FeaturedAgent {
       )
     }
 
+    const hasAttachments = this.hasAttachments(params.files)
+    const dockerSandboxEnabled = this.shouldEnableDockerSandbox(params.category, hasAttachments)
+
     const solverModel = this.resolveModel?.(modelId) ?? this.state.model
 
     const solver = new Solver({
@@ -402,9 +430,13 @@ export class Coordinator extends FeaturedAgent {
       environmentFilePath: solverWorkspace.environmentPath,
       scriptsDir: solverWorkspace.scriptsDir,
       writeupPath: solverWorkspace.writeupPath,
-      tools: this.createSolverTools(params.challengeId, solverWorkspace.rootDir),
+      tools: this.createSolverTools(params.challengeId, solverWorkspace.rootDir, {
+        category: params.category,
+        hasAttachments,
+      }),
       sessionManager: solverWorkspace.session,
       model: solverModel,
+      enableDockerSandbox: dockerSandboxEnabled,
     })
 
     this.solvers.set(params.challengeId, solver)
@@ -420,6 +452,7 @@ export class Coordinator extends FeaturedAgent {
       model: modelId,
       remoteUrl: params.remoteUrl,
       requiresRemoteUrl: options.requiresRemoteUrl,
+      dockerSandboxEnabled,
       cwd: solverWorkspace.rootDir,
       environmentPath: solverWorkspace.environmentPath,
       scriptsDir: solverWorkspace.scriptsDir,
@@ -560,6 +593,12 @@ export class Coordinator extends FeaturedAgent {
       const solverModel = modelId
         ? (this.resolveModel?.(modelId) ?? this.state.model)
         : this.state.model
+      const category = typeof solverState.category === "string" ? solverState.category : "unknown"
+      const hasAttachments = Array.isArray(solverState.files) && solverState.files.length > 0
+      const dockerSandboxEnabled =
+        typeof solverState.dockerSandboxEnabled === "boolean"
+          ? solverState.dockerSandboxEnabled
+          : this.shouldEnableDockerSandbox(category, hasAttachments)
 
       const solver = new Solver({
         solverId,
@@ -569,9 +608,13 @@ export class Coordinator extends FeaturedAgent {
         environmentFilePath: environmentPath,
         scriptsDir,
         writeupPath,
-        tools: this.createSolverTools(solverId, solverRoot),
+        tools: this.createSolverTools(solverId, solverRoot, {
+          category,
+          hasAttachments,
+        }),
         sessionManager: this.persistence.getSolverSession(solverId),
         model: solverModel,
+        enableDockerSandbox: dockerSandboxEnabled,
       })
 
       const context = this.persistence.getSolverSession(solverId).buildContext()

@@ -249,6 +249,43 @@ describe("Coordinator environment updates", () => {
   })
 })
 
+describe("Coordinator sandbox policy", () => {
+  test("injects docker tools only for sandbox-heavy categories", async () => {
+    const launchDir = join(tmpdir(), `misuzu-sandbox-policy-${Date.now()}`)
+    await mkdir(launchDir, { recursive: true })
+
+    const coordinator = new Coordinator({
+      cwd: launchDir,
+      workspaceRoot: launchDir,
+      models: ["rightcode/gpt-5.4"],
+      modelPool: new ModelPool(["rightcode/gpt-5.4"]),
+    })
+
+    const internal = coordinator as unknown as {
+      createSolverTools: (
+        challengeId: string,
+        solverRoot: string,
+        context: { category: string; hasAttachments: boolean },
+      ) => Array<{ name: string }>
+    }
+
+    const webTools = internal.createSolverTools("web-1", launchDir, {
+      category: "web",
+      hasAttachments: false,
+    })
+    expect(webTools.some((tool) => tool.name.startsWith("docker_"))).toBe(false)
+
+    const pwnTools = internal.createSolverTools("pwn-1", launchDir, {
+      category: "pwn",
+      hasAttachments: true,
+    })
+    expect(pwnTools.some((tool) => tool.name === "docker_run")).toBe(true)
+
+    coordinator.persistence.close()
+    await rm(launchDir, { recursive: true, force: true })
+  })
+})
+
 describe("Coordinator URL pending queue", () => {
   test("queues no-attachment challenge as url_pending when remote URL is missing", async () => {
     const launchDir = join(tmpdir(), `misuzu-url-pending-${Date.now()}`)

@@ -41,7 +41,7 @@ State access:
 Purpose:
 
 - Solves one challenge in one workspace
-- Uses base tools + docker tools
+- Uses base tools and conditionally injects docker tools for sandbox-heavy categories
 - Reads mutable challenge context from `ENVIRONMENT.md`
 - Reports candidate flags and reacts to coordinator feedback
 
