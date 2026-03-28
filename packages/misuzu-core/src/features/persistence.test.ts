@@ -57,11 +57,13 @@ describe("SessionManager", () => {
     const msg = userMessage("hello")
     manager.appendMessage(msg)
     manager.appendCompaction("old summary", 1234)
+    manager.appendToolCall("bash", { command: "echo hello" }, "start")
 
     const entries = manager.readAll()
-    expect(entries.length).toBe(2)
+    expect(entries.length).toBe(3)
     expect(entries[0].type).toBe("message")
     expect(entries[1].type).toBe("compaction")
+    expect(entries[2].type).toBe("tool_call")
 
     const context = manager.buildContext()
     expect(context.length).toBe(2)
@@ -96,10 +98,28 @@ describe("AgentSessionRecorder", () => {
     agent.state.messages.push(next, summary)
     agent.emit({ type: "agent_end", messages: agent.state.messages })
 
+    agent.emit({
+      type: "tool_execution_start",
+      toolName: "shell",
+      args: {
+        command: "curl https://example.com",
+        apiKey: "secret-token",
+      },
+    } as AgentEvent)
+
     const entries = manager.readAll()
-    expect(entries.length).toBe(3)
+    expect(entries.length).toBe(4)
     expect(entries[1].type).toBe("message")
     expect(entries[2].type).toBe("compaction")
+    expect(entries[3].type).toBe("tool_call")
+    if (entries[3].type === "tool_call") {
+      expect(entries[3].toolName).toBe("shell")
+      expect(entries[3].status).toBe("start")
+      expect(entries[3].args).toEqual({
+        command: "curl https://example.com",
+        apiKey: "[REDACTED]",
+      })
+    }
 
     detach()
     manager.close()

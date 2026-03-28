@@ -11,6 +11,14 @@ import {
 import { dirname, resolve } from "node:path"
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core"
 
+type SessionJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | SessionJsonValue[]
+  | { [key: string]: SessionJsonValue }
+
 export interface SessionEntryBase {
   type: string
   id: string
@@ -37,7 +45,14 @@ export interface ChallengeStateEntry extends SessionEntryBase {
   model?: string
 }
 
-export type SessionEntry = MessageEntry | CompactionEntry | ChallengeStateEntry
+export interface ToolCallEntry extends SessionEntryBase {
+  type: "tool_call"
+  toolName: string
+  status: "start"
+  args?: SessionJsonValue
+}
+
+export type SessionEntry = MessageEntry | CompactionEntry | ChallengeStateEntry | ToolCallEntry
 
 interface SessionEntryInputBase {
   id?: string
@@ -74,6 +89,33 @@ function ensureFile(filePath: string, initialContent = ""): void {
   if (!existsSync(filePath)) {
     writeFileSync(filePath, initialContent, "utf-8")
   }
+}
+
+function sanitizeToolArgValue(value: unknown): SessionJsonValue {
+  if (value === null) return null
+
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeToolArgValue(item))
+  }
+
+  if (typeof value === "object") {
+    const objectValue = value as Record<string, unknown>
+    const next: { [key: string]: SessionJsonValue } = {}
+    for (const [key, item] of Object.entries(objectValue)) {
+      if (/(token|secret|password|api[-_]?key|authorization|cookie)/i.test(key)) {
+        next[key] = "[REDACTED]"
+      } else {
+        next[key] = sanitizeToolArgValue(item)
+      }
+    }
+    return next
+  }
+
+  return String(value)
 }
 
 export class SessionManager {
@@ -125,6 +167,21 @@ export class SessionManager {
       model,
       ...input,
     }) as ChallengeStateEntry
+  }
+
+  appendToolCall(
+    toolName: string,
+    args: unknown,
+    status: ToolCallEntry["status"] = "start",
+    input: SessionEntryInputBase = {},
+  ): ToolCallEntry {
+    return this.appendEntry({
+      type: "tool_call",
+      toolName,
+      status,
+      args: sanitizeToolArgValue(args),
+      ...input,
+    }) as ToolCallEntry
   }
 
   readAll(): SessionEntry[] {
@@ -180,6 +237,12 @@ export class SessionManager {
           challengeId: string
           status: ChallengeStateEntry["status"]
           model?: string
+        } & SessionEntryInputBase)
+      | ({
+          type: "tool_call"
+          toolName: string
+          status: ToolCallEntry["status"]
+          args?: SessionJsonValue
         } & SessionEntryInputBase),
   ): SessionEntry {
     const entry: SessionEntry = {
@@ -226,6 +289,10 @@ export class AgentSessionRecorder {
   attach(agent: PersistableAgent): () => void {
     this.flush(agent.state.messages)
     this.unsubscribe = agent.subscribe((event) => {
+      if (event.type === "tool_execution_start") {
+        this.session.appendToolCall(event.toolName, event.args, "start")
+      }
+
       if (event.type === "message_end" || event.type === "turn_end" || event.type === "agent_end") {
         this.flush(agent.state.messages)
       }

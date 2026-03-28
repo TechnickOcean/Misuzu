@@ -30,6 +30,8 @@ Per-solver files:
 - Solver workspace is created before solver starts
 - `ENVIRONMENT.md` is the mutable source of truth for challenge environment data
 - Session streams are append-only (`session.jsonl`)
+- `session.jsonl` acts as both resumable context history and operational log
+- Tool invocations are logged with sanitized parameter payloads (`tool_call` entries)
 - State snapshots are replace-style (`state.json`)
 - Resume can reconstruct coordinator + solver context from persisted files
 
@@ -39,7 +41,7 @@ Per-solver files:
 
 Purpose:
 
-- Append and read session entries (`message`, `compaction`, `challenge_state`)
+- Append and read session entries (`message`, `compaction`, `challenge_state`, `tool_call`)
 - Rebuild agent context from session log
 
 Relevant methods:
