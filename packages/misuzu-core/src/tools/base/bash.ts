@@ -17,7 +17,12 @@ const bashSchema = Type.Object({
 export type BashToolInput = Static<typeof bashSchema>
 
 export interface BashToolDetails {
+  ok: boolean
   exitCode: number | null
+  failure?: {
+    kind: "non_zero_exit" | "timeout" | "aborted" | "runtime_error"
+    message: string
+  }
   truncation?: TruncationResult
   fullOutputPath?: string
 }
@@ -32,7 +37,7 @@ export interface BashOperations {
       timeout?: number
       env?: NodeJS.ProcessEnv
     },
-  ) => Promise<{ exitCode: number | null }>
+  ) => Promise<{ exitCode: number | null; timedOut: boolean; aborted: boolean }>
 }
 
 export interface BashToolOptions {
@@ -40,6 +45,22 @@ export interface BashToolOptions {
 }
 
 const isWindows = process.platform === "win32"
+
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message
+  }
+
+  if (typeof error === "string") {
+    return error
+  }
+
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return "Unknown runtime error"
+  }
+}
 
 export function createBashTool(
   cwd: string,
@@ -70,11 +91,24 @@ export function createBashTool(
       }
 
       const timeoutMs = params.timeout ? params.timeout * 1000 : 60 * 1000
-      const { exitCode } = await ops.exec(params.command, cwd, {
-        onData,
-        signal,
-        timeout: timeoutMs,
-      })
+      let execution:
+        | {
+            exitCode: number | null
+            timedOut: boolean
+            aborted: boolean
+          }
+        | undefined
+      let runtimeError: unknown
+
+      try {
+        execution = await ops.exec(params.command, cwd, {
+          onData,
+          signal,
+          timeout: timeoutMs,
+        })
+      } catch (error) {
+        runtimeError = error
+      }
 
       stream?.end()
 
@@ -88,10 +122,50 @@ export function createBashTool(
       }
       if (fullOutputPath) text += `\n\n[Full output saved to: ${fullOutputPath}]`
 
-      const details: BashToolDetails = { exitCode, truncation, fullOutputPath }
+      let details: BashToolDetails
+      if (runtimeError) {
+        const message = formatUnknownError(runtimeError)
+        details = {
+          ok: false,
+          exitCode: null,
+          failure: { kind: "runtime_error", message },
+          truncation,
+          fullOutputPath,
+        }
+        text = [`[shell_failed kind=runtime_error] ${message}`, text].filter(Boolean).join("\n")
+      } else {
+        const exitCode = execution?.exitCode ?? null
+        const timedOut = execution?.timedOut ?? false
+        const aborted = execution?.aborted ?? false
 
-      if (exitCode !== 0) {
-        text += `Command exited with code ${exitCode}.\nOutput:\n${text}`
+        let failure: BashToolDetails["failure"]
+        if (aborted) {
+          failure = { kind: "aborted", message: "Command execution was aborted." }
+        } else if (timedOut) {
+          failure = {
+            kind: "timeout",
+            message: `Command timed out after ${timeoutMs}ms.`,
+          }
+        } else if (exitCode !== 0) {
+          failure = {
+            kind: "non_zero_exit",
+            message: `Command exited with code ${String(exitCode)}.`,
+          }
+        }
+
+        details = {
+          ok: !failure,
+          exitCode,
+          failure,
+          truncation,
+          fullOutputPath,
+        }
+
+        if (failure) {
+          text = [`[shell_failed kind=${failure.kind}] ${failure.message}`, text]
+            .filter(Boolean)
+            .join("\n")
+        }
       }
 
       return {
@@ -106,7 +180,9 @@ export const defaultBashOperations: BashOperations = {
   exec(command, cwd, { onData, signal, timeout, env }) {
     return new Promise((resolve, reject) => {
       const shell = isWindows ? "pwsh.exe" : "/bin/bash"
-      const shellArgs = isWindows ? ["/c", command] : ["-c", command]
+      const shellArgs = isWindows
+        ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
+        : ["-c", command]
 
       const child = spawn(shell, shellArgs, {
         cwd,
@@ -118,8 +194,11 @@ export const defaultBashOperations: BashOperations = {
       child.stderr.on("data", onData)
 
       let timeoutId: ReturnType<typeof setTimeout> | undefined
+      let timedOut = false
+      let aborted = false
       if (timeout) {
         timeoutId = setTimeout(() => {
+          timedOut = true
           if (child.pid) {
             try {
               process.kill(-child.pid, "SIGTERM")
@@ -131,6 +210,7 @@ export const defaultBashOperations: BashOperations = {
       }
 
       const onAbort = () => {
+        aborted = true
         if (child.pid) {
           try {
             process.kill(-child.pid, "SIGTERM")
@@ -142,7 +222,6 @@ export const defaultBashOperations: BashOperations = {
       if (signal) {
         if (signal.aborted) {
           onAbort()
-          return
         }
         signal.addEventListener("abort", onAbort, { once: true })
       }
@@ -150,7 +229,7 @@ export const defaultBashOperations: BashOperations = {
       child.on("close", (code) => {
         if (timeoutId) clearTimeout(timeoutId)
         signal?.removeEventListener("abort", onAbort)
-        resolve({ exitCode: code })
+        resolve({ exitCode: code, timedOut, aborted })
       })
 
       child.on("error", (err) => {

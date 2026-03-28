@@ -14,9 +14,8 @@
     "build": "vp pack"
   },
   "dependencies": {
-    "@mariozechner/pi-ai": "catalog:",
-    "dotenv": "catalog:",
-    "misuzu-core": "workspace:*"
+    "@mariozechner/pi-tui": "catalog:",
+    "dotenv": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

@@ -10,7 +10,7 @@ import { type Skill, buildSkillsCatalog } from "../features/skill.ts"
 import { convertToLlm } from "../features/messages.ts"
 import { checkCompact, compact } from "../features/compaction.ts"
 import { AgentSessionRecorder, type SessionManager } from "../features/persistence.ts"
-import { baseTools } from "../tools/index.ts"
+import { createBaseTools } from "../tools/index.ts"
 
 export interface FeaturedAgentOptions {
   initialState?: Partial<AgentState>
@@ -30,7 +30,7 @@ export class FeaturedAgent {
 
   constructor({
     skills = [],
-    cwd: _cwd,
+    cwd,
     tools,
     sessionManager,
     convertToLlm: customConvertToLlm,
@@ -38,14 +38,15 @@ export class FeaturedAgent {
     ...opts
   }: FeaturedAgentOptions) {
     const skillCatalog = buildSkillsCatalog(skills)
+    const resolvedCwd = cwd ?? process.cwd()
 
     this.agent = new Agent({
       ...opts,
       initialState: {
         ...opts.initialState,
         systemPrompt: (opts.initialState?.systemPrompt ?? "") + skillCatalog,
-        tools: tools ?? baseTools,
-        thinkingLevel: opts.initialState?.thinkingLevel ?? "minimal",
+        tools: tools ?? createBaseTools(resolvedCwd),
+        thinkingLevel: opts.initialState?.thinkingLevel ?? "medium",
       },
       convertToLlm: customConvertToLlm ?? convertToLlm,
       transformContext:
@@ -113,11 +114,11 @@ export class FeaturedAgent {
   }
 
   steer(message: string) {
-    this.agent.steer({ role: "user", content: message, timestamp: Date.now() } as AgentMessage)
+    this.agent.steer({ role: "user", content: message, timestamp: Date.now() })
   }
 
   followUp(message: string) {
-    this.agent.followUp({ role: "user", content: message, timestamp: Date.now() } as AgentMessage)
+    this.agent.followUp({ role: "user", content: message, timestamp: Date.now() })
   }
 
   flushSession(): number {

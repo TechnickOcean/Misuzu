@@ -1,5 +1,5 @@
 import type { Model } from "@mariozechner/pi-ai"
-import { existsSync, mkdirSync, readFileSync } from "node:fs"
+import { mkdirSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { FeaturedAgent, type FeaturedAgentOptions } from "./misuzu-featured.ts"
 import { createBaseTools } from "../tools/index.ts"
@@ -29,7 +29,7 @@ export class Solver extends FeaturedAgent {
 
   constructor(options: SolverOptions & FeaturedAgentOptions = {}) {
     const solverId = options.solverId ?? "solver"
-    const sandboxImage = options.sandboxImage ?? "ctf-sandbox"
+    const sandboxImage = options.sandboxImage ?? "2d4e4aeb76eb"
     const workspaceRoot = options.workspaceRoot ?? process.cwd()
     const cwd = resolve(options.cwd ?? resolve(workspaceRoot, ".misuzu", "solvers", solverId))
 
@@ -107,6 +107,8 @@ export class Solver extends FeaturedAgent {
     return [
       `Primary challenge context is maintained in ${this.environmentFilePath}.`,
       "Always align your actions with that file.",
+      "Before remote exploitation, verify current url from ENVIRONMENT.md is still valid.",
+      "If url is expired/unreachable, call notify_coordinator(kind=environment_expired) and wait for coordinator refresh.",
       "",
       "ENVIRONMENT.md snapshot:",
       envSnapshot,
@@ -118,8 +120,11 @@ export class Solver extends FeaturedAgent {
 
   private loadEnvironmentSnapshot(): string | undefined {
     if (!this.environmentFilePath) return undefined
-    if (!existsSync(this.environmentFilePath)) return undefined
-    return readFileSync(this.environmentFilePath, "utf-8")
+    try {
+      return readFileSync(this.environmentFilePath, "utf-8")
+    } catch {
+      return undefined
+    }
   }
 }
 
@@ -129,9 +134,12 @@ function buildSolverSystemPrompt(_options: SolverOptions, sandboxImage: string) 
 You have access to an isolated Docker container (image: ${sandboxImage}) for local testing and exploit development. 
 The sandbox has pre-installed CTF tools including pwntools, pycryptodome, z3-solver, RsaCtfTool, radare2, angr, and many more (check out \`/tools.txt\` in the container to get a full list).
 
-Use ENVIRONMENT.md as the source of truth for challenge environment data. If remote URL expires or platform notices/hints change, notify the coordinator and wait for ENVIRONMENT.md updates.
+Use ENVIRONMENT.md as the source of truth for challenge environment data.
+If remote URL is expired/unreachable, immediately call notify_coordinator with kind=environment_expired and PAUSE remote attacks until coordinator updates ENVIRONMENT.md.
+Coordinator must refresh instance URL through browser workflow on platform challenge page and then call update_solver_environment.
+Do not invent, guess, or auto-rotate instance URLs yourself.
 Copy downloaded/received attachments into attachments/, write exploit helpers into scripts/, and produce final reproducible writeup in Writeups.md once a flag is confirmed correct.
-If needed, use scripts/poll-platform-updates.sh (created during solver bootstrap) to poll predictable platform updates and then sync them through notify_coordinator/update_solver_environment.
+If needed, use scripts/poll-platform-updates.sh (created during solver bootstrap) only for platform announcements/hints and report them via notify_coordinator.
 
 Strategy:
 1. Analyze the challenge description and attachments

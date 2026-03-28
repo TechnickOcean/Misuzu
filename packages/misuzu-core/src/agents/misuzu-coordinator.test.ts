@@ -4,8 +4,53 @@ import { mkdir, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, test } from "vite-plus/test"
+import type { AgentEvent } from "@mariozechner/pi-agent-core"
+import type { AssistantMessage, StopReason } from "@mariozechner/pi-ai"
 import { CompetitionPersistence, defaultWorkspacesRoot } from "../features/persistence.js"
 import { Coordinator, ModelPool } from "./misuzu-coordinator.js"
+import type { ModelSlot } from "./coordinator/model-pool.js"
+import type { Solver } from "./misuzu-solver.js"
+
+function buildAssistantMessage(stopReason: StopReason, errorMessage?: string): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: "run end" }],
+    api: "openai",
+    provider: "openai",
+    model: "gpt-test",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason,
+    errorMessage,
+    timestamp: Date.now(),
+  }
+}
+
+function createSolverEventHarness() {
+  let handler: ((event: AgentEvent) => void) | undefined
+
+  const solver = {
+    subscribe(fn: (event: AgentEvent) => void) {
+      handler = fn
+      return () => {
+        handler = undefined
+      }
+    },
+  } as unknown as Solver
+
+  return {
+    solver,
+    emit(event: AgentEvent) {
+      handler?.(event)
+    },
+  }
+}
 
 describe("ModelPool", () => {
   test("supports multi-concurrency per model", () => {
@@ -23,6 +68,45 @@ describe("ModelPool", () => {
     expect(pool.available).toBe(0)
   })
 
+  test("adds model slots dynamically", () => {
+    const pool = new ModelPool(["rightcode/gpt-5.4"], { maxConcurrencyPerModel: 1 })
+
+    const result = pool.addModel("rightcode/gpt-5.4", 2)
+
+    expect(result.added).toBe(2)
+    expect(result.total).toBe(3)
+    expect(pool.available).toBe(3)
+    expect(pool.total).toBe(3)
+  })
+
+  test("sets per-model concurrency when slots are idle", () => {
+    const pool = new ModelPool(["rightcode/gpt-5.4"], { maxConcurrencyPerModel: 2 })
+
+    const result = pool.setModelConcurrency("rightcode/gpt-5.4", 4)
+    expect(result.previousTotal).toBe(2)
+    expect(result.total).toBe(4)
+    expect(result.added).toBe(2)
+    expect(result.removed).toBe(0)
+
+    const shrink = pool.setModelConcurrency("rightcode/gpt-5.4", 1)
+    expect(shrink.previousTotal).toBe(4)
+    expect(shrink.total).toBe(1)
+    expect(shrink.added).toBe(0)
+    expect(shrink.removed).toBe(3)
+    expect(pool.available).toBe(1)
+  })
+
+  test("rejects concurrency below busy slots", () => {
+    const pool = new ModelPool(["rightcode/gpt-5.4"], { maxConcurrencyPerModel: 2 })
+    pool.acquire("solver-1")
+    pool.acquire("solver-2")
+
+    expect(() => pool.setModelConcurrency("rightcode/gpt-5.4", 0)).toThrowError(
+      /Concurrency must be a positive integer/,
+    )
+    expect(() => pool.setModelConcurrency("rightcode/gpt-5.4", 1)).toThrowError(/busy/)
+  })
+
   test("coordinator modelConcurrency expands pool slots", async () => {
     const launchDir = join(tmpdir(), `misuzu-model-concurrency-${Date.now()}`)
     await mkdir(launchDir, { recursive: true })
@@ -35,6 +119,32 @@ describe("ModelPool", () => {
     })
 
     expect(coordinator.modelPool.available).toBe(2)
+
+    coordinator.persistence.close()
+    await rm(launchDir, { recursive: true, force: true })
+  })
+
+  test("coordinator can add model and update concurrency", async () => {
+    const launchDir = join(tmpdir(), `misuzu-model-mutate-${Date.now()}`)
+    await mkdir(launchDir, { recursive: true })
+
+    const coordinator = new Coordinator({
+      cwd: launchDir,
+      workspaceRoot: launchDir,
+      models: ["rightcode/gpt-5.4"],
+      modelConcurrency: 1,
+    })
+
+    const addResult = coordinator.addModelToPool("rightcode/gpt-5.4", 2)
+    expect(addResult.total).toBe(3)
+    expect(coordinator.modelPool.available).toBe(3)
+
+    const concurrencyResult = coordinator.setModelPoolConcurrency("rightcode/gpt-5.4", 2)
+    expect(concurrencyResult.total).toBe(2)
+    expect(coordinator.modelPool.available).toBe(2)
+
+    const persisted = coordinator.persistence.loadCoordinatorState<{ modelPool?: ModelSlot[] }>()
+    expect(persisted?.modelPool?.length).toBe(2)
 
     coordinator.persistence.close()
     await rm(launchDir, { recursive: true, force: true })
@@ -137,7 +247,7 @@ describe("Coordinator resume", () => {
       role: "user",
       content: "resume context",
       timestamp: Date.now(),
-    } as any)
+    })
 
     persistence.saveSolverState("crypto-1", {
       solverId: "crypto-1",
@@ -177,6 +287,298 @@ describe("Coordinator resume", () => {
     expect(existsSync(resumed.persistence.getSolverEnvironmentPath("crypto-1"))).toBe(true)
 
     resumed.persistence.close()
+    await rm(launchDir, { recursive: true, force: true })
+  })
+})
+
+describe("Coordinator solver lifecycle", () => {
+  test("keeps unsolved solver active after normal agent_end", async () => {
+    const launchDir = join(tmpdir(), `misuzu-solver-lifecycle-${Date.now()}`)
+    await mkdir(launchDir, { recursive: true })
+
+    const coordinator = new Coordinator({
+      cwd: launchDir,
+      workspaceRoot: launchDir,
+      models: ["rightcode/gpt-5.4"],
+      modelPool: new ModelPool(["rightcode/gpt-5.4"]),
+    })
+
+    const challengeId = "web-unsolved"
+    const challengeName = "web unsolved"
+
+    coordinator.modelPool.acquire(challengeId)
+    coordinator.persistence.saveSolverState(challengeId, {
+      solverId: challengeId,
+      challengeName,
+      status: "solving",
+    })
+
+    const harness = createSolverEventHarness()
+    coordinator.solvers.set(challengeId, harness.solver)
+
+    const internal = coordinator as unknown as {
+      attachSolverLifecycle: (challengeId: string, challengeName: string, solver: Solver) => void
+    }
+    internal.attachSolverLifecycle(challengeId, challengeName, harness.solver)
+
+    const assistant = buildAssistantMessage("stop")
+    harness.emit({ type: "turn_end", message: assistant, toolResults: [] })
+    harness.emit({ type: "agent_end", messages: [assistant] })
+
+    expect(coordinator.solvers.has(challengeId)).toBe(true)
+    expect(coordinator.modelPool.available).toBe(0)
+
+    const state = coordinator.persistence.loadSolverState<{
+      status?: string
+      lastAgentEndReason?: string
+    }>(challengeId)
+    expect(state?.status).toBe("solving")
+    expect(state?.lastAgentEndReason).toBe("stop")
+
+    coordinator.persistence.close()
+    await rm(launchDir, { recursive: true, force: true })
+  })
+
+  test("releases failed solver slot on error agent_end", async () => {
+    const launchDir = join(tmpdir(), `misuzu-solver-error-${Date.now()}`)
+    await mkdir(launchDir, { recursive: true })
+
+    const coordinator = new Coordinator({
+      cwd: launchDir,
+      workspaceRoot: launchDir,
+      models: ["rightcode/gpt-5.4"],
+      modelPool: new ModelPool(["rightcode/gpt-5.4"]),
+    })
+
+    const challengeId = "crypto-error"
+    const challengeName = "crypto error"
+
+    coordinator.modelPool.acquire(challengeId)
+    coordinator.persistence.saveSolverState(challengeId, {
+      solverId: challengeId,
+      challengeName,
+      status: "solving",
+    })
+
+    const harness = createSolverEventHarness()
+    coordinator.solvers.set(challengeId, harness.solver)
+
+    const internal = coordinator as unknown as {
+      attachSolverLifecycle: (challengeId: string, challengeName: string, solver: Solver) => void
+    }
+    internal.attachSolverLifecycle(challengeId, challengeName, harness.solver)
+
+    const assistant = buildAssistantMessage("error", "tool crashed")
+    harness.emit({ type: "turn_end", message: assistant, toolResults: [] })
+    harness.emit({ type: "agent_end", messages: [assistant] })
+
+    expect(coordinator.solvers.has(challengeId)).toBe(false)
+    expect(coordinator.modelPool.available).toBe(1)
+
+    const state = coordinator.persistence.loadSolverState<{
+      status?: string
+      lastAgentEndReason?: string
+      lastAgentEndError?: string
+    }>(challengeId)
+    expect(state?.status).toBe("failed")
+    expect(state?.lastAgentEndReason).toBe("error")
+    expect(state?.lastAgentEndError).toBe("tool crashed")
+
+    coordinator.persistence.close()
+    await rm(launchDir, { recursive: true, force: true })
+  })
+})
+
+describe("Coordinator queue dispatch", () => {
+  test("appends scheduler update when queued challenge auto-dispatches", async () => {
+    const launchDir = join(tmpdir(), `misuzu-queue-dispatch-${Date.now()}`)
+    await mkdir(launchDir, { recursive: true })
+
+    const coordinator = new Coordinator({
+      cwd: launchDir,
+      workspaceRoot: launchDir,
+      models: ["rightcode/gpt-5.4"],
+      modelPool: new ModelPool(["rightcode/gpt-5.4"]),
+    })
+
+    coordinator.challengeQueue.push({
+      challengeId: "crypto-102",
+      challengeName: "Small e",
+      category: "crypto",
+      description: "rsa",
+    })
+
+    const internal = coordinator as unknown as {
+      dispatchQueuedChallenges: () => Promise<void>
+      getCreateSolverTool: () => {
+        execute: (
+          toolCallId: string,
+          params: unknown,
+        ) => Promise<{ details?: { queued?: boolean; model?: string }; content: unknown[] }>
+      }
+    }
+
+    internal.getCreateSolverTool = () => ({
+      execute: async (_toolCallId, _params) => ({
+        content: [{ type: "text", text: "started" }],
+        details: { queued: false, model: "rightcode/gpt-5.4" },
+      }),
+    })
+
+    await internal.dispatchQueuedChallenges()
+
+    const schedulerMessage = coordinator.state.messages.find((m) => m.role === "schedulerUpdate") as
+      | {
+          role: "schedulerUpdate"
+          challengeId: string
+          status: string
+          reason: string
+          queueBefore: number
+          queueAfter: number
+        }
+      | undefined
+
+    expect(schedulerMessage?.challengeId).toBe("crypto-102")
+    expect(schedulerMessage?.status).toBe("started")
+    expect(schedulerMessage?.reason).toBe("slot_freed_auto_dispatch")
+    expect(schedulerMessage?.queueBefore).toBe(1)
+    expect(schedulerMessage?.queueAfter).toBe(0)
+
+    coordinator.persistence.close()
+    await rm(launchDir, { recursive: true, force: true })
+  })
+
+  test("skips dispatch for already active challenge", async () => {
+    const launchDir = join(tmpdir(), `misuzu-queue-skip-active-${Date.now()}`)
+    await mkdir(launchDir, { recursive: true })
+
+    const coordinator = new Coordinator({
+      cwd: launchDir,
+      workspaceRoot: launchDir,
+      models: ["rightcode/gpt-5.4"],
+      modelPool: new ModelPool(["rightcode/gpt-5.4"]),
+    })
+
+    coordinator.challengeQueue.push({
+      challengeId: "web-101",
+      challengeName: "Login Lab",
+      category: "web",
+      description: "auth",
+    })
+
+    coordinator.solvers.set("web-101", createSolverEventHarness().solver)
+
+    let executeCalls = 0
+    const internal = coordinator as unknown as {
+      dispatchQueuedChallenges: () => Promise<void>
+      getCreateSolverTool: () => {
+        execute: (
+          toolCallId: string,
+          params: unknown,
+        ) => Promise<{ details?: { queued?: boolean; model?: string }; content: unknown[] }>
+      }
+    }
+
+    internal.getCreateSolverTool = () => ({
+      execute: async (_toolCallId, _params) => {
+        executeCalls += 1
+        return {
+          content: [{ type: "text", text: "should not run" }],
+          details: { queued: false, model: "rightcode/gpt-5.4" },
+        }
+      },
+    })
+
+    await internal.dispatchQueuedChallenges()
+
+    const schedulerMessage = coordinator.state.messages.find((m) => m.role === "schedulerUpdate") as
+      | {
+          role: "schedulerUpdate"
+          challengeId: string
+          status: string
+          reason: string
+          queueBefore: number
+          queueAfter: number
+        }
+      | undefined
+
+    expect(executeCalls).toBe(0)
+    expect(schedulerMessage?.challengeId).toBe("web-101")
+    expect(schedulerMessage?.status).toBe("skipped")
+    expect(schedulerMessage?.reason).toBe("already_active")
+    expect(schedulerMessage?.queueBefore).toBe(1)
+    expect(schedulerMessage?.queueAfter).toBe(0)
+
+    coordinator.persistence.close()
+    await rm(launchDir, { recursive: true, force: true })
+  })
+
+  test("skips dispatch for finalized challenge state", async () => {
+    const launchDir = join(tmpdir(), `misuzu-queue-skip-finalized-${Date.now()}`)
+    await mkdir(launchDir, { recursive: true })
+
+    const coordinator = new Coordinator({
+      cwd: launchDir,
+      workspaceRoot: launchDir,
+      models: ["rightcode/gpt-5.4"],
+      modelPool: new ModelPool(["rightcode/gpt-5.4"]),
+    })
+
+    coordinator.challengeQueue.push({
+      challengeId: "rev-201",
+      challengeName: "dead queue item",
+      category: "reversing",
+      description: "already solved",
+    })
+
+    coordinator.persistence.saveSolverState("rev-201", {
+      solverId: "rev-201",
+      status: "solved",
+      updatedAt: new Date().toISOString(),
+    })
+
+    let executeCalls = 0
+    const internal = coordinator as unknown as {
+      dispatchQueuedChallenges: () => Promise<void>
+      getCreateSolverTool: () => {
+        execute: (
+          toolCallId: string,
+          params: unknown,
+        ) => Promise<{ details?: { queued?: boolean; model?: string }; content: unknown[] }>
+      }
+    }
+
+    internal.getCreateSolverTool = () => ({
+      execute: async (_toolCallId, _params) => {
+        executeCalls += 1
+        return {
+          content: [{ type: "text", text: "should not run" }],
+          details: { queued: false, model: "rightcode/gpt-5.4" },
+        }
+      },
+    })
+
+    await internal.dispatchQueuedChallenges()
+
+    const schedulerMessage = coordinator.state.messages.find((m) => m.role === "schedulerUpdate") as
+      | {
+          role: "schedulerUpdate"
+          challengeId: string
+          status: string
+          reason: string
+          queueBefore: number
+          queueAfter: number
+        }
+      | undefined
+
+    expect(executeCalls).toBe(0)
+    expect(schedulerMessage?.challengeId).toBe("rev-201")
+    expect(schedulerMessage?.status).toBe("skipped")
+    expect(schedulerMessage?.reason).toBe("already_solved")
+    expect(schedulerMessage?.queueBefore).toBe(1)
+    expect(schedulerMessage?.queueAfter).toBe(0)
+
+    coordinator.persistence.close()
     await rm(launchDir, { recursive: true, force: true })
   })
 })

@@ -6,6 +6,7 @@ import {
   compactWithSummary,
 } from "./compaction.js"
 import type { AgentMessage } from "@mariozechner/pi-agent-core"
+import type { CompactionSummaryMessage } from "./messages.ts"
 
 function user(content: string): AgentMessage {
   return { role: "user", content, timestamp: Date.now() } as AgentMessage
@@ -18,7 +19,6 @@ function assistant(
   return {
     role: "assistant",
     content: [{ type: "text", text }],
-    api: {} as any,
     provider: "test",
     model: "test",
     usage: usage
@@ -131,7 +131,7 @@ describe("compactWithSummary", () => {
 
   test("summary has correct fields", () => {
     const messages = [user("old"), assistant("old"), user("new")]
-    const summary = compactWithSummary(messages, "Test summary")[0] as any
+    const summary = compactWithSummary(messages, "Test summary")[0] as CompactionSummaryMessage
     expect(summary.role).toBe("compactionSummary")
     expect(summary.summary).toBe("Test summary")
     expect(summary.tokensBefore).toBeGreaterThan(0)

@@ -1,190 +1,97 @@
 # Architecture
 
-Misuzu-core is a CTF (Capture The Flag) agent framework built on [`@mariozechner/pi-agent-core`](https://github.com/mariozechner/pi-agent-core) and [`@mariozechner/pi-ai`](https://github.com/mariozechner/pi-ai). It provides a multi-agent system where a Coordinator assigns challenges to Solver agents with per-solver workspaces.
+`misuzu-core` is a CTF automation runtime built on top of `@mariozechner/pi-agent-core` and `@mariozechner/pi-ai`.
+It provides a coordinator/solver multi-agent model with persistent local workspaces.
 
-## Table of Contents
+## What This Package Owns
 
-- [Overview](#overview)
-- [Layer Diagram](#layer-diagram)
-- [Data Flow](#data-flow)
-- [Module Structure](#module-structure)
-- [Documentation](#documentation)
-- [Dependencies](#dependencies)
+- Agent orchestration (`Coordinator`, `Solver`, `FeaturedAgent`)
+- Tool runtime (filesystem, shell, search, docker)
+- Context compaction and custom message conversion
+- Skill loading and skill catalog injection
+- Workspace/session persistence and resume
 
-## Overview
+## System Layers
 
-Misuzu solves CTF challenges through a hierarchy of agents:
+1. **Application Agents**
+   - `Coordinator`: challenge assignment, queueing, solver supervision, flag confirmation
+   - `Solver`: single-challenge execution and artifact generation
+2. **Agent Foundation**
+   - `FeaturedAgent`: wraps `pi-agent-core` `Agent` with skills, compaction, persistence hooks
+3. **Platform Services**
+   - Tools, skills, compaction, persistence, provider adapter
+4. **Underlying Runtime**
+   - `pi-agent-core` event loop and tool-call lifecycle
+   - `pi-ai` models/providers and message streaming
 
-- **Coordinator**: Discovers challenges on the CTF platform, assigns them to Solver agents, receives flags, and submits them. Acts as the team manager.
-- **Solver**: An expert CTF player agent that operates on individual challenges. Uses Docker and standard file/network tools to analyze and exploit challenges.
-- **FeaturedAgent**: The base class both agents extend. Wraps `pi-agent-core`'s `Agent` with automatic skill loading, context compaction, and custom message type handling.
+## Runtime Behavior (High Level)
 
-Coordinator assignments are non-blocking: `create_solver` initializes solver workspace files under `.misuzu/workspaces/.../coordinator/solvers/<solver-id>/`, starts the Solver loop in the background, and immediately returns control so additional challenges can be dispatched.
+1. User prompts `Coordinator`
+2. Coordinator calls `create_solver` for challenges
+3. Each solver gets a dedicated workspace and runs asynchronously
+4. Solver reports candidate flags via custom messages/tool calls
+5. Coordinator confirms/rejects flags and updates solver state
+6. Persistence continuously records sessions/state for resume
 
-## Layer Diagram
+## Solver Lifecycle Semantics
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Coordinator Agent                        │
-│  - Challenge discovery & assignment                             │
-│  - Flag submission                                              │
-│  - Solver supervision (steer, followUp, abort)                  │
-│  Tools: bash, read, find, grep                                  │
-├─────────────────────────────────────────────────────────────────┤
-│                         Solver Agent                            │
-│  - Expert CTF player persona                                    │
-│  - Docker container builds for challenge services                │
-│  - Per-solver artifacts (attachments/scripts/writeup)            │
-│  Tools: bash, read, write, edit, find, grep, docker              │
-├─────────────────────────────────────────────────────────────────┤
-│                      FeaturedAgent (base)                       │
-│  - Skill catalog (in system prompt)                             │
-│  - Auto-compaction (transformContext hook)                      │
-│  - Custom message types (convertToLlm)                          │
-├─────────────────────────────────────────────────────────────────┤
-│                  @mariozechner/pi-agent-core                     │
-│  - Agent class (state, event loop, tool execution)              │
-│  - AgentTool interface (TypeBox schemas, execute)               │
-│  - AgentMessage, AgentEvent types                               │
-│  - steer() / followUp() / prompt() / abort()                   │
-├─────────────────────────────────────────────────────────────────┤
-│                    @mariozechner/pi-ai                           │
-│  - LLM provider abstraction                                     │
-│  - Model types, streaming, API key resolution                   │
-└─────────────────────────────────────────────────────────────────┘
-```
+- Solver end reason is derived from run events (`turn_end` primarily, `agent_end` as fallback)
+- `stop` / `length`: solver remains active (`solving`), model slot is retained
+- `error` / `aborted`: solver marked `failed`, model slot released
+- `solved`: finalized and slot released
+- Queue dispatch is deterministic when a slot becomes available
 
-## Data Flow
+## Package Structure
 
-### Prompt Flow
-
-```
-User request
-     │
-     ▼
-Coordinator.prompt(message)
-     │
-     ▼
-┌────────────────────────────────────────────────────┐
-│  transformContext(messages)                        │
-│    └─ checkCompact() ─► compact() if needed        │
-│  convertToLlm(messages)                            │
-│    └─ custom messages ─► user messages             │
-│  LLM call via pi-ai                                │
-│    └─ system prompt + converted messages           │
-└────────────────────────────────────────────────────┘
-     │
-     ▼
-Assistant response (may contain tool calls)
-     │
-     ▼
-Tool execution (parallel by default)
-     │
-     ▼
-Tool results appended to context ──► next LLM turn
-```
-
-### Multi-Agent Communication
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                           Coordinator                            │
-│                                                                  │
-│  1. Fetch challenges from platform                               │
-│  2. Sort by difficulty (easiest first)                           │
-│  3. Assign to solvers via create_solver                          │
-│                                                                  │
-│  ┌──────────────┐  prompt/steer  ┌──────────────┐               │
-│  │  Model Pool   │──────────────►│  Solver A    │               │
-│  │  ┌─────────┐  │               │  (autonomous)│               │
-│  │  │ model 1 │──┼──────────────►│              │               │
-│  │  │ model 2 │──┼───► Solver B  │  Self-recovery│              │
-│  │  │ model 3 │──┼───► Solver C  │  if stuck    │               │
-│  │  └─────────┘  │               └──────┬───────┘               │
-│  │  Queue: [...] │                      │                        │
-│  └──────────────┘               FlagResultMessage               │
-│                                      │                           │
-│         ◄────────────────────────────┘                           │
-│                                                                  │
-│  Coordinator submits flag to platform                            │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-See [agents.md](agents.md) for the full communication design.
-
-### Compaction and Skill Catalog Protection
-
-```
-┌─────────────────────────────────────────┐
-│         AgentState.systemPrompt         │  ← NEVER touched by compaction
-│  ┌───────────────────────────────────┐  │
-│  │  Base persona & instructions      │  │
-│  │  <available_skills>               │  │  ← Skill catalog lives here
-│  │    <skill>playwright-cli</skill>  │  │
-│  │  </available_skills>              │  │
-│  └───────────────────────────────────┘  │
-├─────────────────────────────────────────┤
-│        AgentState.messages              │  ← Compaction operates here
-│  [user, assistant, toolResult, ...]     │
-│                                         │
-│  transformContext:                      │
-│    if (checkCompact(agent))             │
-│      return compact(agent)              │  ← Only modifies messages
-└─────────────────────────────────────────┘
-```
-
-The skill catalog is protected because it lives in `systemPrompt`, which is passed to the LLM as a separate parameter on every call. `transformContext` (where compaction runs) only receives and returns `AgentMessage[]`.
-
-See [compaction.md](compaction.md) and [skills.md](skills.md) for details.
-
-## Module Structure
-
-```
+```text
 packages/misuzu-core/src/
-├── index.ts                          # Public API exports
-├── agents/
-│   ├── misuzu-featured.ts            # FeaturedAgent base class
-│   ├── misuzu-solver.ts              # Solver agent
-│   └── misuzu-coordinator.ts         # Coordinator agent (model pool, assignment)
-├── features/
-│   ├── compaction.ts                 # Context compaction (pure functions)
-│   ├── skill.ts                      # Skill loading and catalog building
-│   ├── messages.ts                   # Custom message types & convertToLlm
-│   └── persistence.ts                # Session/state persistence helpers
-├── tools/
-│   ├── index.ts                      # Tool barrel exports & collections
-│   ├── base/
-│   │   ├── bash.ts                   # Shell command execution
-│   │   ├── read.ts                   # File reading
-│   │   ├── write.ts                  # File writing
-│   │   ├── edit.ts                   # Surgical text replacement
-│   │   ├── find.ts                   # Glob file search
-│   │   └── grep.ts                   # Content search
-│   ├── misuzu/
-│   │   └── docker.ts                 # Docker container management
-│   └── utils/
-│       ├── truncate.ts               # Output truncation (head/tail)
-│       ├── file-mutation-queue.ts    # Serialized file edits
-│       └── path.ts                   # Path resolution utilities
+  agents/       # FeaturedAgent, Coordinator, Solver
+  features/     # compaction, messages, persistence, skills
+  tools/        # base tools + docker tools + tool utils
+  providers/    # model provider adapter
+  index.ts      # public API barrel
 ```
 
-## Documentation
+## Public API (from `src/index.ts`)
 
-| Document                           | Content                                                 |
-| ---------------------------------- | ------------------------------------------------------- |
-| [architecture.md](architecture.md) | This file — system overview                             |
-| [tools.md](tools.md)               | Tool system, base tools, and skill-first OOB workflows  |
-| [compaction.md](compaction.md)     | Context compaction, skill catalog protection            |
-| [skills.md](skills.md)             | Skill discovery, frontmatter, system prompt integration |
-| [agents.md](agents.md)             | Agent definitions, model pool, assignment               |
-| [persistence.md](persistence.md)   | Session persistence, competition directory, resume flow |
+### Agents
 
-## Dependencies
+- `FeaturedAgent`, `FeaturedAgentOptions`
+- `Solver`, `SolverOptions`
+- `Coordinator`, `CoordinatorOptions`, `ResumeCoordinatorOptions`
+- `ModelPool`, `ModelSlot`, `Challenge`
 
-| Package                       | Purpose                                        |
-| ----------------------------- | ---------------------------------------------- |
-| `@mariozechner/pi-agent-core` | Agent class, AgentTool, events, steer/followUp |
-| `@mariozechner/pi-ai`         | LLM providers, Model types, `getModel()`       |
-| `@sinclair/typebox`           | JSON Schema for tool parameter validation      |
-| `yaml`                        | YAML frontmatter parsing for skills            |
-| `glob`                        | File pattern matching for find tool            |
+### Features
+
+- Compaction: `checkCompact`, `compact`, `compactWithSummary`, `estimateTokens`, `estimateContextTokens`, `findCutPoint`
+- Skills: `extractSkillFrontmatter`, `importSkillsFromDirectory`, `importSkillsFromDirectorySync`, `resolveMisuzuRoot`, `loadAgentSkills`, `loadBuiltinSkills`, `loadWorkspaceSkills`, `buildSkillsCatalog`
+- Persistence: `SessionManager`, `AgentSessionRecorder`, `CompetitionPersistence`, `createWorkspaceId`, `defaultWorkspacesRoot`, `createCompetitionId`, `defaultCompetitionsRoot`
+- Messages: `convertToLlm`, `FlagResultMessage`, `ChallengeUpdateMessage`, `CompactionSummaryMessage`
+
+### Tools and Utilities
+
+- Collections: `baseTools`, `readOnlyTools`
+- Tool factories/defaults: `createBashTool`, `bashTool`, `createReadTool`, `readTool`, `createWriteTool`, `writeTool`, `createEditTool`, `editTool`, `createFindTool`, `findTool`, `createGrepTool`, `grepTool`
+- Tool contracts: `BashOperations`, `BashToolDetails`, `ReadOperations`, `ReadToolDetails`, `WriteOperations`, `EditOperations`, `EditToolDetails`, `FindOperations`, `FindToolDetails`, `GrepToolDetails`
+- Utility exports: `truncateHead`, `truncateTail`, `truncateLine`, `formatSize`, `TruncationResult`, `withFileMutationQueue`, `resolveToCwd`, `resolveReadPath`, `expandPath`
+- CTF tools: `dockerTools`, `dockerBuildTool`, `dockerRunTool`, `dockerExecTool`, `dockerStopTool`, `dockerRmTool`
+
+### Provider
+
+- `ProxyProvider`, `ProxyProviderOptions`
+
+## Design Constraints
+
+- Workspace-first operation under `.misuzu/workspaces/...`
+- Non-blocking solver startup from coordinator
+- Explicit model-slot accounting via `ModelPool`
+- File-backed challenge context (`ENVIRONMENT.md`) is authoritative
+- Skills are in `systemPrompt` (not message history), so compaction does not remove them
+
+## Related Docs
+
+- `agents.md`: agent roles, lifecycle, and external methods
+- `tools.md`: tool behavior contracts and failure semantics
+- `compaction.md`: trigger rules and summary flow
+- `persistence.md`: on-disk model and resume behavior
+- `skills.md`: skill loading model and resolution rules

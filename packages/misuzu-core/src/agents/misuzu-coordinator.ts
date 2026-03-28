@@ -1,194 +1,39 @@
-import { Type } from "@sinclair/typebox"
-import { dirname, join, resolve } from "node:path"
+import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core"
+import { Type, type Static } from "@sinclair/typebox"
+import { dirname, join } from "node:path"
 import type { Model } from "@mariozechner/pi-ai"
 import { FeaturedAgent, type FeaturedAgentOptions } from "./misuzu-featured.ts"
 import { Solver } from "./misuzu-solver.ts"
 import { createBaseTools, createReadOnlyTools } from "../tools/index.ts"
 import { bashTool } from "../tools/base/bash.ts"
 import { dockerTools } from "../tools/misuzu/docker.ts"
-import type { FlagResultMessage } from "../features/messages.ts"
+import type { SchedulerUpdateMessage } from "../features/messages.ts"
 import { loadAgentSkills } from "../features/skill.ts"
+import { CompetitionPersistence, defaultWorkspacesRoot } from "../features/persistence.ts"
 import {
-  CompetitionPersistence,
-  defaultWorkspacesRoot,
-  type JsonObject,
-} from "../features/persistence.ts"
+  formatError,
+  getModelId,
+  inferLaunchRootFromWorkspaceDir,
+  isAssistantMessage,
+  isChallengeUpdateMessage,
+  isFlagResultMessage,
+} from "./coordinator/helpers.ts"
+import { ModelPool, parseModelSlots, type ModelSlot } from "./coordinator/model-pool.ts"
+import { buildCoordinatorSystemPrompt } from "./coordinator/prompt.ts"
+import type {
+  Challenge,
+  CoordinatorOptions,
+  NotificationSource,
+  PersistedCoordinatorState,
+  PersistedSolverState,
+  QueuedChallenge,
+  ResumeCoordinatorOptions,
+  SolverNotification,
+  SolverRunEndMeta,
+} from "./coordinator/types.ts"
 
-export interface ModelSlot {
-  model: string
-  status: "idle" | "busy"
-  solverId?: string
-}
-
-export interface ModelPoolOptions {
-  maxConcurrencyPerModel?: number
-}
-
-function getModelId(model: Model<any>): string {
-  const candidate = (model as { id?: unknown }).id
-  if (typeof candidate === "string" && candidate.trim().length > 0) {
-    return candidate
-  }
-  return "model"
-}
-
-function formatError(error: unknown): string {
-  if (error instanceof Error) return error.message
-  if (typeof error === "string") return error
-  try {
-    return JSON.stringify(error)
-  } catch {
-    return String(error)
-  }
-}
-
-function inferLaunchRootFromWorkspaceDir(workspaceDir: string): string {
-  const resolvedWorkspaceDir = resolve(workspaceDir)
-  const workspacesDir = dirname(resolvedWorkspaceDir)
-  const dotMisuzuDir = dirname(workspacesDir)
-  return dirname(dotMisuzuDir)
-}
-
-function parseModelSlots(value: unknown): ModelSlot[] {
-  if (!Array.isArray(value)) return []
-
-  const slots: ModelSlot[] = []
-  for (const item of value) {
-    if (!item || typeof item !== "object") continue
-    const candidate = item as Record<string, unknown>
-    if (typeof candidate.model !== "string") continue
-    if (candidate.status !== "idle" && candidate.status !== "busy") continue
-
-    slots.push({
-      model: candidate.model,
-      status: candidate.status,
-      solverId: typeof candidate.solverId === "string" ? candidate.solverId : undefined,
-    })
-  }
-
-  return slots
-}
-
-export class ModelPool {
-  private slots: ModelSlot[]
-
-  constructor(models: string[], options: ModelPoolOptions = {}) {
-    const perModel = Math.max(1, Math.floor(options.maxConcurrencyPerModel ?? 1))
-    this.slots = models.flatMap((model) =>
-      Array.from({ length: perModel }, () => ({ model, status: "idle" as const })),
-    )
-  }
-
-  static fromSlots(slots: ModelSlot[]): ModelPool {
-    const pool = new ModelPool([])
-    pool.slots = slots.map((slot) => ({ ...slot }))
-    return pool
-  }
-
-  acquire(solverId: string): string | null {
-    const slot = this.slots.find((s) => s.status === "idle")
-    if (!slot) return null
-    slot.status = "busy"
-    slot.solverId = solverId
-    return slot.model
-  }
-
-  release(solverId: string): void {
-    const slot = this.slots.find((s) => s.solverId === solverId)
-    if (slot) {
-      slot.status = "idle"
-      slot.solverId = undefined
-    }
-  }
-
-  get available(): number {
-    return this.slots.filter((s) => s.status === "idle").length
-  }
-
-  toJSON(): ModelSlot[] {
-    return [...this.slots]
-  }
-}
-
-export interface CoordinatorOptions {
-  cwd?: string
-  workspaceRoot?: string
-  workspaceId?: string
-  ctfPlatformUrl?: string
-  models?: string[]
-  modelConcurrency?: number
-  model?: Model<any>
-  modelResolver?: (modelId: string) => Model<any> | undefined
-  modelPool?: ModelPool
-  persistence?: CompetitionPersistence
-}
-
-export interface Challenge {
-  id: string
-  name: string
-  category: string
-  description: string
-  difficulty?: number
-  files?: string[]
-  points?: number
-}
-
-type SolverNotificationKind = "environment_expired" | "environment_url" | "hint" | "platform_notice"
-
-interface SolverNotification {
-  kind: SolverNotificationKind
-  content: string
-  url?: string
-  expiresAt?: string
-}
-
-interface SolverReportedFlag {
-  flag: string
-  details?: string
-}
-
-interface PersistedCoordinatorState extends JsonObject {
-  workspaceRoot?: string
-  modelPool?: ModelSlot[]
-  solvers?: string[]
-  challengeQueue?: Array<{
-    challengeId: string
-    challengeName: string
-    category: string
-    description: string
-    difficulty?: number
-    files?: string[]
-  }>
-}
-
-interface PersistedSolverState extends JsonObject {
-  solverId?: string
-  challengeName?: string
-  category?: string
-  description?: string
-  status?: string
-  model?: string
-  cwd?: string
-  environmentPath?: string
-  scriptsDir?: string
-  writeupPath?: string
-}
-
-export interface ResumeCoordinatorOptions {
-  workspaceDir: string
-  autoContinueSolvers?: boolean
-  cwd?: CoordinatorOptions["cwd"]
-  workspaceRoot?: CoordinatorOptions["workspaceRoot"]
-  ctfPlatformUrl?: CoordinatorOptions["ctfPlatformUrl"]
-  models?: CoordinatorOptions["models"]
-  modelConcurrency?: CoordinatorOptions["modelConcurrency"]
-  model?: CoordinatorOptions["model"]
-  modelResolver?: CoordinatorOptions["modelResolver"]
-  initialState?: FeaturedAgentOptions["initialState"]
-  skills?: FeaturedAgentOptions["skills"]
-  convertToLlm?: FeaturedAgentOptions["convertToLlm"]
-  transformContext?: FeaturedAgentOptions["transformContext"]
-}
+export { ModelPool }
+export type { Challenge, CoordinatorOptions, ModelSlot, ResumeCoordinatorOptions }
 
 export class Coordinator extends FeaturedAgent {
   readonly modelPool: ModelPool
@@ -196,14 +41,10 @@ export class Coordinator extends FeaturedAgent {
   readonly persistence: CompetitionPersistence
   readonly solvers: Map<string, Solver> = new Map()
   private readonly resolveModel?: (modelId: string) => Model<any> | undefined
-  readonly challengeQueue: Array<{
-    challengeId: string
-    challengeName: string
-    category: string
-    description: string
-    difficulty?: number
-    files?: string[]
-  }> = []
+  private readonly solverRunEndMeta = new Map<string, SolverRunEndMeta>()
+  private readonly dispatchingChallenges = new Set<string>()
+  private isQueueDispatchRunning = false
+  readonly challengeQueue: QueuedChallenge[] = []
 
   constructor(options: CoordinatorOptions & FeaturedAgentOptions = {}) {
     const cwd = options.cwd ?? process.cwd()
@@ -278,7 +119,7 @@ export class Coordinator extends FeaturedAgent {
     ]
     const existing = new Map(this.state.tools.map((tool) => [tool.name, tool]))
     for (const tool of builtInCoordinatorTools) {
-      existing.set(tool.name, tool as any)
+      existing.set(tool.name, tool)
     }
     this.setTools(Array.from(existing.values()))
 
@@ -293,6 +134,27 @@ export class Coordinator extends FeaturedAgent {
     })
 
     this.persistCoordinatorState()
+  }
+
+  private appendUserMessage(content: string) {
+    this.appendMessage({ role: "user", content, timestamp: Date.now() })
+  }
+
+  private appendSchedulerUpdate(update: Omit<SchedulerUpdateMessage, "role" | "timestamp">) {
+    this.appendMessage({
+      role: "schedulerUpdate",
+      ...update,
+      timestamp: Date.now(),
+    })
+  }
+
+  private createSolverTools(challengeId: string, solverRoot: string) {
+    return [
+      ...createBaseTools(solverRoot),
+      ...dockerTools,
+      this.createSolverNotifyCoordinatorTool(challengeId),
+      this.createSolverReportFlagTool(challengeId),
+    ]
   }
 
   static resumeFromWorkspace(options: ResumeCoordinatorOptions): Coordinator {
@@ -372,7 +234,8 @@ export class Coordinator extends FeaturedAgent {
       ),
     })
 
-    return {
+    type CreateSolverParams = Static<typeof solverParams>
+    const tool: AgentTool<typeof solverParams> = {
       name: "create_solver",
       label: "Create Solver",
       description:
@@ -380,15 +243,7 @@ export class Coordinator extends FeaturedAgent {
         "Automatically selects an idle model from the pool. " +
         "Queues the challenge if no models are available and initializes per-solver workspace files.",
       parameters: solverParams,
-      execute: async (_toolCallId: string, rawParams: unknown) => {
-        const params = rawParams as {
-          challengeId: string
-          challengeName: string
-          category: string
-          description: string
-          difficulty?: number
-          files?: string[]
-        }
+      execute: async (_toolCallId, params: CreateSolverParams) => {
         const modelId = this.modelPool.acquire(params.challengeId)
         if (!modelId) {
           this.challengeQueue.push(params)
@@ -417,13 +272,6 @@ export class Coordinator extends FeaturedAgent {
 
         const solverModel = this.resolveModel?.(modelId) ?? this.state.model
 
-        const solverTools = [
-          ...createBaseTools(solverWorkspace.rootDir),
-          ...dockerTools,
-          this.createSolverNotifyCoordinatorTool(params.challengeId),
-          this.createSolverReportFlagTool(params.challengeId),
-        ]
-
         const solver = new Solver({
           solverId: params.challengeId,
           cwd: solverWorkspace.rootDir,
@@ -432,7 +280,7 @@ export class Coordinator extends FeaturedAgent {
           environmentFilePath: solverWorkspace.environmentPath,
           scriptsDir: solverWorkspace.scriptsDir,
           writeupPath: solverWorkspace.writeupPath,
-          tools: solverTools,
+          tools: this.createSolverTools(params.challengeId, solverWorkspace.rootDir),
           sessionManager: solverWorkspace.session,
           model: solverModel,
         })
@@ -462,6 +310,7 @@ export class Coordinator extends FeaturedAgent {
               `Environment file: ${solverWorkspace.environmentPath}`,
               `Polling script template: ${solverWorkspace.platformPollScriptPath}`,
               "Read ENVIRONMENT.md first, then solve the challenge.",
+              "If current remote URL is expired/unreachable, call notify_coordinator(kind=environment_expired) and wait for coordinator URL refresh.",
             ].join("\n"),
           )
           .catch((error: unknown) => {
@@ -472,12 +321,10 @@ export class Coordinator extends FeaturedAgent {
               error: formatError(error),
               updatedAt: new Date().toISOString(),
             })
-            this.appendMessage({
-              role: "user",
-              content: `Solver for "${params.challengeName}" failed: ${formatError(error)}`,
-              timestamp: Date.now(),
-            } as any)
-            this.persistCoordinatorState()
+            this.appendUserMessage(
+              `Solver for "${params.challengeName}" failed: ${formatError(error)}`,
+            )
+            this.onSolverFinished(params.challengeId, "failed")
           })
 
         return {
@@ -495,6 +342,8 @@ export class Coordinator extends FeaturedAgent {
         }
       },
     }
+
+    return tool
   }
 
   private restoreSolversFromPersistence(autoContinueSolvers: boolean) {
@@ -537,12 +386,7 @@ export class Coordinator extends FeaturedAgent {
         environmentFilePath: environmentPath,
         scriptsDir,
         writeupPath,
-        tools: [
-          ...createBaseTools(solverRoot),
-          ...dockerTools,
-          this.createSolverNotifyCoordinatorTool(solverId),
-          this.createSolverReportFlagTool(solverId),
-        ],
+        tools: this.createSolverTools(solverId, solverRoot),
         sessionManager: this.persistence.getSolverSession(solverId),
         model: solverModel,
       })
@@ -569,34 +413,216 @@ export class Coordinator extends FeaturedAgent {
 
   private attachSolverLifecycle(challengeId: string, challengeName: string, solver: Solver) {
     solver.subscribe((event) => {
-      if (event.type === "message_end" && event.message.role === "flagResult") {
-        this.appendMessage({
-          role: "user" as const,
-          content: `Solver for "${challengeName}" found a flag: ${(event.message as unknown as FlagResultMessage).flag}`,
-          timestamp: Date.now(),
-        } as any)
+      if (event.type === "message_end" && isFlagResultMessage(event.message)) {
+        this.appendUserMessage(`Solver for "${challengeName}" found a flag: ${event.message.flag}`)
         this.persistCoordinatorState()
       }
 
-      if (event.type === "message_end" && event.message.role === "challengeUpdate") {
+      if (event.type === "message_end" && isChallengeUpdateMessage(event.message)) {
         this.handleSolverChallengeUpdate(
           challengeId,
           challengeName,
-          String((event.message as any).details ?? ""),
-          String((event.message as any).status ?? "solving"),
+          event.message.details,
+          event.message.status,
         )
       }
 
-      if (event.type === "agent_end") {
-        this.persistence.saveSolverState(challengeId, {
-          solverId: challengeId,
-          challengeName,
-          status: "stopped",
-          updatedAt: new Date().toISOString(),
+      if (event.type === "turn_end" && isAssistantMessage(event.message)) {
+        this.solverRunEndMeta.set(challengeId, {
+          stopReason: event.message.stopReason,
+          errorMessage: event.message.errorMessage,
         })
-        this.onSolverFinished(challengeId)
+      }
+
+      if (event.type === "agent_end") {
+        this.handleSolverAgentEnd(challengeId, challengeName, event.messages)
       }
     })
+  }
+
+  private resolveSolverRunEndMeta(challengeId: string, messages: AgentMessage[]): SolverRunEndMeta {
+    const fromTurnEnd = this.solverRunEndMeta.get(challengeId)
+    if (fromTurnEnd) {
+      return fromTurnEnd
+    }
+
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i]
+      if (isAssistantMessage(message)) {
+        return {
+          stopReason: message.stopReason,
+          errorMessage: message.errorMessage,
+        }
+      }
+    }
+
+    return {
+      stopReason: "error",
+      errorMessage: "Solver ended without assistant stopReason metadata.",
+    }
+  }
+
+  private handleSolverAgentEnd(
+    challengeId: string,
+    challengeName: string,
+    messages: AgentMessage[],
+  ) {
+    const persisted = this.persistence.loadSolverState<PersistedSolverState>(challengeId)
+    const meta = this.resolveSolverRunEndMeta(challengeId, messages)
+    const timestamp = new Date().toISOString()
+
+    this.solverRunEndMeta.delete(challengeId)
+
+    if (persisted?.status === "solved") {
+      this.onSolverFinished(challengeId, "solved")
+      return
+    }
+
+    if (meta.stopReason === "error" || meta.stopReason === "aborted") {
+      this.persistence.saveSolverState(challengeId, {
+        ...persisted,
+        solverId: challengeId,
+        challengeName,
+        status: "failed",
+        lastAgentEndReason: meta.stopReason,
+        lastAgentEndError: meta.errorMessage,
+        lastAgentEndAt: timestamp,
+        updatedAt: timestamp,
+      })
+      this.appendUserMessage(
+        [
+          `Solver for "${challengeName}" ended with ${meta.stopReason}.`,
+          meta.errorMessage ? `Reason: ${meta.errorMessage}` : "No additional error details.",
+          "Model slot released. Re-dispatch if needed.",
+        ].join("\n"),
+      )
+      this.onSolverFinished(challengeId, "failed")
+      return
+    }
+
+    this.persistence.saveSolverState(challengeId, {
+      ...persisted,
+      solverId: challengeId,
+      challengeName,
+      status: "solving",
+      lastAgentEndReason: meta.stopReason,
+      lastAgentEndError: meta.errorMessage,
+      lastAgentEndAt: timestamp,
+      updatedAt: timestamp,
+    })
+
+    const guidance =
+      meta.stopReason === "length"
+        ? "Context limit reached; send steer/follow-up and continue this solver."
+        : "Solver run ended before flag confirmation; decide whether to steer/follow-up or adjust environment."
+
+    this.appendUserMessage(
+      [
+        `Solver for "${challengeName}" run ended with ${meta.stopReason}.`,
+        meta.errorMessage ? `Details: ${meta.errorMessage}` : "No error details reported.",
+        guidance,
+      ].join("\n"),
+    )
+    this.persistCoordinatorState()
+  }
+
+  private async dispatchQueuedChallenges() {
+    if (this.isQueueDispatchRunning) {
+      return
+    }
+
+    this.isQueueDispatchRunning = true
+
+    try {
+      const createSolverTool = this.getCreateSolverTool()
+
+      while (this.challengeQueue.length > 0 && this.modelPool.available > 0) {
+        const queueBefore = this.challengeQueue.length
+        const next = this.challengeQueue.shift()
+        if (!next) {
+          break
+        }
+
+        if (
+          this.dispatchingChallenges.has(next.challengeId) ||
+          this.solvers.has(next.challengeId)
+        ) {
+          this.appendSchedulerUpdate({
+            challengeId: next.challengeId,
+            challengeName: next.challengeName,
+            status: "skipped",
+            reason: "already_active",
+            queueBefore,
+            queueAfter: this.challengeQueue.length,
+          })
+          continue
+        }
+
+        const persisted = this.persistence.loadSolverState<PersistedSolverState>(next.challengeId)
+        if (persisted?.status === "solved" || persisted?.status === "failed") {
+          this.appendSchedulerUpdate({
+            challengeId: next.challengeId,
+            challengeName: next.challengeName,
+            status: "skipped",
+            reason: `already_${persisted.status}`,
+            queueBefore,
+            queueAfter: this.challengeQueue.length,
+          })
+          continue
+        }
+
+        this.dispatchingChallenges.add(next.challengeId)
+
+        try {
+          const result = await createSolverTool.execute(`queue-dispatch-${Date.now()}`, next)
+          const details = result.details as
+            | { queued?: boolean; model?: string; queueLength?: number }
+            | undefined
+
+          const isRequeued = details?.queued === true
+          this.appendSchedulerUpdate({
+            challengeId: next.challengeId,
+            challengeName: next.challengeName,
+            status: isRequeued ? "requeued" : "started",
+            reason: isRequeued ? "model_unavailable" : "slot_freed_auto_dispatch",
+            queueBefore,
+            queueAfter:
+              typeof details?.queueLength === "number"
+                ? details.queueLength
+                : this.challengeQueue.length,
+            model: typeof details?.model === "string" ? details.model : undefined,
+          })
+
+          if (isRequeued) {
+            break
+          }
+        } catch (error: unknown) {
+          this.persistence.saveSolverState(next.challengeId, {
+            solverId: next.challengeId,
+            challengeName: next.challengeName,
+            status: "failed",
+            error: formatError(error),
+            updatedAt: new Date().toISOString(),
+          })
+          this.appendSchedulerUpdate({
+            challengeId: next.challengeId,
+            challengeName: next.challengeName,
+            status: "failed",
+            reason: formatError(error),
+            queueBefore,
+            queueAfter: this.challengeQueue.length,
+          })
+          this.appendUserMessage(
+            `Failed to dispatch queued challenge "${next.challengeName}": ${formatError(error)}`,
+          )
+        } finally {
+          this.dispatchingChallenges.delete(next.challengeId)
+        }
+      }
+    } finally {
+      this.isQueueDispatchRunning = false
+      this.persistCoordinatorState()
+    }
   }
 
   getUpdateSolverEnvironmentTool() {
@@ -618,27 +644,24 @@ export class Coordinator extends FeaturedAgent {
       ),
     })
 
-    return {
+    type UpdateSolverEnvironmentParams = Static<typeof schema>
+    const tool: AgentTool<typeof schema> = {
       name: "update_solver_environment",
       label: "Update Solver Environment",
       description:
         "Update solver ENVIRONMENT.md with refreshed URL, hint, or platform notice and notify the solver.",
       parameters: schema,
-      execute: async (_toolCallId: string, rawParams: unknown) => {
-        const params = rawParams as {
-          challengeId: string
-          updateType: SolverNotificationKind
-          content: string
-          url?: string
-          expiresAt?: string
-        }
-
-        const result = await this.applySolverNotification(params.challengeId, {
-          kind: params.updateType,
-          content: params.content,
-          url: params.url,
-          expiresAt: params.expiresAt,
-        })
+      execute: async (_toolCallId, params: UpdateSolverEnvironmentParams) => {
+        const result = await this.applySolverNotification(
+          params.challengeId,
+          {
+            kind: params.updateType,
+            content: params.content,
+            url: params.url,
+            expiresAt: params.expiresAt,
+          },
+          "coordinator",
+        )
 
         return {
           content: [
@@ -657,6 +680,8 @@ export class Coordinator extends FeaturedAgent {
         }
       },
     }
+
+    return tool
   }
 
   getConfirmSolverFlagTool() {
@@ -667,20 +692,14 @@ export class Coordinator extends FeaturedAgent {
       message: Type.Optional(Type.String({ description: "Optional confirmation details" })),
     })
 
-    return {
+    type ConfirmSolverFlagParams = Static<typeof schema>
+    const tool: AgentTool<typeof schema> = {
       name: "confirm_solver_flag",
       label: "Confirm Solver Flag",
       description:
         "Confirm a solver-submitted flag result. If correct, trigger writeup generation in Writeups.md.",
       parameters: schema,
-      execute: async (_toolCallId: string, rawParams: unknown) => {
-        const params = rawParams as {
-          challengeId: string
-          flag: string
-          correct: boolean
-          message?: string
-        }
-
+      execute: async (_toolCallId, params: ConfirmSolverFlagParams) => {
         this.confirmSolverFlag(params.challengeId, params.flag, params.correct, params.message)
 
         return {
@@ -700,6 +719,8 @@ export class Coordinator extends FeaturedAgent {
         }
       },
     }
+
+    return tool
   }
 
   confirmSolverFlag(challengeId: string, flag: string, correct: boolean, message?: string) {
@@ -761,24 +782,21 @@ export class Coordinator extends FeaturedAgent {
     const schema = Type.Object({
       kind: Type.Union([
         Type.Literal("environment_expired"),
-        Type.Literal("environment_url"),
         Type.Literal("hint"),
         Type.Literal("platform_notice"),
       ]),
       content: Type.String({ description: "Notification details from solver" }),
-      url: Type.Optional(Type.String({ description: "Latest environment URL if available" })),
-      expiresAt: Type.Optional(Type.String({ description: "Expiration timestamp text" })),
     })
 
-    return {
+    type NotifyCoordinatorParams = Static<typeof schema>
+    const tool: AgentTool<typeof schema> = {
       name: "notify_coordinator",
       label: "Notify Coordinator",
       description:
-        "Notify coordinator about environment expiry, refreshed URL, hints, or platform notices so ENVIRONMENT.md can be updated.",
+        "Notify coordinator about environment expiry, hints, or platform notices so ENVIRONMENT.md can be updated.",
       parameters: schema,
-      execute: async (_toolCallId: string, rawParams: unknown) => {
-        const params = rawParams as SolverNotification
-        const result = await this.applySolverNotification(challengeId, params)
+      execute: async (_toolCallId, params: NotifyCoordinatorParams) => {
+        const result = await this.applySolverNotification(challengeId, params, "solver")
 
         return {
           content: [
@@ -798,6 +816,8 @@ export class Coordinator extends FeaturedAgent {
         }
       },
     }
+
+    return tool
   }
 
   private createSolverReportFlagTool(challengeId: string) {
@@ -808,14 +828,14 @@ export class Coordinator extends FeaturedAgent {
       ),
     })
 
-    return {
+    type ReportFlagParams = Static<typeof schema>
+    const tool: AgentTool<typeof schema> = {
       name: "report_flag",
       label: "Report Flag",
       description:
         "Report candidate flag to coordinator for platform submission and correctness confirmation.",
       parameters: schema,
-      execute: async (_toolCallId: string, rawParams: unknown) => {
-        const params = rawParams as SolverReportedFlag
+      execute: async (_toolCallId, params: ReportFlagParams) => {
         const now = Date.now()
 
         this.appendMessage({
@@ -827,7 +847,7 @@ export class Coordinator extends FeaturedAgent {
             params.details ??
             `Solver submitted candidate flag for ${challengeId}. Please submit and confirm via confirm_solver_flag.`,
           timestamp: now,
-        } as any)
+        })
 
         this.persistence.saveSolverState(challengeId, {
           solverId: challengeId,
@@ -852,17 +872,39 @@ export class Coordinator extends FeaturedAgent {
         }
       },
     }
+
+    return tool
   }
 
   private async applySolverNotification(
     challengeId: string,
     notification: SolverNotification,
+    source: NotificationSource,
   ): Promise<{ applied: boolean; verified: boolean; status?: number; message: string }> {
     const note = `[${notification.kind}] ${notification.content}`
     let applied = true
     let verified = false
     let status: number | undefined
     let message = `Coordinator notified for ${challengeId}.`
+
+    if (source === "solver" && notification.kind === "environment_url") {
+      applied = false
+      message =
+        "Solver-provided environment_url was ignored. Coordinator must refresh URL via browser and call update_solver_environment."
+      this.persistence.appendSolverEnvironmentNote(
+        challengeId,
+        `${note} (ignored: manual coordinator browser refresh required)`,
+      )
+      this.appendUserMessage(
+        [
+          `Solver ${challengeId} reported a candidate environment URL, but runtime policy requires coordinator refresh.`,
+          "Open the platform challenge page in browser, click the refresh/start button, then call update_solver_environment.",
+          `ENVIRONMENT.md: ${this.persistence.getSolverEnvironmentPath(challengeId)}`,
+        ].join("\n"),
+      )
+      this.persistCoordinatorState()
+      return { applied, verified, status, message }
+    }
 
     if (notification.kind === "environment_url" && notification.url) {
       const verification = await this.verifyEnvironmentUrl(notification.url)
@@ -883,16 +925,14 @@ export class Coordinator extends FeaturedAgent {
           challengeId,
           `${note} (rejected: ${verification.message})`,
         )
-        this.appendMessage({
-          role: "user",
-          content: [
+        this.appendUserMessage(
+          [
             `Environment URL update failed for solver ${challengeId}.`,
             `Candidate URL: ${notification.url}`,
             `Reason: ${verification.message}`,
             `Please fetch a valid URL and retry update_solver_environment.`,
           ].join("\n"),
-          timestamp: Date.now(),
-        } as any)
+        )
         message = `Environment URL verification failed for ${challengeId}: ${verification.message}`
       }
     } else {
@@ -900,19 +940,18 @@ export class Coordinator extends FeaturedAgent {
     }
 
     if (notification.kind === "environment_expired") {
-      this.appendMessage({
-        role: "user",
-        content: [
+      this.appendUserMessage(
+        [
           `Solver ${challengeId} reported environment expired.`,
           "Use browser workflow to fetch a fresh environment URL and then call update_solver_environment.",
           `ENVIRONMENT.md: ${this.persistence.getSolverEnvironmentPath(challengeId)}`,
         ].join("\n"),
-        timestamp: Date.now(),
-      } as any)
+      )
     }
 
     const solver = this.solvers.get(challengeId)
     if (
+      source === "coordinator" &&
       solver &&
       applied &&
       (notification.kind === "environment_url" || notification.kind === "hint")
@@ -990,6 +1029,22 @@ export class Coordinator extends FeaturedAgent {
     this.persistCoordinatorState()
   }
 
+  addModelToPool(modelId: string, concurrency = 1) {
+    const result = this.modelPool.addModel(modelId, concurrency)
+    this.persistModelPoolManifest()
+    this.persistCoordinatorState()
+    void this.dispatchQueuedChallenges()
+    return result
+  }
+
+  setModelPoolConcurrency(modelId: string, concurrency: number) {
+    const result = this.modelPool.setModelConcurrency(modelId, concurrency)
+    this.persistModelPoolManifest()
+    this.persistCoordinatorState()
+    void this.dispatchQueuedChallenges()
+    return result
+  }
+
   private persistCoordinatorState() {
     this.persistence.saveCoordinatorState({
       workspaceRoot: this.workspaceRoot,
@@ -1000,52 +1055,32 @@ export class Coordinator extends FeaturedAgent {
     })
   }
 
-  private onSolverFinished(solverId: string) {
+  private persistModelPoolManifest() {
+    this.persistence.updateManifest({
+      modelPool: this.modelPool.toJSON().map((slot) => slot.model),
+    })
+  }
+
+  private onSolverFinished(solverId: string, status: "solved" | "failed") {
     if (!this.solvers.has(solverId)) {
       return
     }
 
+    const current = this.persistence.loadSolverState<PersistedSolverState>(solverId)
+
     this.modelPool.release(solverId)
     this.solvers.delete(solverId)
+    this.solverRunEndMeta.delete(solverId)
+
     this.persistence.saveSolverState(solverId, {
+      ...current,
       solverId,
-      status: "stopped",
+      status,
       updatedAt: new Date().toISOString(),
     })
 
-    if (this.challengeQueue.length > 0 && this.modelPool.available > 0) {
-      const next = this.challengeQueue.shift()!
-      // Queue follow-up to create next solver
-      this.appendMessage({
-        role: "user",
-        content: `Model freed. Create a solver for queued challenge: ${next.challengeName} (ID: ${next.challengeId})`,
-        timestamp: Date.now(),
-      } as any)
-    }
+    void this.dispatchQueuedChallenges()
 
     this.persistCoordinatorState()
   }
-}
-
-function buildCoordinatorSystemPrompt(_options: CoordinatorOptions) {
-  return `You are a CTF team coordinator. Your job is to:
-
-1. Navigate to the CTF platform and fetch all challenges
-   with their titles, descriptions, attachments, categories, remote environment URLs and so on
-2. Estimate difficulty and sort challenges (easiest first)
-3. Assign Solver agents to challenges using create_solver
-   - Each solver needs one model from the pool
-   - If no models are available, challenges are queued automatically
-4. Maintain per-solver ENVIRONMENT.md with latest URLs/hints/notices
-5. When a solver reports a flag, submit it to the platform and confirm using confirm_solver_flag
-6. Forward platform announcements to active solvers
-7. Notify the user of progress
-
-Workflow:
-- Use browser to navigate and extract challenge information
-- Call create_solver for each challenge (easiest first)
-- The system handles model allocation and queuing automatically
-- Use bash to submit flags when solvers report them
-- Use update_solver_environment to keep ENVIRONMENT.md synchronized
-- Remote environment may have quantitative limits, do not try to launch a wnv again when being informed reached the limit.`
 }

@@ -1,0 +1,30 @@
+{
+  "name": "misuzu-server",
+  "version": "0.0.0",
+  "description": "Daemon runtime for Misuzu coordinator/solver orchestration.",
+  "license": "MIT",
+  "author": "Nick Chen",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "check": "vp check",
+    "build": "vp pack"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.6",
+    "@mariozechner/pi-agent-core": "catalog:",
+    "@mariozechner/pi-ai": "catalog:",
+    "hono": "^4.10.5",
+    "misuzu-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

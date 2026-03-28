@@ -131,12 +131,11 @@ describe("bash tool", () => {
     expect(textOf(result.content)).toContain("err")
   })
 
-  test("throws on non-zero exit and includes output", async () => {
+  test("returns failure details on non-zero exit", async () => {
     const tool = createBashTool(testDir)
-    try {
-      await tool.execute("id", { command: "echo fail; exit 1" })
-    } catch (e: any) {
-      expect(e.message).toContain("fail")
-    }
+    const result = await tool.execute("id", { command: "echo fail; exit 1" })
+    expect(textOf(result.content)).toContain("shell_failed")
+    expect(result.details?.ok).toBe(false)
+    expect(result.details?.failure?.kind).toBe("non_zero_exit")
   })
 })

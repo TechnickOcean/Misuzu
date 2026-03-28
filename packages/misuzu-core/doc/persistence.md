@@ -1,180 +1,124 @@
 # Persistence
 
-Misuzu persists Coordinator and Solver runtime state under `.misuzu/` so a competition can be resumed and audited.
+Persistence provides durable workspace state for long CTF runs and restart/resume workflows.
 
-## Table of Contents
+## Storage Model
 
-- [Goals](#goals)
-- [Workspace Layout](#workspace-layout)
-- [Lifecycle](#lifecycle)
-- [Automation Polling Script](#automation-polling-script)
-- [ENVIRONMENT.md Contract](#environmentmd-contract)
-- [File Output Rules](#file-output-rules)
-- [Failure Handling](#failure-handling)
-- [Resume Expectations](#resume-expectations)
+All runtime files are kept under:
 
-## Goals
+`<launch-cwd>/.misuzu/workspaces/<workspace-id>/`
 
-1. Coordinator startup must create a dedicated workspace for the current run.
-2. All persistence data lives under `.misuzu/`.
-3. Each Solver gets a dedicated subdirectory under the Coordinator workspace.
-4. Environment context is file-driven (`ENVIRONMENT.md`) and editable by Coordinator.
-5. Solver artifacts (attachments/scripts/writeup) are deterministic and reproducible.
+Core files:
 
-## Workspace Layout
+- `manifest.json` (workspace metadata)
+- `coordinator/state.json`
+- `coordinator/session.jsonl`
+- `coordinator/ENVIRONMENT.md`
+- `coordinator/solvers/<solver-id>/...`
 
-Coordinator launch root is the CLI start directory. Persisted data is stored at:
+Per-solver files:
 
-```text
-<launch-cwd>/.misuzu/workspaces/<coordinator-id>/
-├── coordinator/
-│   ├── state.json
-│   ├── session.jsonl
-│   ├── ENVIRONMENT.md
-│   └── solvers/
-│       ├── <solver-id>/
-│       │   ├── state.json
-│       │   ├── session.jsonl
-│       │   ├── ENVIRONMENT.md
-│       │   ├── attachments/
-│       │   ├── scripts/
-│       │   │   ├── poll-platform-updates.sh
-│       │   │   ├── platform-updates.queue.md
-│       │   │   └── README.md
-│       │   └── Writeups.md
-│       └── <solver-id>/...
-└── manifest.json
-```
+- `state.json`
+- `session.jsonl`
+- `ENVIRONMENT.md`
+- `attachments/`
+- `scripts/` (includes `poll-platform-updates.sh` and queue file)
+- `Writeups.md`
 
-Notes:
+## Behavioral Guarantees
 
-- `coordinator-id` identifies one Coordinator runtime/workspace.
-- Every solver path is created by Coordinator at solver creation time.
-- Solver directory path is stable for resume and auditing.
+- Solver workspace is created before solver starts
+- `ENVIRONMENT.md` is the mutable source of truth for challenge environment data
+- Session streams are append-only (`session.jsonl`)
+- State snapshots are replace-style (`state.json`)
+- Resume can reconstruct coordinator + solver context from persisted files
 
-## Lifecycle
+## Runtime Components
 
-### 1) Coordinator startup
+## `SessionManager`
 
-- Create `.misuzu/workspaces/<coordinator-id>/`.
-- Initialize `manifest.json`, `coordinator/state.json`, and `coordinator/session.jsonl`.
-- Initialize `coordinator/ENVIRONMENT.md` with platform-level environment and notices.
+Purpose:
 
-### 2) Solver creation
+- Append and read session entries (`message`, `compaction`, `challenge_state`)
+- Rebuild agent context from session log
 
-When Coordinator creates a solver:
+Relevant methods:
 
-- Create `coordinator/solvers/<solver-id>/` and required files.
-- Create solver `ENVIRONMENT.md` from the latest challenge/environment metadata.
-- Copy challenge attachments (if any) into `attachments/`.
-- Create polling script scaffold in `scripts/poll-platform-updates.sh`.
-- Set solver working directory to that solver folder.
+- `appendMessage(...)`
+- `appendCompaction(...)`
+- `appendChallengeState(...)`
+- `readAll()`
+- `buildContext()`
+- `close()`
 
-### 3) Prompt construction
+## `AgentSessionRecorder`
 
-- Solver challenge/environment context must be sourced from `ENVIRONMENT.md`.
-- Coordinator can update that file later without rebuilding solver identity.
+Purpose:
 
-### 4) Environment expiry / hints / platform notices
+- Subscribes to agent events and flushes new messages into `SessionManager`
+- De-duplicates persisted entries by content fingerprints
 
-Because remote CTF environments can expire:
+Relevant methods:
 
-- Solver may notify Coordinator that environment URL is invalid/expired.
-- Coordinator uses browser workflow to refresh environment metadata.
-- Coordinator updates solver `ENVIRONMENT.md` (and coordinator-level `ENVIRONMENT.md` when needed).
-- Platform hints/announcements for that challenge are appended into `ENVIRONMENT.md`.
+- `attach(agent)`
+- `flush(messages)`
 
-### 5) Solve completion
+## `CompetitionPersistence`
 
-- Solver writes exploit/repro scripts to `scripts/`.
-- Solver submits candidate flag to Coordinator.
-- If Coordinator confirms flag is correct, solver immediately writes reproducible steps to `Writeups.md`.
+Purpose:
 
-## Automation Polling Script
+- Owns workspace directory structure and file operations
+- Manages coordinator and solver state/session access
 
-To avoid repetitive browser polling/hint checks, solver bootstrap creates `scripts/poll-platform-updates.sh`.
+Construction and open:
 
-Intended timing:
+- `CompetitionPersistence.create(workspacesRoot, options)`
+- `CompetitionPersistence.open(workspaceDir)`
 
-1. `create_solver` completes.
-2. Solver workspace is ready with ENV + attachments + scripts scaffold.
-3. Solver/Coordinator can run the script manually (or under cron/systemd timer) using existing `bash` tool.
+Coordinator-level methods:
 
-Contract:
+- `readManifest()` / `updateManifest(...)`
+- `saveCoordinatorState(...)` / `loadCoordinatorState(...)`
+- `initializeCoordinatorEnvironment(...)`
 
-- Input source is configured by environment variables (`SOURCE_URL`, optional `AUTH_HEADER`).
-- New updates are appended to `scripts/platform-updates.queue.md`.
-- Script also appends a compact marker to `ENVIRONMENT.md` so the agent sees state changes.
-- Agent then uses existing tools (`notify_coordinator` / `update_solver_environment`) to promote changes into authoritative environment context.
+Solver-level methods:
 
-## ENVIRONMENT.md Contract
+- `ensureSolverWorkspace(options)`
+- `getSolverSession(solverId)`
+- `saveSolverState(...)` / `loadSolverState(...)`
+- `readSolverEnvironment(...)` / `writeSolverEnvironment(...)`
+- `appendSolverEnvironmentNote(...)`
+- `updateSolverEnvironmentUrl(...)`
+- `appendSolverWriteup(...)`
+- `getSolverEnvironmentPath(...)` / `getSolverWriteupPath(...)`
 
-`ENVIRONMENT.md` is the source of truth for mutable challenge context.
+Lifecycle:
 
-Recommended sections:
+- `close()` closes coordinator and solver sessions
 
-```markdown
-# Challenge Environment
+## Workspace Helpers
 
-## Challenge
+- `createWorkspaceId(name, date?)`
+- `defaultWorkspacesRoot(launchDir?)`
 
-- id:
-- name:
-- category:
+Backward-compatible aliases:
 
-## Remote Environment
-
-- current url:
-- expires at:
-- last checked at:
-
-## Attachments
-
-- attachments/<file>
-
-## Hints and Announcements
-
-- [timestamp] ...
-
-## Operator Notes
-
-- coordinator edits / overrides
-```
-
-Rules:
-
-- Solver reads this file before acting on remote targets.
-- Coordinator is the authority for updates.
-- Expired URLs must be replaced in-file, not only mentioned in chat context.
-
-## File Output Rules
-
-- `attachments/`: immutable copies of platform attachments.
-- `scripts/`: solver-generated scripts, PoCs, helpers.
-- `scripts/poll-platform-updates.sh`: default polling scaffold for predictable platform updates.
-- `scripts/platform-updates.queue.md`: append-only queue produced by polling script.
-- `Writeups.md`: final reproducible solution, written only after flag correctness confirmation.
-- `state.json`: machine-readable lifecycle state for resume.
-- `session.jsonl`: append-only interaction timeline.
-
-## Failure Handling
-
-- **Flag rejected**: coordinator records rejection, keeps solver in solving state, and steers solver to continue.
-- **Environment URL update fails validation**: coordinator does not overwrite `current url`, records reason in `ENVIRONMENT.md`, and asks for a fresh URL.
-- **Attachment import fails**: failure is logged in `attachments/_download-errors.log`; solving may proceed with partial inputs.
+- `createCompetitionId`
+- `defaultCompetitionsRoot`
 
 ## Resume Expectations
 
-On resume, runtime reconstructs from files under `.misuzu/workspaces/<coordinator-id>/`:
+`Coordinator.resumeFromWorkspace(...)` relies on persistence files to restore:
 
-- Coordinator state and message history from `coordinator/*`.
-- Solver states and message histories from `coordinator/solvers/<solver-id>/*`.
-- Effective challenge context from each solver's `ENVIRONMENT.md`.
+- coordinator context
+- model-slot state
+- solver states and sessions
+- challenge queue
 
-Runtime API:
+If external ephemeral resources were in use (containers, temporary credentials), they may still require re-establishment after resume.
 
-- Use `Coordinator.resumeFromWorkspace({ workspaceDir, ... })` to rehydrate coordinator state.
-- Rehydrate solver states from `coordinator/solvers/<solver-id>/state.json` and `session.jsonl`.
-- Optional `autoContinueSolvers` resumes solver loops immediately after reconstruction.
+## Caller Guidance
 
-Ephemeral runtime resources (e.g. live container/network handles) may need re-establishment, but persisted files must be sufficient to continue solving safely.
+- Keep authoritative mutable challenge facts in `ENVIRONMENT.md`
+- Keep reproducible exploit path in `Writeups.md` and `scripts/`
+- Use `state.json` for machine lifecycle state, not free-form notes

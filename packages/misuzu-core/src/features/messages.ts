@@ -7,6 +7,7 @@ declare module "@mariozechner/pi-agent-core" {
     flagResult: FlagResultMessage
     challengeUpdate: ChallengeUpdateMessage
     compactionSummary: CompactionSummaryMessage
+    schedulerUpdate: SchedulerUpdateMessage
   }
 }
 
@@ -34,10 +35,23 @@ export interface CompactionSummaryMessage {
   timestamp: number
 }
 
+export interface SchedulerUpdateMessage {
+  role: "schedulerUpdate"
+  challengeId: string
+  challengeName: string
+  status: "started" | "requeued" | "skipped" | "failed"
+  reason: string
+  queueBefore: number
+  queueAfter: number
+  model?: string
+  timestamp: number
+}
+
 export type CustomAgentMessage =
   | FlagResultMessage
   | ChallengeUpdateMessage
   | CompactionSummaryMessage
+  | SchedulerUpdateMessage
 
 /** Convert custom messages to LLM-compatible user messages. */
 export function convertToLlm(messages: AgentMessage[]): Message[] {
@@ -67,6 +81,18 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
             timestamp: m.timestamp,
           },
         ]
+      case "schedulerUpdate": {
+        const modelSuffix = m.model ? `; model=${m.model}` : ""
+        return [
+          {
+            role: "user" as const,
+            content:
+              `[Scheduler ${m.status.toUpperCase()}] ${m.challengeId} (${m.challengeName}) ` +
+              `reason=${m.reason}; queue ${m.queueBefore}->${m.queueAfter}${modelSuffix}`,
+            timestamp: m.timestamp,
+          },
+        ]
+      }
       case "user":
       case "assistant":
       case "toolResult":

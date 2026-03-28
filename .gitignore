@@ -26,3 +26,6 @@ dist-ssr
 .playwright-cli
 
 .env
+
+.misuzu/runtime
+.misuzu/workspaces

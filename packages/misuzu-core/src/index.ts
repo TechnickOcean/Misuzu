@@ -54,6 +54,7 @@ export {
   type FlagResultMessage,
   type ChallengeUpdateMessage,
   type CompactionSummaryMessage,
+  type SchedulerUpdateMessage,
 } from "./features/messages.js"
 
 // Providers

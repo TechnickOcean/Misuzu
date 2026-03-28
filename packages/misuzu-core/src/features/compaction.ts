@@ -1,6 +1,7 @@
 import type { Agent, AgentMessage } from "@mariozechner/pi-agent-core"
 import type { AssistantMessage, TextContent, ThinkingContent, ToolCall } from "@mariozechner/pi-ai"
 import { completeSimple } from "@mariozechner/pi-ai"
+import type { CompactionSummaryMessage } from "./messages.ts"
 
 const RESERVE_TOKENS = 16384
 const KEEP_RECENT_TOKENS = 20_000
@@ -11,6 +12,10 @@ function isTextContent(c: unknown): c is TextContent {
 
 function isToolCall(c: unknown): c is ToolCall {
   return typeof c === "object" && c !== null && (c as { type: string }).type === "toolCall"
+}
+
+function isCompactionSummaryMessage(message: AgentMessage): message is CompactionSummaryMessage {
+  return message.role === "compactionSummary"
 }
 
 /** Estimate token count for a message. Uses chars/4 heuristic. */
@@ -41,6 +46,13 @@ export function estimateTokens(message: AgentMessage): number {
         chars = String(message.summary).length
       } else if ("flag" in message) {
         chars = String(message.flag).length + String(message.message).length
+      } else if ("queueBefore" in message && "queueAfter" in message) {
+        chars =
+          String(message.challengeId).length +
+          String(message.challengeName).length +
+          String(message.reason).length +
+          String(message.queueBefore).length +
+          String(message.queueAfter).length
       } else if ("details" in message) {
         chars = String(message.details).length
       }
@@ -135,6 +147,11 @@ function serializeForSummary(messages: AgentMessage[]): string {
           parts.push(`[Previous summary]: ${String(msg.summary).slice(0, 2000)}`)
         } else if ("flag" in msg) {
           parts.push(`[Flag]: ${msg.flag} - ${msg.message}`)
+        } else if ("queueBefore" in msg && "queueAfter" in msg) {
+          parts.push(
+            `[Scheduler ${String(msg.status)}]: ${String(msg.challengeId)} (${String(msg.challengeName)}) ` +
+              `reason=${String(msg.reason)} queue ${String(msg.queueBefore)}->${String(msg.queueAfter)}`,
+          )
         } else if ("details" in msg) {
           parts.push(`[Challenge]: ${msg.details}`)
         }
@@ -203,8 +220,8 @@ export async function compact(agent: Agent): Promise<AgentMessage[]> {
 
   let previousSummary: string | undefined
   for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i] as any
-    if (m.role === "compactionSummary" && m.summary) {
+    const m = messages[i]
+    if (isCompactionSummaryMessage(m) && m.summary) {
       previousSummary = m.summary
       break
     }
@@ -223,7 +240,7 @@ export async function compact(agent: Agent): Promise<AgentMessage[]> {
         },
       ],
     },
-    { reasoning: "minimal" },
+    { reasoning: "medium" },
   )
 
   const summaryText = response.content
