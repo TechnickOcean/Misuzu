@@ -95,6 +95,11 @@ Factories and defaults:
 - `createFindTool`, `findTool`
 - `createGrepTool`, `grepTool`
 
+Notes:
+
+- Runtime-facing agents must use `createBashTool(cwd)` so shell execution stays aligned with the agent workspace root.
+- The exported `bashTool` singleton is process-cwd scoped and should only be used for simple local defaults.
+
 Collections:
 
 - `baseTools`, `readOnlyTools`

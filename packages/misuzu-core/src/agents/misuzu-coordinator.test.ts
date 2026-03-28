@@ -152,6 +152,33 @@ describe("ModelPool", () => {
 })
 
 describe("Coordinator environment updates", () => {
+  test("uses coordinator cwd for shell tool execution", async () => {
+    const launchDir = join(tmpdir(), `misuzu-coordinator-shell-cwd-${Date.now()}`)
+    await mkdir(launchDir, { recursive: true })
+
+    const coordinator = new Coordinator({
+      cwd: launchDir,
+      workspaceRoot: launchDir,
+      models: ["rightcode/gpt-5.4"],
+      modelPool: new ModelPool(["rightcode/gpt-5.4"]),
+    })
+
+    const shellTool = coordinator.state.tools.find((tool) => tool.name === "shell")
+    expect(shellTool).toBeDefined()
+
+    const command =
+      process.platform === "win32" ? "Get-Location | Select-Object -ExpandProperty Path" : "pwd"
+
+    const result = await shellTool!.execute("tool-shell-cwd", { command })
+    const output =
+      result.content.find((chunk) => chunk.type === "text" && "text" in chunk)?.text ?? ""
+
+    expect(output.toLowerCase()).toContain(launchDir.toLowerCase())
+
+    coordinator.persistence.close()
+    await rm(launchDir, { recursive: true, force: true })
+  })
+
   test("verifies URL before updating solver ENVIRONMENT.md", async () => {
     const launchDir = join(tmpdir(), `misuzu-coordinator-test-${Date.now()}`)
     const workspacesRoot = defaultWorkspacesRoot(launchDir)

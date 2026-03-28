@@ -5,7 +5,7 @@ import type { Model } from "@mariozechner/pi-ai"
 import { FeaturedAgent, type FeaturedAgentOptions } from "./misuzu-featured.ts"
 import { Solver } from "./misuzu-solver.ts"
 import { createBaseTools, createReadOnlyTools } from "../tools/index.ts"
-import { bashTool } from "../tools/base/bash.ts"
+import { createBashTool } from "../tools/base/bash.ts"
 import { dockerTools } from "../tools/misuzu/docker.ts"
 import type { SchedulerUpdateMessage } from "../features/messages.ts"
 import { loadAgentSkills } from "../features/skill.ts"
@@ -83,7 +83,7 @@ export class Coordinator extends FeaturedAgent {
       extraSkills: options.skills,
     })
 
-    const tools = [...createReadOnlyTools(cwd), bashTool]
+    const tools = [...createReadOnlyTools(cwd), createBashTool(cwd)]
 
     const systemPrompt = buildCoordinatorSystemPrompt(options)
 
