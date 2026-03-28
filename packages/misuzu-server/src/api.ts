@@ -33,6 +33,7 @@ export function createMisuzuApi(runtime: RuntimeHost, options: MisuzuApiOptions 
     return c.json({
       ok: true,
       protocolVersion: snapshot.protocolVersion,
+      coordinatorStatus: snapshot.coordinatorStatus,
       workspaceId: snapshot.workspaceId,
       generatedAt: new Date().toISOString(),
     })
