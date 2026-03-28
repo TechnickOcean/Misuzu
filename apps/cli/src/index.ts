@@ -47,7 +47,7 @@ interface ModelPoolSlotSnapshot {
 interface SolverSnapshot {
   solverId: string
   challengeName?: string
-  status: "assigned" | "solving" | "solved" | "failed" | "stopped"
+  status: "assigned" | "url_pending" | "solving" | "solved" | "failed" | "stopped"
   model?: string
   messageCount: number
   isStreaming: boolean
@@ -64,6 +64,12 @@ interface RuntimeSnapshot {
     total: number
   }
   challengeQueue: Array<{
+    challengeId: string
+    challengeName: string
+    category: string
+    difficulty?: number
+  }>
+  urlPendingQueue: Array<{
     challengeId: string
     challengeName: string
     category: string
@@ -862,7 +868,7 @@ class MisuzuCliApp {
 
     const usedSlots = snapshot.modelPool.total - snapshot.modelPool.available
     lines.push(
-      `Workspace: ${snapshot.workspaceId ?? "n/a"} | Slots: ${usedSlots}/${snapshot.modelPool.total} | Solvers: ${snapshot.solvers.length} | Queue: ${snapshot.challengeQueue.length}`,
+      `Workspace: ${snapshot.workspaceId ?? "n/a"} | Slots: ${usedSlots}/${snapshot.modelPool.total} | Solvers: ${snapshot.solvers.length} | Queue: ${snapshot.challengeQueue.length} | URL Pending: ${snapshot.urlPendingQueue.length}`,
     )
 
     const poolByModel = summarizeModelPool(snapshot.modelPool.slots)
@@ -895,6 +901,18 @@ class MisuzuCliApp {
       lines.push("  (empty)")
     } else {
       for (const challenge of snapshot.challengeQueue.slice(0, 8)) {
+        lines.push(
+          `  - ${challenge.challengeId} | ${challenge.challengeName} | ${challenge.category} | d=${challenge.difficulty ?? "n/a"}`,
+        )
+      }
+    }
+
+    lines.push("")
+    lines.push(`${ANSI.bold}URL Pending${ANSI.reset}`)
+    if (snapshot.urlPendingQueue.length === 0) {
+      lines.push("  (empty)")
+    } else {
+      for (const challenge of snapshot.urlPendingQueue.slice(0, 8)) {
         lines.push(
           `  - ${challenge.challengeId} | ${challenge.challengeName} | ${challenge.category} | d=${challenge.difficulty ?? "n/a"}`,
         )

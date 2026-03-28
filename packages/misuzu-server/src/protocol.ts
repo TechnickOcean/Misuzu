@@ -27,7 +27,7 @@ export interface ModelPoolSlotSnapshot {
 export interface SolverSnapshot {
   solverId: string
   challengeName?: string
-  status: "assigned" | "solving" | "solved" | "failed" | "stopped"
+  status: "assigned" | "url_pending" | "solving" | "solved" | "failed" | "stopped"
   model?: string
   messageCount: number
   isStreaming: boolean
@@ -49,6 +49,12 @@ export interface RuntimeSnapshot {
     category: string
     difficulty?: number
   }>
+  urlPendingQueue: Array<{
+    challengeId: string
+    challengeName: string
+    category: string
+    difficulty?: number
+  }>
   solvers: SolverSnapshot[]
   generatedAt: string
   lastSeq: number
@@ -65,6 +71,7 @@ export interface CreateSolverCommandPayload {
   description: string
   difficulty?: number
   files?: string[]
+  remoteUrl?: string
 }
 
 export interface UpdateSolverEnvironmentCommandPayload {

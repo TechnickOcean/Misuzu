@@ -56,6 +56,7 @@ Key runtime behavior:
 - Workspace is prepared before solving
 - Prompt building includes current environment snapshot when available
 - Solver continues to run independently after coordinator dispatch
+- For attachment-heavy challenges, solver follows a local-first workflow before remote URL usage
 
 ## `Coordinator`
 
@@ -122,6 +123,13 @@ On finalize:
 - `create_solver`: allocate slot, initialize workspace, start solver asynchronously
 - `update_solver_environment`: verify/apply URL or notes to solver environment file
 - `confirm_solver_flag`: confirm/reject solver flag and update state/writeup flow
+- `create_solver` without attachments requires a remote URL, otherwise challenge enters `url_pending`
+
+## URL Pending Queue
+
+- `url_pending` tracks challenges waiting for remote URL assignment and remote-environment slot
+- Pending challenges activate in FIFO order once slot and URL conditions are met
+- `update_solver_environment(updateType=environment_url)` can hydrate pending URLs and trigger activation
 
 ## Inter-Agent Communication
 

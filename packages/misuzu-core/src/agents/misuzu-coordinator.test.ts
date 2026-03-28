@@ -1,6 +1,6 @@
 import { createServer } from "node:http"
 import { existsSync } from "node:fs"
-import { mkdir, readFile, rm } from "node:fs/promises"
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, test } from "vite-plus/test"
@@ -9,7 +9,7 @@ import type { AssistantMessage, StopReason } from "@mariozechner/pi-ai"
 import { CompetitionPersistence, defaultWorkspacesRoot } from "../features/persistence.js"
 import { Coordinator, ModelPool } from "./misuzu-coordinator.js"
 import type { ModelSlot } from "./coordinator/model-pool.js"
-import type { Solver } from "./misuzu-solver.js"
+import { Solver } from "./misuzu-solver.js"
 
 function buildAssistantMessage(stopReason: StopReason, errorMessage?: string): AssistantMessage {
   return {
@@ -246,6 +246,148 @@ describe("Coordinator environment updates", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
     persistence.close()
     await rm(launchDir, { recursive: true, force: true })
+  })
+})
+
+describe("Coordinator URL pending queue", () => {
+  test("queues no-attachment challenge as url_pending when remote URL is missing", async () => {
+    const launchDir = join(tmpdir(), `misuzu-url-pending-${Date.now()}`)
+    await mkdir(launchDir, { recursive: true })
+
+    const originalSolve = Object.getOwnPropertyDescriptor(Solver.prototype, "solve")?.value as
+      | Solver["solve"]
+      | undefined
+    Solver.prototype.solve = async () => undefined
+
+    try {
+      const coordinator = new Coordinator({
+        cwd: launchDir,
+        workspaceRoot: launchDir,
+        models: ["rightcode/gpt-5.4"],
+        modelPool: new ModelPool(["rightcode/gpt-5.4"]),
+      })
+
+      const createTool = coordinator.getCreateSolverTool()
+      const result = (await createTool.execute("tool-url-pending", {
+        challengeId: "web-remote",
+        challengeName: "Remote Only",
+        category: "web",
+        description: "remote only challenge",
+      })) as { details?: { urlPending?: boolean } }
+
+      expect(result.details?.urlPending).toBe(true)
+      expect(
+        coordinator.persistence.loadSolverState<{ status?: string }>("web-remote")?.status,
+      ).toBe("url_pending")
+
+      coordinator.persistence.close()
+    } finally {
+      if (originalSolve) {
+        Solver.prototype.solve = originalSolve
+      }
+      await rm(launchDir, { recursive: true, force: true })
+    }
+  })
+
+  test("activates pending challenge after remote slot frees up", async () => {
+    const launchDir = join(tmpdir(), `misuzu-url-activate-${Date.now()}`)
+    await mkdir(launchDir, { recursive: true })
+
+    const originalSolve = Object.getOwnPropertyDescriptor(Solver.prototype, "solve")?.value as
+      | Solver["solve"]
+      | undefined
+    Solver.prototype.solve = async () => undefined
+
+    try {
+      const coordinator = new Coordinator({
+        cwd: launchDir,
+        workspaceRoot: launchDir,
+        models: ["rightcode/gpt-5.4"],
+        modelPool: new ModelPool(["rightcode/gpt-5.4", "rightcode/gpt-5.4"]),
+        remoteUrlConcurrency: 1,
+      })
+
+      const createTool = coordinator.getCreateSolverTool()
+
+      await createTool.execute("tool-remote-a", {
+        challengeId: "remote-a",
+        challengeName: "Remote A",
+        category: "web",
+        description: "remote a",
+        remoteUrl: "https://ctf.example.com/a",
+      })
+
+      const pending = (await createTool.execute("tool-remote-b", {
+        challengeId: "remote-b",
+        challengeName: "Remote B",
+        category: "web",
+        description: "remote b",
+        remoteUrl: "https://ctf.example.com/b",
+      })) as { details?: { urlPending?: boolean } }
+
+      expect(pending.details?.urlPending).toBe(true)
+      expect(coordinator.solvers.has("remote-b")).toBe(false)
+
+      const internal = coordinator as unknown as {
+        onSolverFinished: (solverId: string, status: "solved" | "failed") => void
+      }
+      internal.onSolverFinished("remote-a", "solved")
+      await new Promise<void>((resolve) => setTimeout(resolve, 20))
+
+      expect(coordinator.solvers.has("remote-b")).toBe(true)
+      coordinator.persistence.close()
+    } finally {
+      if (originalSolve) {
+        Solver.prototype.solve = originalSolve
+      }
+      await rm(launchDir, { recursive: true, force: true })
+    }
+  })
+
+  test("marks attachment challenges with local-first remote workflow", async () => {
+    const launchDir = join(tmpdir(), `misuzu-local-first-${Date.now()}`)
+    await mkdir(launchDir, { recursive: true })
+
+    const attachmentPath = join(launchDir, "sample.txt")
+    await writeFile(attachmentPath, "sample", "utf-8")
+
+    const originalSolve = Object.getOwnPropertyDescriptor(Solver.prototype, "solve")?.value as
+      | Solver["solve"]
+      | undefined
+    Solver.prototype.solve = async () => undefined
+
+    try {
+      const coordinator = new Coordinator({
+        cwd: launchDir,
+        workspaceRoot: launchDir,
+        models: ["rightcode/gpt-5.4"],
+        modelPool: new ModelPool(["rightcode/gpt-5.4"]),
+      })
+
+      const createTool = coordinator.getCreateSolverTool()
+      await createTool.execute("tool-local-first", {
+        challengeId: "rev-local",
+        challengeName: "Rev Local",
+        category: "reversing",
+        description: "local first",
+        files: ["sample.txt"],
+        remoteUrl: "https://ctf.example.com/rev",
+      })
+
+      const env = await readFile(
+        coordinator.persistence.getSolverEnvironmentPath("rev-local"),
+        "utf-8",
+      )
+      expect(env).toContain("Local-first workflow")
+      expect(env).toContain("validate your local exploit path first")
+
+      coordinator.persistence.close()
+    } finally {
+      if (originalSolve) {
+        Solver.prototype.solve = originalSolve
+      }
+      await rm(launchDir, { recursive: true, force: true })
+    }
   })
 })
 

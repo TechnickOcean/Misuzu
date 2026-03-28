@@ -48,6 +48,7 @@ Returns full runtime snapshot:
 - model pool slots
 - active solvers
 - queued challenges
+- url-pending challenges
 - `lastSeq` for stream resume
 
 ### `POST /runtime/command`

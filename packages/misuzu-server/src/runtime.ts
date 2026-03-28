@@ -35,6 +35,13 @@ interface PersistedSolverState {
   updatedAt?: string
 }
 
+interface UrlPendingSnapshotItem {
+  challengeId: string
+  challengeName: string
+  category: string
+  difficulty?: number
+}
+
 type CoordinatorToolName = "create_solver" | "update_solver_environment" | "confirm_solver_flag"
 
 export class MisuzuRuntimeHost implements RuntimeHost {
@@ -89,6 +96,7 @@ export class MisuzuRuntimeHost implements RuntimeHost {
     const slots = this.coordinator.modelPool.toJSON()
     const workspaceId = this.tryWorkspaceId()
     const solvers: SolverSnapshot[] = []
+    const urlPendingQueue = this.readUrlPendingQueue()
 
     for (const [solverId, solver] of this.coordinator.solvers.entries()) {
       const persisted = this.readPersistedSolverState(solverId)
@@ -99,6 +107,23 @@ export class MisuzuRuntimeHost implements RuntimeHost {
         model: persisted.model,
         messageCount: solver.state.messages.length,
         isStreaming: solver.state.isStreaming,
+        updatedAt: persisted.updatedAt,
+      })
+    }
+
+    for (const pending of urlPendingQueue) {
+      if (solvers.some((solver) => solver.solverId === pending.challengeId)) {
+        continue
+      }
+
+      const persisted = this.readPersistedSolverState(pending.challengeId)
+      solvers.push({
+        solverId: pending.challengeId,
+        challengeName: pending.challengeName,
+        status: "url_pending",
+        model: persisted.model,
+        messageCount: 0,
+        isStreaming: false,
         updatedAt: persisted.updatedAt,
       })
     }
@@ -115,6 +140,12 @@ export class MisuzuRuntimeHost implements RuntimeHost {
         total: slots.length,
       },
       challengeQueue: this.coordinator.challengeQueue.map((challenge) => ({
+        challengeId: challenge.challengeId,
+        challengeName: challenge.challengeName,
+        category: challenge.category,
+        difficulty: challenge.difficulty,
+      })),
+      urlPendingQueue: urlPendingQueue.map((challenge) => ({
         challengeId: challenge.challengeId,
         challengeName: challenge.challengeName,
         category: challenge.category,
@@ -599,6 +630,30 @@ export class MisuzuRuntimeHost implements RuntimeHost {
     }
   }
 
+  private readUrlPendingQueue(): UrlPendingSnapshotItem[] {
+    const coordinatorWithQueue = this.coordinator as unknown as {
+      urlPendingQueue?: Array<{
+        challengeId?: string
+        challengeName?: string
+        category?: string
+        difficulty?: number
+      }>
+    }
+
+    if (!Array.isArray(coordinatorWithQueue.urlPendingQueue)) {
+      return []
+    }
+
+    return coordinatorWithQueue.urlPendingQueue
+      .filter((item) => typeof item.challengeId === "string")
+      .map((item) => ({
+        challengeId: item.challengeId!,
+        challengeName: item.challengeName ?? item.challengeId!,
+        category: item.category ?? "unknown",
+        difficulty: typeof item.difficulty === "number" ? item.difficulty : undefined,
+      }))
+  }
+
   private publish(source: RuntimeEventEnvelope["source"], type: string, payload: RuntimeJsonValue) {
     const event: RuntimeEventEnvelope = {
       seq: ++this.seq,
@@ -652,6 +707,7 @@ function truncate(value: string, maxLength: number): string {
 function normalizeSolverStatus(value: string | undefined): SolverSnapshot["status"] {
   switch (value) {
     case "assigned":
+    case "url_pending":
     case "solving":
     case "solved":
     case "failed":

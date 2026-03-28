@@ -10,6 +10,7 @@ export interface CoordinatorOptions {
   ctfPlatformUrl?: string
   models?: string[]
   modelConcurrency?: number
+  remoteUrlConcurrency?: number
   model?: Model<any>
   modelResolver?: (modelId: string) => Model<any> | undefined
   modelPool?: ModelPool
@@ -33,6 +34,7 @@ export type QueuedChallenge = {
   description: string
   difficulty?: number
   files?: string[]
+  remoteUrl?: string
 }
 
 export type SolverNotificationKind =
@@ -55,6 +57,7 @@ export interface PersistedCoordinatorState extends JsonObject {
   modelPool?: ModelSlot[]
   solvers?: string[]
   challengeQueue?: QueuedChallenge[]
+  urlPendingQueue?: QueuedChallenge[]
 }
 
 export interface PersistedSolverState extends JsonObject {
@@ -62,8 +65,12 @@ export interface PersistedSolverState extends JsonObject {
   challengeName?: string
   category?: string
   description?: string
+  difficulty?: number
+  files?: string[]
   status?: string
   model?: string
+  remoteUrl?: string
+  requiresRemoteUrl?: boolean
   cwd?: string
   environmentPath?: string
   scriptsDir?: string

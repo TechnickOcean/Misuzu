@@ -35,6 +35,16 @@ import type {
 export { ModelPool }
 export type { Challenge, CoordinatorOptions, ModelSlot, ResumeCoordinatorOptions }
 
+type CreateSolverRequest = {
+  challengeId: string
+  challengeName: string
+  category: string
+  description: string
+  difficulty?: number
+  files?: string[]
+  remoteUrl?: string
+}
+
 export class Coordinator extends FeaturedAgent {
   readonly modelPool: ModelPool
   readonly workspaceRoot: string
@@ -44,7 +54,11 @@ export class Coordinator extends FeaturedAgent {
   private readonly solverRunEndMeta = new Map<string, SolverRunEndMeta>()
   private readonly dispatchingChallenges = new Set<string>()
   private isQueueDispatchRunning = false
+  private isUrlPendingDispatchRunning = false
+  private readonly remoteActiveSolvers = new Set<string>()
+  private readonly remoteUrlConcurrency: number
   readonly challengeQueue: QueuedChallenge[] = []
+  readonly urlPendingQueue: QueuedChallenge[] = []
 
   constructor(options: CoordinatorOptions & FeaturedAgentOptions = {}) {
     const cwd = options.cwd ?? process.cwd()
@@ -103,6 +117,7 @@ export class Coordinator extends FeaturedAgent {
     this.modelPool = modelPool
     this.workspaceRoot = workspaceRoot
     this.persistence = persistence
+    this.remoteUrlConcurrency = Math.max(1, options.remoteUrlConcurrency ?? 1)
     this.resolveModel =
       options.modelResolver ??
       (options.model
@@ -214,8 +229,15 @@ export class Coordinator extends FeaturedAgent {
       coordinator.challengeQueue.push(...persistedState.challengeQueue)
     }
 
+    coordinator.urlPendingQueue.length = 0
+    if (Array.isArray(persistedState.urlPendingQueue)) {
+      coordinator.urlPendingQueue.push(...persistedState.urlPendingQueue)
+    }
+
     coordinator.restoreSolversFromPersistence(autoContinueSolvers)
     coordinator.persistCoordinatorState()
+    void coordinator.dispatchQueuedChallenges()
+    void coordinator.dispatchUrlPendingChallenges()
 
     return coordinator
   }
@@ -232,6 +254,12 @@ export class Coordinator extends FeaturedAgent {
       files: Type.Optional(
         Type.Array(Type.String(), { description: "URLs to challenge attachments" }),
       ),
+      remoteUrl: Type.Optional(
+        Type.String({
+          description:
+            "Optional remote container URL. Required when challenge has no attachments; otherwise solver enters url_pending.",
+        }),
+      ),
     })
 
     type CreateSolverParams = Static<typeof solverParams>
@@ -241,108 +269,248 @@ export class Coordinator extends FeaturedAgent {
       description:
         "Create a new solver agent for a challenge. " +
         "Automatically selects an idle model from the pool. " +
-        "Queues the challenge if no models are available and initializes per-solver workspace files.",
+        "Queues the challenge if no models are available and initializes per-solver workspace files. " +
+        "Challenges without attachments require remoteUrl or they are moved to url_pending.",
       parameters: solverParams,
       execute: async (_toolCallId, params: CreateSolverParams) => {
-        const modelId = this.modelPool.acquire(params.challengeId)
-        if (!modelId) {
-          this.challengeQueue.push(params)
-          this.persistCoordinatorState()
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `No models available. Challenge "${params.challengeName}" queued (${this.challengeQueue.length} in queue).`,
-              },
-            ],
-            details: { queued: true, queueLength: this.challengeQueue.length },
-          }
-        }
-
-        const solverWorkspace = await this.persistence.ensureSolverWorkspace({
-          solverId: params.challengeId,
-          challengeName: params.challengeName,
-          category: params.category,
-          description: params.description,
-          difficulty: params.difficulty,
-          files: params.files,
-          model: modelId,
-          launchDir: this.workspaceRoot,
-        })
-
-        const solverModel = this.resolveModel?.(modelId) ?? this.state.model
-
-        const solver = new Solver({
-          solverId: params.challengeId,
-          cwd: solverWorkspace.rootDir,
-          challengeDescription: params.description,
-          workspaceRoot: this.workspaceRoot,
-          environmentFilePath: solverWorkspace.environmentPath,
-          scriptsDir: solverWorkspace.scriptsDir,
-          writeupPath: solverWorkspace.writeupPath,
-          tools: this.createSolverTools(params.challengeId, solverWorkspace.rootDir),
-          sessionManager: solverWorkspace.session,
-          model: solverModel,
-        })
-
-        this.solvers.set(params.challengeId, solver)
-        this.persistence.saveSolverState(params.challengeId, {
-          solverId: params.challengeId,
-          challengeName: params.challengeName,
-          category: params.category,
-          status: "solving",
-          model: modelId,
-          cwd: solverWorkspace.rootDir,
-          environmentPath: solverWorkspace.environmentPath,
-          scriptsDir: solverWorkspace.scriptsDir,
-          writeupPath: solverWorkspace.writeupPath,
-          updatedAt: new Date().toISOString(),
-        })
-        this.persistCoordinatorState()
-
-        this.attachSolverLifecycle(params.challengeId, params.challengeName, solver)
-
-        void solver
-          .solve(
-            [
-              `Challenge: ${params.challengeName}`,
-              `Category: ${params.category}`,
-              `Environment file: ${solverWorkspace.environmentPath}`,
-              "Read ENVIRONMENT.md first, then solve the challenge.",
-              "If current remote URL is expired/unreachable, call notify_coordinator(kind=environment_expired) and wait for coordinator URL refresh.",
-            ].join("\n"),
-          )
-          .catch((error: unknown) => {
-            this.persistence.saveSolverState(params.challengeId, {
-              solverId: params.challengeId,
-              challengeName: params.challengeName,
-              status: "failed",
-              error: formatError(error),
-              updatedAt: new Date().toISOString(),
-            })
-            this.appendUserMessage(
-              `Solver for "${params.challengeName}" failed: ${formatError(error)}`,
-            )
-            this.onSolverFinished(params.challengeId, "failed")
-          })
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Solver started for "${params.challengeName}" on model ${modelId}. Workspace: ${solverWorkspace.rootDir}`,
-            },
-          ],
-          details: {
-            model: modelId,
-            solverId: params.challengeId,
-            workspace: solverWorkspace.rootDir,
-          },
-        }
+        return this.handleCreateSolverRequest(params)
       },
     }
 
     return tool
+  }
+
+  private hasAttachments(files?: string[]): boolean {
+    return Array.isArray(files) && files.length > 0
+  }
+
+  private hasRemoteSlotAvailable(): boolean {
+    return this.remoteActiveSolvers.size < this.remoteUrlConcurrency
+  }
+
+  private upsertUrlPendingChallenge(challenge: QueuedChallenge): void {
+    const index = this.urlPendingQueue.findIndex(
+      (item) => item.challengeId === challenge.challengeId,
+    )
+    if (index >= 0) {
+      this.urlPendingQueue[index] = challenge
+      return
+    }
+    this.urlPendingQueue.push(challenge)
+  }
+
+  private removeUrlPendingChallenge(challengeId: string): void {
+    const index = this.urlPendingQueue.findIndex((item) => item.challengeId === challengeId)
+    if (index >= 0) {
+      this.urlPendingQueue.splice(index, 1)
+    }
+  }
+
+  private async queueUrlPendingChallenge(
+    params: CreateSolverRequest,
+    reason: string,
+  ): Promise<{ content: { type: "text"; text: string }[]; details: Record<string, unknown> }> {
+    const workspace = await this.persistence.ensureSolverWorkspace({
+      solverId: params.challengeId,
+      challengeName: params.challengeName,
+      category: params.category,
+      description: params.description,
+      difficulty: params.difficulty,
+      files: params.files,
+      remoteUrl: params.remoteUrl,
+      launchDir: this.workspaceRoot,
+    })
+
+    this.upsertUrlPendingChallenge({
+      challengeId: params.challengeId,
+      challengeName: params.challengeName,
+      category: params.category,
+      description: params.description,
+      difficulty: params.difficulty,
+      files: params.files,
+      remoteUrl: params.remoteUrl,
+    })
+
+    this.persistence.saveSolverState(params.challengeId, {
+      solverId: params.challengeId,
+      challengeName: params.challengeName,
+      category: params.category,
+      description: params.description,
+      difficulty: params.difficulty,
+      files: params.files,
+      status: "url_pending",
+      remoteUrl: params.remoteUrl,
+      requiresRemoteUrl: true,
+      cwd: workspace.rootDir,
+      environmentPath: workspace.environmentPath,
+      scriptsDir: workspace.scriptsDir,
+      writeupPath: workspace.writeupPath,
+      updatedAt: new Date().toISOString(),
+    })
+
+    this.persistCoordinatorState()
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Challenge "${params.challengeName}" is url_pending (${reason}).`,
+        },
+      ],
+      details: {
+        urlPending: true,
+        reason,
+        solverId: params.challengeId,
+        queueLength: this.urlPendingQueue.length,
+      },
+    }
+  }
+
+  private async startSolverWithModel(
+    params: CreateSolverRequest,
+    modelId: string,
+    options: { requiresRemoteUrl: boolean },
+  ): Promise<{ content: { type: "text"; text: string }[]; details: Record<string, unknown> }> {
+    this.removeUrlPendingChallenge(params.challengeId)
+
+    const solverWorkspace = await this.persistence.ensureSolverWorkspace({
+      solverId: params.challengeId,
+      challengeName: params.challengeName,
+      category: params.category,
+      description: params.description,
+      difficulty: params.difficulty,
+      files: params.files,
+      model: modelId,
+      remoteUrl: params.remoteUrl,
+      launchDir: this.workspaceRoot,
+    })
+
+    if (this.hasAttachments(params.files)) {
+      this.persistence.appendSolverEnvironmentNote(
+        params.challengeId,
+        "Local-first workflow: validate your local exploit path first, then request/confirm remote URL for final flag retrieval.",
+      )
+    }
+
+    const solverModel = this.resolveModel?.(modelId) ?? this.state.model
+
+    const solver = new Solver({
+      solverId: params.challengeId,
+      cwd: solverWorkspace.rootDir,
+      challengeDescription: params.description,
+      workspaceRoot: this.workspaceRoot,
+      environmentFilePath: solverWorkspace.environmentPath,
+      scriptsDir: solverWorkspace.scriptsDir,
+      writeupPath: solverWorkspace.writeupPath,
+      tools: this.createSolverTools(params.challengeId, solverWorkspace.rootDir),
+      sessionManager: solverWorkspace.session,
+      model: solverModel,
+    })
+
+    this.solvers.set(params.challengeId, solver)
+    if (options.requiresRemoteUrl) {
+      this.remoteActiveSolvers.add(params.challengeId)
+    }
+
+    this.persistence.saveSolverState(params.challengeId, {
+      solverId: params.challengeId,
+      challengeName: params.challengeName,
+      category: params.category,
+      status: "solving",
+      model: modelId,
+      remoteUrl: params.remoteUrl,
+      requiresRemoteUrl: options.requiresRemoteUrl,
+      cwd: solverWorkspace.rootDir,
+      environmentPath: solverWorkspace.environmentPath,
+      scriptsDir: solverWorkspace.scriptsDir,
+      writeupPath: solverWorkspace.writeupPath,
+      updatedAt: new Date().toISOString(),
+    })
+    this.persistCoordinatorState()
+
+    this.attachSolverLifecycle(params.challengeId, params.challengeName, solver)
+
+    void solver
+      .solve(
+        [
+          `Challenge: ${params.challengeName}`,
+          `Category: ${params.category}`,
+          `Environment file: ${solverWorkspace.environmentPath}`,
+          "Read ENVIRONMENT.md first, then solve the challenge.",
+          options.requiresRemoteUrl
+            ? "If current remote URL is expired/unreachable, call notify_coordinator(kind=environment_expired) and wait for coordinator URL refresh."
+            : "Work local attachments first. Request remote URL only after local exploit path is reproducible.",
+        ].join("\n"),
+      )
+      .catch((error: unknown) => {
+        this.persistence.saveSolverState(params.challengeId, {
+          solverId: params.challengeId,
+          challengeName: params.challengeName,
+          status: "failed",
+          error: formatError(error),
+          updatedAt: new Date().toISOString(),
+        })
+        this.appendUserMessage(`Solver for "${params.challengeName}" failed: ${formatError(error)}`)
+        this.onSolverFinished(params.challengeId, "failed")
+      })
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Solver started for "${params.challengeName}" on model ${modelId}. Workspace: ${solverWorkspace.rootDir}`,
+        },
+      ],
+      details: {
+        model: modelId,
+        solverId: params.challengeId,
+        workspace: solverWorkspace.rootDir,
+        requiresRemoteUrl: options.requiresRemoteUrl,
+      },
+    }
+  }
+
+  private async handleCreateSolverRequest(
+    params: CreateSolverRequest,
+  ): Promise<{ content: { type: "text"; text: string }[]; details: Record<string, unknown> }> {
+    const hasAttachments = this.hasAttachments(params.files)
+    const requiresRemoteUrl = !hasAttachments
+    const remoteUrl = params.remoteUrl?.trim()
+
+    if (requiresRemoteUrl && !remoteUrl) {
+      return this.queueUrlPendingChallenge(
+        { ...params, remoteUrl: undefined },
+        "remote_url_missing",
+      )
+    }
+
+    if (requiresRemoteUrl && !this.hasRemoteSlotAvailable()) {
+      return this.queueUrlPendingChallenge({ ...params, remoteUrl }, "remote_slot_unavailable")
+    }
+
+    const modelId = this.modelPool.acquire(params.challengeId)
+    if (!modelId) {
+      this.challengeQueue.push({ ...params, remoteUrl })
+      this.persistCoordinatorState()
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `No models available. Challenge "${params.challengeName}" queued (${this.challengeQueue.length} in queue).`,
+          },
+        ],
+        details: { queued: true, queueLength: this.challengeQueue.length },
+      }
+    }
+
+    return this.startSolverWithModel(
+      {
+        ...params,
+        remoteUrl,
+      },
+      modelId,
+      { requiresRemoteUrl },
+    )
   }
 
   private restoreSolversFromPersistence(autoContinueSolvers: boolean) {
@@ -364,6 +532,22 @@ export class Coordinator extends FeaturedAgent {
 
       const status = solverState.status ?? "assigned"
       if (status === "solved" || status === "stopped") {
+        continue
+      }
+
+      if (status === "url_pending") {
+        this.upsertUrlPendingChallenge({
+          challengeId: solverId,
+          challengeName: solverState.challengeName ?? solverId,
+          category: solverState.category ?? "unknown",
+          description: solverState.description ?? "",
+          difficulty:
+            typeof solverState.difficulty === "number" ? solverState.difficulty : undefined,
+          files: Array.isArray(solverState.files)
+            ? (solverState.files.filter((item) => typeof item === "string") as string[])
+            : undefined,
+          remoteUrl: typeof solverState.remoteUrl === "string" ? solverState.remoteUrl : undefined,
+        })
         continue
       }
 
@@ -396,6 +580,9 @@ export class Coordinator extends FeaturedAgent {
       }
 
       this.solvers.set(solverId, solver)
+      if (solverState.requiresRemoteUrl === true) {
+        this.remoteActiveSolvers.add(solverId)
+      }
       this.attachSolverLifecycle(solverId, solverState.challengeName ?? solverId, solver)
 
       if (autoContinueSolvers) {
@@ -575,15 +762,20 @@ export class Coordinator extends FeaturedAgent {
         try {
           const result = await createSolverTool.execute(`queue-dispatch-${Date.now()}`, next)
           const details = result.details as
-            | { queued?: boolean; model?: string; queueLength?: number }
+            | { queued?: boolean; urlPending?: boolean; model?: string; queueLength?: number }
             | undefined
 
           const isRequeued = details?.queued === true
+          const isUrlPending = details?.urlPending === true
           this.appendSchedulerUpdate({
             challengeId: next.challengeId,
             challengeName: next.challengeName,
-            status: isRequeued ? "requeued" : "started",
-            reason: isRequeued ? "model_unavailable" : "slot_freed_auto_dispatch",
+            status: isRequeued || isUrlPending ? "requeued" : "started",
+            reason: isRequeued
+              ? "model_unavailable"
+              : isUrlPending
+                ? "remote_url_pending"
+                : "slot_freed_auto_dispatch",
             queueBefore,
             queueAfter:
               typeof details?.queueLength === "number"
@@ -592,7 +784,7 @@ export class Coordinator extends FeaturedAgent {
             model: typeof details?.model === "string" ? details.model : undefined,
           })
 
-          if (isRequeued) {
+          if (isRequeued || isUrlPending) {
             break
           }
         } catch (error: unknown) {
@@ -620,6 +812,61 @@ export class Coordinator extends FeaturedAgent {
       }
     } finally {
       this.isQueueDispatchRunning = false
+      this.persistCoordinatorState()
+    }
+  }
+
+  private async dispatchUrlPendingChallenges() {
+    if (this.isUrlPendingDispatchRunning) {
+      return
+    }
+
+    this.isUrlPendingDispatchRunning = true
+    try {
+      const createSolverTool = this.getCreateSolverTool()
+
+      while (
+        this.urlPendingQueue.length > 0 &&
+        this.hasRemoteSlotAvailable() &&
+        this.modelPool.available > 0
+      ) {
+        const nextIndex = this.urlPendingQueue.findIndex((item) =>
+          typeof item.remoteUrl === "string" ? item.remoteUrl.trim().length > 0 : false,
+        )
+        if (nextIndex < 0) {
+          break
+        }
+
+        const [next] = this.urlPendingQueue.splice(nextIndex, 1)
+        if (!next) {
+          break
+        }
+
+        try {
+          await createSolverTool.execute(`url-pending-dispatch-${Date.now()}`, {
+            challengeId: next.challengeId,
+            challengeName: next.challengeName,
+            category: next.category,
+            description: next.description,
+            difficulty: next.difficulty,
+            files: next.files,
+            remoteUrl: next.remoteUrl,
+          })
+        } catch (error: unknown) {
+          this.persistence.saveSolverState(next.challengeId, {
+            solverId: next.challengeId,
+            challengeName: next.challengeName,
+            status: "failed",
+            error: formatError(error),
+            updatedAt: new Date().toISOString(),
+          })
+          this.appendUserMessage(
+            `Failed to activate url_pending challenge "${next.challengeName}": ${formatError(error)}`,
+          )
+        }
+      }
+    } finally {
+      this.isUrlPendingDispatchRunning = false
       this.persistCoordinatorState()
     }
   }
@@ -918,6 +1165,30 @@ export class Coordinator extends FeaturedAgent {
         )
         this.persistence.appendSolverEnvironmentNote(challengeId, note)
         message = `Environment URL verified and updated for ${challengeId}.`
+
+        const solverState = this.persistence.loadSolverState<PersistedSolverState>(challengeId)
+        if (solverState?.status === "url_pending") {
+          this.upsertUrlPendingChallenge({
+            challengeId,
+            challengeName: solverState.challengeName ?? challengeId,
+            category: solverState.category ?? "unknown",
+            description: solverState.description ?? "",
+            difficulty:
+              typeof solverState.difficulty === "number" ? solverState.difficulty : undefined,
+            files: Array.isArray(solverState.files)
+              ? (solverState.files.filter((item) => typeof item === "string") as string[])
+              : undefined,
+            remoteUrl: notification.url,
+          })
+          this.persistence.saveSolverState(challengeId, {
+            ...solverState,
+            solverId: challengeId,
+            remoteUrl: notification.url,
+            updatedAt: new Date().toISOString(),
+          })
+          void this.dispatchUrlPendingChallenges()
+          message = `Environment URL verified for ${challengeId}; pending solver activation requested.`
+        }
       } else {
         applied = false
         this.persistence.appendSolverEnvironmentNote(
@@ -1033,6 +1304,7 @@ export class Coordinator extends FeaturedAgent {
     this.persistModelPoolManifest()
     this.persistCoordinatorState()
     void this.dispatchQueuedChallenges()
+    void this.dispatchUrlPendingChallenges()
     return result
   }
 
@@ -1041,6 +1313,7 @@ export class Coordinator extends FeaturedAgent {
     this.persistModelPoolManifest()
     this.persistCoordinatorState()
     void this.dispatchQueuedChallenges()
+    void this.dispatchUrlPendingChallenges()
     return result
   }
 
@@ -1050,6 +1323,7 @@ export class Coordinator extends FeaturedAgent {
       modelPool: this.modelPool.toJSON(),
       solvers: Array.from(this.solvers.keys()),
       challengeQueue: this.challengeQueue,
+      urlPendingQueue: this.urlPendingQueue,
       updatedAt: new Date().toISOString(),
     })
   }
@@ -1068,6 +1342,7 @@ export class Coordinator extends FeaturedAgent {
     const current = this.persistence.loadSolverState<PersistedSolverState>(solverId)
 
     this.modelPool.release(solverId)
+    this.remoteActiveSolvers.delete(solverId)
     this.solvers.delete(solverId)
     this.solverRunEndMeta.delete(solverId)
 
@@ -1079,6 +1354,7 @@ export class Coordinator extends FeaturedAgent {
     })
 
     void this.dispatchQueuedChallenges()
+    void this.dispatchUrlPendingChallenges()
 
     this.persistCoordinatorState()
   }
