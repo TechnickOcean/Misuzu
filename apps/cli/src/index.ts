@@ -17,6 +17,7 @@ import {
   type SelectListTheme,
 } from "@mariozechner/pi-tui"
 import "dotenv/config"
+import { filterImportantEvents, formatImportantEvent, type EventTab } from "./ui-events.ts"
 
 type RuntimeJsonValue =
   | string
@@ -151,6 +152,7 @@ interface UiState {
   connection: RuntimeConnectionState
   snapshot?: RuntimeSnapshot
   selectedSolverId?: string
+  eventTab: EventTab
   events: RuntimeEventEnvelope[]
   statusLine: string
   commandPending: boolean
@@ -291,6 +293,7 @@ class MisuzuCliApp {
 
   private readonly state: UiState = {
     connection: "connecting",
+    eventTab: "coordinator",
     events: [],
     statusLine: "Booting...",
     commandPending: false,
@@ -314,6 +317,7 @@ class MisuzuCliApp {
         [
           { name: "help", description: "Show command guide" },
           { name: "refresh", description: "Refresh runtime snapshot" },
+          { name: "tab", description: "Switch event tab" },
           { name: "select", description: "Select solver by id or next/prev" },
           { name: "steer", description: "Send hint to selected solver" },
           { name: "abort", description: "Abort selected solver" },
@@ -349,6 +353,22 @@ class MisuzuCliApp {
 
       if (matchesKey(data, Key.ctrl("r"))) {
         void this.refreshSnapshot("manual refresh")
+        return { consume: true }
+      }
+
+      if (matchesKey(data, Key.alt("1"))) {
+        this.state.eventTab = "coordinator"
+        this.setStatus("Switched to coordinator tab.")
+        return { consume: true }
+      }
+
+      if (matchesKey(data, Key.alt("2"))) {
+        this.state.eventTab = "solver"
+        this.setStatus(
+          this.state.selectedSolverId
+            ? `Switched to solver tab (${this.state.selectedSolverId}).`
+            : "Switched to solver tab (no solver selected).",
+        )
         return { consume: true }
       }
 
@@ -407,7 +427,7 @@ class MisuzuCliApp {
       case "":
       case "help":
         this.setStatus(
-          "Commands: /help /refresh /select /steer /abort /continue /models /server restart /prompt /clear-events /quit",
+          "Commands: /help /refresh /tab /select /steer /abort /continue /models /server restart /prompt /clear-events /quit",
         )
         return
 
@@ -423,6 +443,10 @@ class MisuzuCliApp {
       case "clear-events":
         this.state.events = []
         this.setStatus("Cleared local event panel.")
+        return
+
+      case "tab":
+        this.handleTabCommand(rest)
         return
 
       case "select":
@@ -498,6 +522,42 @@ class MisuzuCliApp {
 
     this.state.selectedSolverId = solver.solverId
     this.setStatus(`Selected solver ${solver.solverId}.`)
+  }
+
+  private handleTabCommand(argument: string) {
+    const value = argument.trim()
+    if (value.length === 0) {
+      this.setStatus("Usage: /tab coordinator | /tab solver [solver-id]", "yellow")
+      return
+    }
+
+    const [tabName, solverId] = value.split(/\s+/, 2)
+    if (tabName === "coordinator") {
+      this.state.eventTab = "coordinator"
+      this.setStatus("Switched to coordinator tab.")
+      return
+    }
+
+    if (tabName === "solver") {
+      if (solverId) {
+        const resolved = this.resolveSolverId(solverId)
+        if (!resolved) {
+          this.setStatus(`Solver not found: ${solverId}`, "yellow")
+          return
+        }
+        this.state.selectedSolverId = resolved
+      }
+
+      this.state.eventTab = "solver"
+      this.setStatus(
+        this.state.selectedSolverId
+          ? `Switched to solver tab (${this.state.selectedSolverId}).`
+          : "Switched to solver tab (no solver selected).",
+      )
+      return
+    }
+
+    this.setStatus("Usage: /tab coordinator | /tab solver [solver-id]", "yellow")
   }
 
   private selectAdjacentSolver(direction: 1 | -1) {
@@ -857,13 +917,24 @@ class MisuzuCliApp {
     }
 
     lines.push("")
-    lines.push(`${ANSI.bold}Recent Events${ANSI.reset}`)
-    const recentEvents = this.state.events.slice(-12)
-    if (recentEvents.length === 0) {
-      lines.push("  (no events yet)")
+    lines.push(`${ANSI.bold}Events${ANSI.reset}`)
+    const tabLabel =
+      this.state.eventTab === "coordinator"
+        ? "coordinator"
+        : `solver${this.state.selectedSolverId ? `:${this.state.selectedSolverId}` : ""}`
+    lines.push(`  tab: ${tabLabel}`)
+
+    const visibleEvents = filterImportantEvents(this.state.events, {
+      tab: this.state.eventTab,
+      selectedSolverId: this.state.selectedSolverId,
+      limit: 12,
+    })
+
+    if (visibleEvents.length === 0) {
+      lines.push("  (no important events yet)")
     } else {
-      for (const event of recentEvents) {
-        lines.push(`  #${event.seq} ${event.source}.${event.type} ${summarizeEventPayload(event)}`)
+      for (const event of visibleEvents) {
+        lines.push(`  #${event.seq} ${formatImportantEvent(event)}`)
       }
     }
 
@@ -880,8 +951,8 @@ class MisuzuCliApp {
 
   private renderHelpText(): string {
     return [
-      `${ANSI.gray}Shortcuts:${ANSI.reset} Ctrl+C quit | Ctrl+R refresh | Alt+J/Alt+K select solver`,
-      `${ANSI.gray}Commands:${ANSI.reset} /help /refresh /select <id|next|prev> /steer [id] <msg> /abort [id] /continue [id] /models add <model> [n] /models concurrency <model> <n> /server restart /prompt <msg> /clear-events /quit`,
+      `${ANSI.gray}Shortcuts:${ANSI.reset} Ctrl+C quit | Ctrl+R refresh | Alt+1 coordinator tab | Alt+2 solver tab | Alt+J/Alt+K select solver`,
+      `${ANSI.gray}Commands:${ANSI.reset} /help /refresh /tab coordinator|solver [id] /select <id|next|prev> /steer [id] <msg> /abort [id] /continue [id] /models add <model> [n] /models concurrency <model> <n> /server restart /prompt <msg> /clear-events /quit`,
       `${ANSI.gray}Input:${ANSI.reset} plain text sends coordinator_prompt`,
     ].join("\n")
   }
@@ -1267,51 +1338,6 @@ function summarizeModelPool(slots: ModelPoolSlotSnapshot[]) {
   }
 
   return Array.from(byModel.values()).sort((a, b) => a.model.localeCompare(b.model))
-}
-
-function summarizeEventPayload(event: RuntimeEventEnvelope): string {
-  const payload = event.payload
-  if (!isRuntimeJsonObject(payload)) {
-    return compactJson(payload)
-  }
-
-  if (event.type === "solver.message") {
-    const solverId = typeof payload.solverId === "string" ? payload.solverId : "solver"
-    const summary = typeof payload.summary === "string" ? payload.summary : "message"
-    return `${solverId}: ${truncate(summary, 80)}`
-  }
-
-  if (event.type === "coordinator.message") {
-    const summary = typeof payload.summary === "string" ? payload.summary : "message"
-    return truncate(summary, 80)
-  }
-
-  if (event.type === "solver.tool.start" || event.type === "solver.tool.end") {
-    const solverId = typeof payload.solverId === "string" ? payload.solverId : "solver"
-    const toolName = typeof payload.toolName === "string" ? payload.toolName : "tool"
-    return `${solverId} ${toolName}`
-  }
-
-  if (event.type === "coordinator.tool.start" || event.type === "coordinator.tool.end") {
-    const toolName = typeof payload.toolName === "string" ? payload.toolName : "tool"
-    return toolName
-  }
-
-  if (event.type === "runtime.command.executed" || event.type === "runtime.command.accepted") {
-    const command = typeof payload.command === "string" ? payload.command : "command"
-    return command
-  }
-
-  return truncate(compactJson(payload), 100)
-}
-
-function compactJson(value: RuntimeJsonValue): string {
-  return JSON.stringify(value)
-}
-
-function truncate(value: string, maxLength: number): string {
-  if (value.length <= maxLength) return value
-  return `${value.slice(0, maxLength)}...`
 }
 
 async function main() {

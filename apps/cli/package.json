@@ -10,6 +10,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/index.ts",
+    "test": "vp test",
     "check": "vp check",
     "build": "vp pack"
   },
