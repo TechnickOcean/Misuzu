@@ -31,7 +31,7 @@ export const dockerBuildTool = {
       signal,
     })
     if (exitCode !== 0) throw new Error(`docker build failed:\n${output}`)
-    return { content: [{ type: "text" as const, text: output }], details: { exitCode } }
+    return { content: [{ type: "text", text: output }], details: { exitCode } }
   },
 }
 
@@ -66,16 +66,13 @@ export const dockerRunTool = {
       signal,
     })
     if (exitCode !== 0) throw new Error(`docker run failed:\n${output}`)
-    return { content: [{ type: "text" as const, text: output.trim() }], details: { exitCode } }
+    return { content: [{ type: "text", text: output.trim() }], details: { exitCode } }
   },
 }
 
 const execSchema = Type.Object({
   container: Type.String({ description: "Container name or ID" }),
   command: Type.String({ description: "Command to execute" }),
-  interactive: Type.Optional(
-    Type.Boolean({ description: "Use -it for interactive (default: false)" }),
-  ),
 })
 
 export const dockerExecTool = {
@@ -85,8 +82,7 @@ export const dockerExecTool = {
   parameters: execSchema,
   execute: async (_id: string, rawParams: unknown, signal?: AbortSignal) => {
     const params = rawParams as Static<typeof execSchema>
-    const flags = params.interactive ? "-it" : ""
-    const cmd = dockerCmd(`exec ${flags} ${params.container} ${params.command}`)
+    const cmd = dockerCmd(`exec ${params.container} ${params.command}`)
     let output = ""
     const { exitCode } = await ops.exec(cmd, process.cwd(), {
       onData: (d) => {
@@ -95,7 +91,7 @@ export const dockerExecTool = {
       signal,
     })
     if (exitCode !== 0) throw new Error(`docker exec failed:\n${output}`)
-    return { content: [{ type: "text" as const, text: output }], details: { exitCode } }
+    return { content: [{ type: "text", text: output }], details: { exitCode } }
   },
 }
 
@@ -118,9 +114,7 @@ export const dockerStopTool = {
       signal,
     })
     return {
-      content: [
-        { type: "text" as const, text: output.trim() || `Container ${params.container} stopped` },
-      ],
+      content: [{ type: "text", text: output.trim() || `Container ${params.container} stopped` }],
       details: { exitCode },
     }
   },
@@ -151,9 +145,7 @@ export const dockerRmTool = {
       },
     )
     return {
-      content: [
-        { type: "text" as const, text: output.trim() || `Container ${params.container} removed` },
-      ],
+      content: [{ type: "text", text: output.trim() || `Container ${params.container} removed` }],
       details: { exitCode },
     }
   },

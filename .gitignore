@@ -29,3 +29,4 @@ dist-ssr
 
 .misuzu/runtime
 .misuzu/workspaces
+.misuzu/providers/

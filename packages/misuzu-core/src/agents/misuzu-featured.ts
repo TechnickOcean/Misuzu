@@ -7,9 +7,8 @@ import {
 } from "@mariozechner/pi-agent-core"
 import type { Model } from "@mariozechner/pi-ai"
 import { type Skill, buildSkillsCatalog } from "../features/skill.ts"
-import { convertToLlm } from "../features/messages.ts"
+import { convertToLlm } from "../features/messages/index.ts"
 import { checkCompact, compact } from "../features/compaction.ts"
-import { AgentSessionRecorder, type SessionManager } from "../features/persistence.ts"
 import { createBaseTools } from "../tools/index.ts"
 
 export interface FeaturedAgentOptions {
@@ -17,23 +16,16 @@ export interface FeaturedAgentOptions {
   skills?: Skill[]
   cwd?: string
   tools?: AgentTool<any>[]
-  sessionManager?: SessionManager
-  convertToLlm?: (messages: AgentMessage[]) => ReturnType<typeof convertToLlm>
   transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>
   [key: string]: unknown
 }
 
 export class FeaturedAgent {
-  private agent: Agent
-  private detachSessionRecorder?: () => void
-  private sessionRecorder?: AgentSessionRecorder
-
+  agent: Agent
   constructor({
     skills = [],
     cwd,
     tools,
-    sessionManager,
-    convertToLlm: customConvertToLlm,
     transformContext: customTransformContext,
     ...opts
   }: FeaturedAgentOptions) {
@@ -48,29 +40,18 @@ export class FeaturedAgent {
         tools: tools ?? createBaseTools(resolvedCwd),
         thinkingLevel: opts.initialState?.thinkingLevel ?? "medium",
       },
-      convertToLlm: customConvertToLlm ?? convertToLlm,
-      transformContext:
-        customTransformContext ??
-        (async (messages, _signal) => {
-          if (checkCompact(this.agent)) {
-            return compact(this.agent)
-          }
-          return messages
-        }),
+      convertToLlm: convertToLlm,
+      transformContext: async (messages, signal) => {
+        if (checkCompact(this.agent)) {
+          messages = await compact(this.agent)
+        }
+        return customTransformContext ? customTransformContext(messages, signal) : messages
+      },
     })
-
-    if (sessionManager) {
-      this.sessionRecorder = new AgentSessionRecorder(sessionManager)
-      this.detachSessionRecorder = this.sessionRecorder.attach(this)
-    }
   }
 
   get state() {
     return this.agent.state
-  }
-
-  get innerAgent() {
-    return this.agent
   }
 
   subscribe(fn: (e: AgentEvent) => void) {
@@ -119,17 +100,5 @@ export class FeaturedAgent {
 
   followUp(message: string) {
     this.agent.followUp({ role: "user", content: message, timestamp: Date.now() })
-  }
-
-  flushSession(): number {
-    return this.sessionRecorder?.flush(this.agent.state.messages) ?? 0
-  }
-
-  detachSessionPersistence() {
-    if (this.detachSessionRecorder) {
-      this.detachSessionRecorder()
-      this.detachSessionRecorder = undefined
-    }
-    this.sessionRecorder = undefined
   }
 }

@@ -4,26 +4,34 @@
   "private": true,
   "workspaces": {
     "packages": [
+      "apps/*",
       "packages/*",
-      "apps/*"
+      "tools/*",
+      "examples/workspace/*"
     ],
     "catalog": {
       "@mariozechner/pi-agent-core": "^0.62.0",
       "@mariozechner/pi-ai": "^0.62.0",
-      "@types/node": "^24",
+      "@mariozechner/pi-tui": "^0.63.1",
+      "@sinclair/typebox": "^0.34.48",
+      "@types/node": "^24.12.0",
+      "dotenv": "^17.3.1",
+      "glob": "^13.0.6",
+      "tsx": "^4.21.0",
       "typescript": "^5",
       "vite": "npm:@voidzero-dev/vite-plus-core@latest",
-      "vite-plus": "latest",
-      "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+      "vite-plus": "0.1.13",
+      "vitest": "npm:@voidzero-dev/vite-plus-test@latest",
+      "yaml": "^2.8.3"
     }
   },
   "type": "module",
   "scripts": {
     "ready": "vp fmt && vp lint && vp run test -r && vp run build -r",
-    "dev": "vp run website#dev",
     "prepare": "vp config"
   },
   "dependencies": {
+    "@types/node": "catalog:",
     "dotenv": "catalog:"
   },
   "devDependencies": {
@@ -37,9 +45,7 @@
     "node": ">=22.12.0"
   },
   "packageManager": "pnpm@10.32.1",
-  "pnpm": {
-    "patchedDependencies": {
-      "@mariozechner/pi-ai@0.62.0": "patches/@mariozechner__pi-ai@0.62.0.patch"
-    }
+  "patchedDependencies": {
+    "@mariozechner/pi-ai@0.62.0": "patches/@mariozechner__pi-ai@0.62.0.patch"
   }
 }

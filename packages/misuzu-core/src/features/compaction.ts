@@ -1,7 +1,7 @@
 import type { Agent, AgentMessage } from "@mariozechner/pi-agent-core"
 import type { AssistantMessage, TextContent, ThinkingContent, ToolCall } from "@mariozechner/pi-ai"
 import { completeSimple } from "@mariozechner/pi-ai"
-import type { CompactionSummaryMessage } from "./messages.ts"
+import { compactionMessage, type CompactionMessageContent } from "./messages/compaction.ts"
 
 const RESERVE_TOKENS = 16384
 const KEEP_RECENT_TOKENS = 20_000
@@ -14,8 +14,8 @@ function isToolCall(c: unknown): c is ToolCall {
   return typeof c === "object" && c !== null && (c as { type: string }).type === "toolCall"
 }
 
-function isCompactionSummaryMessage(message: AgentMessage): message is CompactionSummaryMessage {
-  return message.role === "compactionSummary"
+function isCompactionSummaryMessage(message: AgentMessage): message is CompactionMessageContent {
+  return message.role === "compaction"
 }
 
 /** Estimate token count for a message. Uses chars/4 heuristic. */
@@ -39,23 +39,8 @@ export function estimateTokens(message: AgentMessage): number {
     case "toolResult":
       chars = message.content.reduce((sum, c) => sum + (isTextContent(c) ? c.text.length : 4800), 0)
       break
-    default:
-      if ("command" in message && "output" in message) {
-        chars = String(message.command).length + String(message.output).length
-      } else if ("summary" in message) {
-        chars = String(message.summary).length
-      } else if ("flag" in message) {
-        chars = String(message.flag).length + String(message.message).length
-      } else if ("queueBefore" in message && "queueAfter" in message) {
-        chars =
-          String(message.challengeId).length +
-          String(message.challengeName).length +
-          String(message.reason).length +
-          String(message.queueBefore).length +
-          String(message.queueAfter).length
-      } else if ("details" in message) {
-        chars = String(message.details).length
-      }
+    case "compaction":
+      chars = compactionMessage.calculateToken(message)
       break
   }
   return Math.ceil(chars / 4)
@@ -123,12 +108,12 @@ function serializeForSummary(messages: AgentMessage[]): string {
     switch (msg.role) {
       case "user": {
         const text = typeof msg.content === "string" ? msg.content : textFromContent(msg.content)
-        parts.push(`[User]: ${text.slice(0, 2000)}`)
+        parts.push(`[User]: ${text}`)
         break
       }
       case "assistant": {
         const textParts = msg.content.filter(isTextContent).map((c) => c.text)
-        if (textParts.length) parts.push(`[Assistant]: ${textParts.join("\n").slice(0, 2000)}`)
+        if (textParts.length) parts.push(`[Assistant]: ${textParts.join("\n")}`)
         const toolCalls = msg.content.filter(isToolCall)
         if (toolCalls.length) {
           const calls = toolCalls
@@ -139,22 +124,11 @@ function serializeForSummary(messages: AgentMessage[]): string {
         break
       }
       case "toolResult": {
-        parts.push(`[Tool result]: ${textFromContent(msg.content).slice(0, 2000)}`)
+        parts.push(`[Tool result]: ${textFromContent(msg.content)}`)
         break
       }
-      default:
-        if ("summary" in msg) {
-          parts.push(`[Previous summary]: ${String(msg.summary).slice(0, 2000)}`)
-        } else if ("flag" in msg) {
-          parts.push(`[Flag]: ${msg.flag} - ${msg.message}`)
-        } else if ("queueBefore" in msg && "queueAfter" in msg) {
-          parts.push(
-            `[Scheduler ${String(msg.status)}]: ${String(msg.challengeId)} (${String(msg.challengeName)}) ` +
-              `reason=${String(msg.reason)} queue ${String(msg.queueBefore)}->${String(msg.queueAfter)}`,
-          )
-        } else if ("details" in msg) {
-          parts.push(`[Challenge]: ${msg.details}`)
-        }
+      case "compaction":
+        parts.push(compactionMessage.compactionContext(msg))
         break
     }
   }
@@ -231,7 +205,7 @@ export async function compact(agent: Agent): Promise<AgentMessage[]> {
     agent.state.model,
     {
       systemPrompt:
-        "You are a conversation summarizer. Output ONLY the summary. Do not continue the conversation.",
+        "You are a conversation summarizer. Summarize the conversation. Do not continue the conversation.",
       messages: [
         {
           role: "user",
@@ -249,11 +223,11 @@ export async function compact(agent: Agent): Promise<AgentMessage[]> {
     .join("\n")
 
   const summaryMsg = {
-    role: "compactionSummary" as const,
+    role: "compaction",
     summary: summaryText,
     tokensBefore: estimateContextTokens(messages),
     timestamp: Date.now(),
-  } as unknown as AgentMessage
+  } as AgentMessage
 
   return [summaryMsg, ...keptMessages]
 }
@@ -266,11 +240,11 @@ export function compactWithSummary(messages: AgentMessage[], summary: string): A
   const keptMessages = messages.slice(cutIndex)
 
   const summaryMsg = {
-    role: "compactionSummary" as const,
+    role: "compaction",
     summary,
     tokensBefore: estimateContextTokens(messages),
     timestamp: Date.now(),
-  } as unknown as AgentMessage
+  } as AgentMessage
 
   return [summaryMsg, ...keptMessages]
 }
