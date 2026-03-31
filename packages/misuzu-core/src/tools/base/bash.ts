@@ -5,13 +5,11 @@ import { join } from "node:path"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { type Static, Type } from "@sinclair/typebox"
 import { spawn } from "node:child_process"
-import { truncateTail, type TruncationResult } from "../utils/truncate.js"
+import { truncateTail, type TruncationResult } from "../../utils/truncate.js"
 
 const bashSchema = Type.Object({
   command: Type.String({ description: "Command to execute" }),
-  timeout: Type.Optional(
-    Type.Number({ description: "Timeout in seconds (optional, no default timeout)" }),
-  ),
+  timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (default: 60)" })),
 })
 
 export type BashToolInput = Static<typeof bashSchema>
@@ -266,5 +264,3 @@ export function buildShellSpawnConfig(
     },
   }
 }
-
-export const bashTool = createBashTool(process.cwd())

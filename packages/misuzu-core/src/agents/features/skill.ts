@@ -6,8 +6,8 @@
 import { readdirSync, readFileSync, realpathSync } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { parse as parseYaml } from "yaml"
-import { resolveMisuzuRoot } from "../utils/path.ts"
-import { resolveWorkspacePaths } from "../workspace/paths.ts"
+import { resolveMisuzuRoot } from "../../utils/path.ts"
+import { resolveWorkspacePaths } from "../../core/application/workspace/paths.ts"
 
 export interface SkillFrontmatter {
   name?: string

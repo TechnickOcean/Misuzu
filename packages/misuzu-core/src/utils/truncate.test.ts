@@ -1,5 +1,5 @@
 import { expect, test, describe } from "vite-plus/test"
-import { truncateHead, truncateTail, truncateLine, formatSize } from "./truncate.js"
+import { formatSize, truncateHead, truncateLine, truncateTail } from "./truncate.js"
 
 describe("truncateHead", () => {
   test("returns content unchanged if within limits", () => {
@@ -73,7 +73,7 @@ describe("truncateLine", () => {
   test("truncates long lines", () => {
     const long = "x".repeat(1000)
     const result = truncateLine(long, 100)
-    expect(result.length).toBeLessThanOrEqual(121) // ~100 + truncation notice
+    expect(result.length).toBeLessThanOrEqual(121)
     expect(result).toContain("truncated")
   })
 })

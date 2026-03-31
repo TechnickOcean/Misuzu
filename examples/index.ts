@@ -1,20 +1,11 @@
 import "dotenv/config"
 import { createInterface } from "node:readline"
 import { join, resolve } from "node:path"
-import { getModels } from "@mariozechner/pi-ai"
-import { createWorkspace } from "./workspace/index.ts"
-
-const workspaceRootDir = resolve(
-  process.argv[2] ?? join(process.cwd(), "..", "..", "examples", "workspace"),
-)
+import { createWorkspace } from "../packages/misuzu-core/src/core/application/workspace/index.ts"
+const workspaceRootDir = resolve(process.argv[2] ?? join(process.cwd(), "examples", "workspace"))
 const workspace = createWorkspace({ rootDir: workspaceRootDir })
-const proxyModels = workspace.bootstrap()
-const model =
-  proxyModels[0] ??
-  getModels("openai").find((item) => item.id === "gpt-5.3-codex") ??
-  getModels("openai")[0] ??
-  getModels("google")[0]
-
+workspace.bootstrap()
+const model = workspace.providers.getModel("swpumc", "gpt-5.2-codex")
 if (!model) {
   throw new Error("No model is available for the demo")
 }

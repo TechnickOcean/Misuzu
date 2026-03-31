@@ -6,8 +6,8 @@ import {
 } from "node:fs/promises"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { type Static, Type } from "@sinclair/typebox"
-import { resolveToCwd } from "../utils/path.js"
-import { withFileMutationQueue } from "../utils/file-mutation-queue.js"
+import { resolveToCwd } from "../../utils/path.js"
+import { withFileMutationQueue } from "../../utils/file-mutation-queue.js"
 
 const editSchema = Type.Object({
   path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
@@ -103,5 +103,3 @@ const defaultEditOperations: EditOperations = {
   writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
   access: (path) => fsAccess(path, constants.R_OK | constants.W_OK),
 }
-
-export const editTool = createEditTool(process.cwd())

@@ -6,13 +6,13 @@ import {
   type AgentState,
 } from "@mariozechner/pi-agent-core"
 import type { Model } from "@mariozechner/pi-ai"
-import { type Skill, buildSkillsCatalog } from "../features/skill.ts"
-import { convertToLlm } from "../features/messages/index.ts"
-import { checkCompact, compact } from "../features/compaction.ts"
-import type { Logger } from "../logging/types.ts"
-import type { PersistenceStore } from "../persistence/store.ts"
-import type { ProviderRegistry } from "../providers/index.ts"
-import type { SessionContext } from "../session/context.ts"
+import { type Skill, buildSkillsCatalog } from "../agents/features/skill.ts"
+import { convertToLlm } from "./features/messages/index.ts"
+import { checkCompact, compact } from "./features/compaction.ts"
+import type { Logger } from "../core/infrastructure/logging/types.ts"
+import type { PersistenceStore } from "../core/application/persistence/store.ts"
+import type { ProviderRegistry } from "../core/application/providers/index.ts"
+import type { SessionContext } from "../core/application/session/context.ts"
 import { createBaseTools } from "../tools/index.ts"
 
 export interface FeaturedAgentDependencies {

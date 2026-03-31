@@ -1,4 +1,4 @@
-import { expect, test, describe } from "vite-plus/test"
+import { describe, expect, test } from "vite-plus/test"
 import { withFileMutationQueue } from "./file-mutation-queue.js"
 
 describe("withFileMutationQueue", () => {
@@ -7,13 +7,13 @@ describe("withFileMutationQueue", () => {
 
     const p1 = withFileMutationQueue("/a/file.txt", async () => {
       log.push(1)
-      await new Promise((r) => setTimeout(r, 20))
+      await new Promise((resolve) => setTimeout(resolve, 20))
       log.push(2)
     })
 
     const p2 = withFileMutationQueue("/a/file.txt", async () => {
       log.push(3)
-      await new Promise((r) => setTimeout(r, 10))
+      await new Promise((resolve) => setTimeout(resolve, 10))
       log.push(4)
     })
 
@@ -26,18 +26,17 @@ describe("withFileMutationQueue", () => {
 
     const p1 = withFileMutationQueue("/a/file1.txt", async () => {
       log.push("start1")
-      await new Promise((r) => setTimeout(r, 30))
+      await new Promise((resolve) => setTimeout(resolve, 30))
       log.push("end1")
     })
 
     const p2 = withFileMutationQueue("/a/file2.txt", async () => {
       log.push("start2")
-      await new Promise((r) => setTimeout(r, 10))
+      await new Promise((resolve) => setTimeout(resolve, 10))
       log.push("end2")
     })
 
     await Promise.all([p1, p2])
-    // file2 should finish before file1 (different queues, file2 is faster)
     expect(log.indexOf("end2")).toBeLessThan(log.indexOf("end1"))
   })
 

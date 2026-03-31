@@ -4,6 +4,7 @@ export async function withFileMutationQueue<T>(filePath: string, fn: () => Promi
   const prev = queues.get(filePath) ?? Promise.resolve()
   const next = prev.then(fn, fn)
   queues.set(filePath, next)
+
   try {
     return await next
   } finally {

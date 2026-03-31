@@ -2,8 +2,8 @@ import { constants } from "node:fs"
 import { readFile as fsReadFile, access as fsAccess } from "node:fs/promises"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { type Static, Type } from "@sinclair/typebox"
-import { truncateHead, type TruncationResult } from "../utils/truncate.js"
-import { resolveReadPath } from "../utils/path.js"
+import { truncateHead, type TruncationResult } from "../../utils/truncate.js"
+import { resolveReadPath } from "../../utils/path.js"
 
 const readSchema = Type.Object({
   path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
@@ -42,7 +42,7 @@ export function createReadTool(
       "Lines are 1-indexed. Use offset=N to skip to line N.",
     parameters: readSchema,
     async execute(_toolCallId, params: ReadToolInput) {
-      const absolutePath = resolveReadPath(params.path, cwd)
+      const absolutePath = await resolveReadPath(params.path, cwd)
 
       try {
         await ops.access(absolutePath)
@@ -85,5 +85,3 @@ const defaultReadOperations: ReadOperations = {
   readFile: (path) => fsReadFile(path),
   access: (path) => fsAccess(path, constants.R_OK),
 }
-
-export const readTool = createReadTool(process.cwd())

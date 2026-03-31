@@ -1,18 +1,18 @@
 import { readFileSync } from "node:fs"
-import { loadAgentSkills } from "../features/skill.ts"
-import { FeaturedAgent, type FeaturedAgentOptions } from "../agents/featured.ts"
-import { createBaseTools } from "../tools/index.ts"
-import { createContainer, type Container } from "../di/container.ts"
+import { loadAgentSkills } from "../../../agents/features/skill.ts"
+import { FeaturedAgent, type FeaturedAgentOptions } from "../../../agents/featured.ts"
+import { createBaseTools } from "../../../tools/index.ts"
+import { createContainer, type Container } from "../../infrastructure/di/container.ts"
 import {
   loggerToken,
   persistenceStoreToken,
   providerRegistryToken,
   sessionContextToken,
-} from "../di/tokens.ts"
-import { createWorkspaceLogger, getLogLevelFromEnv } from "../logging/logger.ts"
-import { ConsoleLogSink } from "../logging/sinks/console-sink.ts"
-import type { Logger } from "../logging/types.ts"
-import { NoopPersistenceStore } from "../persistence/noop-store.ts"
+} from "../../infrastructure/di/tokens.ts"
+import { createWorkspaceLogger, getLogLevelFromEnv } from "../../infrastructure/logging/logger.ts"
+import { ConsoleLogSink } from "../../infrastructure/logging/sinks/console-sink.ts"
+import type { Logger } from "../../infrastructure/logging/types.ts"
+import { NoopPersistenceStore } from "../../infrastructure/persistence/noop-store.ts"
 import type { PersistenceStore } from "../persistence/store.ts"
 import { ProviderRegistry, type ProxyProviderOptions } from "../providers/index.ts"
 import { SessionContext } from "../session/context.ts"

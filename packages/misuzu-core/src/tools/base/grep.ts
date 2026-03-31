@@ -1,9 +1,10 @@
-import { readFileSync, statSync } from "node:fs"
-import { resolve, join } from "node:path"
+import { readFile, stat } from "node:fs/promises"
+import { join } from "node:path"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { type Static, Type } from "@sinclair/typebox"
-import { globSync } from "glob"
-import { truncateHead, truncateLine, type TruncationResult } from "../utils/truncate.js"
+import { glob } from "glob"
+import { resolveToCwd } from "../../utils/path.js"
+import { truncateHead, truncateLine, type TruncationResult } from "../../utils/truncate.js"
 
 const GREP_MAX_LINE_LENGTH = 500
 
@@ -39,6 +40,37 @@ export interface GrepToolDetails {
   linesTruncated?: boolean
 }
 
+interface SearchEntry {
+  absolutePath: string
+  displayPath: string
+}
+
+function escapeRegex(source: string) {
+  return source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function createSearchRegex(params: GrepToolInput) {
+  const source = params.literal ? escapeRegex(params.pattern) : params.pattern
+  return new RegExp(source, params.ignoreCase ? "i" : "")
+}
+
+async function collectSearchEntries(
+  searchPath: string,
+  globPattern?: string,
+): Promise<SearchEntry[]> {
+  const searchPathStat = await stat(searchPath)
+  if (searchPathStat.isFile()) {
+    return [{ absolutePath: searchPath, displayPath: searchPath }]
+  }
+
+  const pattern = globPattern ?? "**/*"
+  const relativePaths = await glob(pattern, { cwd: searchPath, nodir: true, maxDepth: 20 })
+  return relativePaths.map((relativePath) => ({
+    absolutePath: join(searchPath, relativePath),
+    displayPath: relativePath,
+  }))
+}
+
 export function createGrepTool(cwd: string): AgentTool<typeof grepSchema> {
   return {
     name: "grep",
@@ -48,74 +80,88 @@ export function createGrepTool(cwd: string): AgentTool<typeof grepSchema> {
       "Returns matching lines with file paths and line numbers.",
     parameters: grepSchema,
     async execute(_toolCallId, params: GrepToolInput) {
-      const searchPath = params.path ? resolve(cwd, params.path) : cwd
+      const searchPath = params.path ? resolveToCwd(params.path, cwd) : cwd
       const limit = params.limit ?? 100
+      const contextLines = Math.max(0, params.context ?? 0)
 
       let regex: RegExp
       try {
-        const escaped = params.literal
-          ? params.pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-          : params.pattern
-        regex = new RegExp(escaped, params.ignoreCase ? "i" : "")
+        regex = createSearchRegex(params)
       } catch {
         throw new Error(`Invalid regex pattern: ${params.pattern}`)
       }
 
-      // Get files to search
-      const files: string[] = []
+      let entries: SearchEntry[]
       try {
-        const stat = statSync(searchPath)
-        if (stat.isFile()) {
-          files.push(searchPath)
-        } else {
-          const pattern = params.glob ?? "**/*"
-          files.push(...globSync(pattern, { cwd: searchPath, nodir: true, maxDepth: 20 }))
-        }
+        entries = await collectSearchEntries(searchPath, params.glob)
       } catch {
         throw new Error(`Path not found: ${params.path ?? "."}`)
       }
 
-      const matches: string[] = []
+      const outputLines: string[] = []
       let linesTruncated = false
+      let matchedLines = 0
 
-      for (const file of files) {
-        if (matches.length >= limit) break
+      for (const entry of entries) {
+        if (matchedLines >= limit) break
 
-        const filePath = searchPath === resolve(cwd, file) ? file : join(searchPath, file)
         let content: string
         try {
-          content = readFileSync(filePath, "utf-8")
+          content = await readFile(entry.absolutePath, "utf-8")
         } catch {
-          continue // Skip unreadable files
+          continue
         }
 
         const lines = content.split("\n")
-        for (let i = 0; i < lines.length; i++) {
-          if (matches.length >= limit) break
-          if (regex.test(lines[i])) {
-            let line = `${file}:${i + 1}:${lines[i]}`
-            if (Buffer.byteLength(line, "utf-8") > GREP_MAX_LINE_LENGTH) {
-              line = truncateLine(line, GREP_MAX_LINE_LENGTH)
-              linesTruncated = true
-            }
-            matches.push(line)
+        const matchIndexes: number[] = []
+
+        for (let index = 0; index < lines.length; index++) {
+          if (matchedLines >= limit) break
+          if (!regex.test(lines[index])) continue
+          matchedLines += 1
+          matchIndexes.push(index)
+        }
+
+        if (matchIndexes.length === 0) {
+          continue
+        }
+
+        const matchLineSet = new Set<number>(matchIndexes)
+        const outputIndexSet = new Set<number>()
+
+        for (const matchIndex of matchIndexes) {
+          const start = Math.max(0, matchIndex - contextLines)
+          const end = Math.min(lines.length - 1, matchIndex + contextLines)
+          for (let lineIndex = start; lineIndex <= end; lineIndex++) {
+            outputIndexSet.add(lineIndex)
           }
+        }
+
+        const outputIndexes = Array.from(outputIndexSet).sort((a, b) => a - b)
+
+        for (const lineIndex of outputIndexes) {
+          const separator = matchLineSet.has(lineIndex) ? ":" : "-"
+          let output = `${entry.displayPath}${separator}${lineIndex + 1}${separator}${lines[lineIndex]}`
+          if (Buffer.byteLength(output, "utf-8") > GREP_MAX_LINE_LENGTH) {
+            output = truncateLine(output, GREP_MAX_LINE_LENGTH)
+            linesTruncated = true
+          }
+
+          outputLines.push(output)
         }
       }
 
-      const content = matches.join("\n") || "(no matches)"
-      const truncation = truncateHead(content, { maxLines: limit })
-
+      const output = outputLines.join("\n") || "(no matches)"
+      const truncation = truncateHead(output)
       const details: GrepToolDetails = { truncation }
-      if (matches.length >= limit) details.matchLimitReached = limit
+
+      if (matchedLines >= limit) details.matchLimitReached = limit
       if (linesTruncated) details.linesTruncated = true
 
       return {
-        content: [{ type: "text", text: content }],
+        content: [{ type: "text", text: truncation.content }],
         details,
       }
     },
   }
 }
-
-export const grepTool = createGrepTool(process.cwd())

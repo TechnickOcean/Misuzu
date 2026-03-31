@@ -59,7 +59,6 @@ function resolveOptions(options?: TruncateOptions): Required<TruncateOptions> {
   }
 }
 
-/** Keep content from the beginning, discard the tail. */
 export function truncateHead(content: string, options?: TruncateOptions): TruncationResult {
   if (!content) return EMPTY
 
@@ -68,18 +67,15 @@ export function truncateHead(content: string, options?: TruncateOptions): Trunca
   const lines = content.split("\n")
   const totalLines = lines.length
 
-  // Check bytes first (stricter)
   if (totalBytes <= opts.maxBytes && totalLines <= opts.maxLines) {
     return makeResult(content, totalLines, totalBytes, opts, false, "lines")
   }
 
-  // Line-based truncation
   if (totalLines > opts.maxLines) {
     const kept = lines.slice(0, opts.maxLines)
     return makeResult(kept.join("\n"), totalLines, totalBytes, opts, true, "lines")
   }
 
-  // Byte-based truncation
   let end = opts.maxBytes
   while (end > 0 && (content[end] === "\n" || content[end - 1] === "\n")) end--
   if (end === 0) end = Math.min(opts.maxBytes, content.length)
@@ -87,7 +83,6 @@ export function truncateHead(content: string, options?: TruncateOptions): Trunca
   return makeResult(truncated, totalLines, totalBytes, opts, true, "bytes")
 }
 
-/** Keep content from the end, discard the head. */
 export function truncateTail(content: string, options?: TruncateOptions): TruncationResult {
   if (!content) return EMPTY
 
@@ -105,22 +100,19 @@ export function truncateTail(content: string, options?: TruncateOptions): Trunca
     return makeResult(kept.join("\n"), totalLines, totalBytes, opts, true, "lines")
   }
 
-  // Byte-based: keep from end
   let start = content.length - opts.maxBytes
   if (start < 0) start = 0
   while (start < content.length && content[start] !== "\n") start++
-  if (start < content.length) start++ // skip the newline
+  if (start < content.length) start++
   const truncated = content.slice(start)
   return makeResult(truncated, totalLines, totalBytes, opts, true, "bytes")
 }
 
-/** Truncate a single line if it exceeds maxBytes. */
 export function truncateLine(line: string, maxBytes: number) {
   if (Buffer.byteLength(line, "utf-8") <= maxBytes) return line
   return line.slice(0, maxBytes) + "\n[...line truncated]"
 }
 
-/** Human-readable size formatting. */
 export function formatSize(bytes: number) {
   if (bytes < 1024) return `${bytes}B`
   if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)}KB`

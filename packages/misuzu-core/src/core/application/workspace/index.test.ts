@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { getModels } from "@mariozechner/pi-ai"
-import { sessionContextToken } from "../di/tokens.js"
+import { sessionContextToken } from "../../infrastructure/di/tokens.js"
 import { SessionContext } from "../session/context.js"
 import { createWorkspace } from "./index.js"
 
