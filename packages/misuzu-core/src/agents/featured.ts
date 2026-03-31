@@ -6,16 +6,24 @@ import {
   type AgentState,
 } from "@mariozechner/pi-agent-core"
 import type { Model } from "@mariozechner/pi-ai"
-import { type Skill, buildSkillsCatalog, loadBuiltinSkills } from "../features/skill.ts"
+import { type Skill, buildSkillsCatalog } from "../features/skill.ts"
 import { convertToLlm } from "../features/messages/index.ts"
 import { checkCompact, compact } from "../features/compaction.ts"
+import type { PersistenceStore } from "../persistence/store.ts"
+import type { ProviderRegistry } from "../providers/index.ts"
+import type { SessionContext } from "../session/context.ts"
 import { createBaseTools } from "../tools/index.ts"
-import { getWorkspace } from "../workspace/index.ts"
+
+export interface FeaturedAgentDependencies {
+  cwd: string
+  providers: ProviderRegistry
+  persistence: PersistenceStore
+  session: SessionContext
+}
 
 export interface FeaturedAgentOptions {
   initialState?: Partial<AgentState>
   skills?: Skill[]
-  cwd?: string
   tools?: AgentTool<any>[]
   getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined
   transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>
@@ -26,24 +34,25 @@ type ApiKeyResolver = (provider: string) => Promise<string | undefined> | string
 
 export class FeaturedAgent {
   agent: Agent
-  constructor({
-    skills = loadBuiltinSkills("shared"),
-    cwd,
-    tools,
-    transformContext: customTransformContext,
-    ...opts
-  }: FeaturedAgentOptions) {
+
+  constructor(
+    deps: FeaturedAgentDependencies,
+    {
+      skills = [],
+      tools,
+      transformContext: customTransformContext,
+      ...opts
+    }: FeaturedAgentOptions = {},
+  ) {
     const skillCatalog = buildSkillsCatalog(skills)
-    const resolvedCwd = cwd ?? process.cwd()
-    const workspace = getWorkspace(resolvedCwd)
-    workspace.registerProxyProvidersOnce()
     const inheritedApiKeyResolver =
       typeof opts.getApiKey === "function" ? (opts.getApiKey as ApiKeyResolver) : undefined
 
     this.agent = new Agent({
       ...opts,
+      sessionId: deps.session.sessionId,
       getApiKey: async (provider) => {
-        const proxyProviderApiKey = workspace.providers.getApiKey(provider)
+        const proxyProviderApiKey = deps.providers.getApiKey(provider)
         if (proxyProviderApiKey !== undefined) {
           return proxyProviderApiKey
         }
@@ -55,16 +64,24 @@ export class FeaturedAgent {
       initialState: {
         ...opts.initialState,
         systemPrompt: `${opts.initialState?.systemPrompt ?? ""}\n${skillCatalog}`,
-        tools: tools ?? createBaseTools(resolvedCwd),
+        tools: tools ?? createBaseTools(deps.cwd),
         thinkingLevel: opts.initialState?.thinkingLevel ?? "medium",
       },
-      convertToLlm: convertToLlm,
+      convertToLlm,
       transformContext: async (messages, signal) => {
         if (checkCompact(this.agent)) {
           messages = await compact(this.agent)
         }
         return customTransformContext ? customTransformContext(messages, signal) : messages
       },
+    })
+
+    this.agent.subscribe((event) => {
+      try {
+        void Promise.resolve(
+          deps.persistence.recordAgentEvent(deps.session.sessionId, event),
+        ).catch(() => {})
+      } catch {}
     })
   }
 

@@ -3,11 +3,11 @@
  * Misuzu does not check the security of input skills, install with caution.
  */
 
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
+import { readdirSync, readFileSync, realpathSync } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { parse as parseYaml } from "yaml"
 import { resolveMisuzuRoot } from "../utils/path.ts"
-import { getWorkspace } from "../workspace/index.ts"
+import { resolveWorkspacePaths } from "../workspace/paths.ts"
 
 export interface SkillFrontmatter {
   name?: string
@@ -119,15 +119,18 @@ function importSkillsFromDirectory(dir: string) {
       if (!entry.isDirectory() || entry.name.startsWith(".")) {
         continue
       }
+
       const skillFile = join(resolvedDir, entry.name, "SKILL.md")
-      if (!existsSync(skillFile)) continue
+      let realPath: string
       try {
-        const realPath = statSync(skillFile).isSymbolicLink() ? realpathSync(skillFile) : skillFile
-        if (seen.has(realPath)) continue
-        seen.add(realPath)
+        realPath = realpathSync(skillFile)
       } catch {
         continue
       }
+
+      if (seen.has(realPath)) continue
+      seen.add(realPath)
+
       const skill = loadSkill(skillFile)
       if (skill) skills.push(skill)
     }
@@ -144,8 +147,8 @@ export function loadBuiltinSkills(role: SkillRole, misuzuRoot = resolveMisuzuRoo
 }
 
 export function loadWorkspaceSkills(role: SkillRole, workspaceRootDir: string) {
-  const workspace = getWorkspace(workspaceRootDir)
-  return collectRoleSkills(workspace.skillsRootDir, role)
+  const paths = resolveWorkspacePaths(workspaceRootDir)
+  return collectRoleSkills(paths.skillsRootDir, role)
 }
 
 export function loadAgentSkills(options: AgentSkillLoadOptions) {

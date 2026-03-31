@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs"
+import { statSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -7,9 +7,12 @@ export function resolveMisuzuRoot(startDir = dirname(fileURLToPath(import.meta.u
   let current = resolve(startDir)
 
   while (true) {
-    if (existsSync(join(current, "pnpm-workspace.yaml"))) {
-      return current
-    }
+    try {
+      if (statSync(join(current, "pnpm-workspace.yaml")).isFile()) {
+        return current
+      }
+    } catch {}
+
     const parent = dirname(current)
     if (parent === current) {
       return undefined
