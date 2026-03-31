@@ -1,0 +1,24 @@
+[
+  {
+    "provider": "rightcode",
+    "baseProvider": "openai",
+    "baseUrl": "https://www.right.codes/codex/v1",
+    "apiKeyEnvVar": "RIGHTCODE_API_KEY",
+    "modelMappings": [
+      "gpt-5.4",
+      "gpt-5.3-codex",
+      {
+        "sourceModelId": "gpt-5.2",
+        "targetModelId": "gpt-5.2-xhigh",
+        "targetModelName": "GPT-5.2 XHigh"
+      }
+    ]
+  },
+  {
+    "provider": "swpumc",
+    "baseProvider": "openai",
+    "baseUrl": "https://code.swpumc.cn/v1",
+    "apiKeyEnvVar": "SWPUMC_API_KEY",
+    "modelMappings": ["gpt-5.3-codex", "gpt-5.2-codex"]
+  }
+]

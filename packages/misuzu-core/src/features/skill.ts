@@ -5,8 +5,9 @@
 
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
 import { parse as parseYaml } from "yaml"
+import { resolveMisuzuRoot } from "../utils/path.ts"
+import { getWorkspace } from "../workspace/index.ts"
 
 export interface SkillFrontmatter {
   name?: string
@@ -27,37 +28,13 @@ export interface Skill {
 }
 
 export interface AgentSkillLoadOptions {
-  role: Exclude<SkillRole, "shared">
+  role: SkillRole
   launchDir?: string
   misuzuRoot?: string
   extraSkills?: Skill[]
 }
 
-const WORKSPACE_MARKER = ".misuzu"
-const BUILTIN_SKILLS_RELATIVE_PATH = join(WORKSPACE_MARKER, "skills")
-
-function toComparablePath(path: string) {
-  return resolve(path).toLowerCase()
-}
-
-// TODO: bad algo, fixme
-export function resolveMisuzuRoot(startDir = dirname(fileURLToPath(import.meta.url))) {
-  let current = resolve(startDir)
-
-  while (true) {
-    const builtinSkillsDir = join(current, BUILTIN_SKILLS_RELATIVE_PATH)
-    if (existsSync(builtinSkillsDir)) {
-      return current
-    }
-
-    const parent = dirname(current)
-    if (parent === current) {
-      return undefined
-    }
-
-    current = parent
-  }
-}
+const BUILTIN_SKILLS_RELATIVE_PATH = join(".misuzu", "skills")
 
 function escapeXml(str: string) {
   return str
@@ -66,6 +43,21 @@ function escapeXml(str: string) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;")
+}
+
+function extractSkillFrontmatter(content: string) {
+  const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/)
+  if (!match) {
+    return { frontmatter: {}, body: content }
+  }
+
+  try {
+    const frontmatter = parseYaml(match[1]) as SkillFrontmatter
+    return { frontmatter: frontmatter ?? {}, body: match[2] }
+  } catch {
+    console.warn("Failed to parse skill frontmatter, loading as plain content")
+    return { frontmatter: {}, body: match[2] }
+  }
 }
 
 function mergeSkillsByName(...groups: Skill[][]) {
@@ -85,6 +77,85 @@ function mergeSkillsByName(...groups: Skill[][]) {
   }
 
   return merged
+}
+
+function loadSkill(filePath: string) {
+  try {
+    const content = readFileSync(filePath, "utf-8")
+    const { frontmatter, body } = extractSkillFrontmatter(content)
+    const baseDir = dirname(filePath)
+
+    const name = frontmatter.name ?? basename(baseDir)
+    const description = frontmatter.description ?? ""
+    const allowedTools = frontmatter["allowed-tools"]
+      ? frontmatter["allowed-tools"].split(",").map((s) => s.trim())
+      : []
+
+    return { name, description, filePath, baseDir, body, allowedTools }
+  } catch {
+    console.warn(`Failed to load skill: ${filePath}`)
+    return null
+  }
+}
+
+function collectRoleSkills(skillsRoot: string, role: SkillRole) {
+  if (role === "shared") return importSkillsFromDirectory(join(skillsRoot, "shared"))
+  else
+    return [
+      ...importSkillsFromDirectory(join(skillsRoot, "shared")),
+      ...importSkillsFromDirectory(join(skillsRoot, role)),
+    ]
+}
+
+/** load skills from a skill/ directory. */
+function importSkillsFromDirectory(dir: string) {
+  try {
+    const resolvedDir = resolve(dir)
+
+    const skills: Skill[] = []
+    const seen = new Set<string>()
+
+    for (const entry of readdirSync(resolvedDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith(".")) {
+        continue
+      }
+      const skillFile = join(resolvedDir, entry.name, "SKILL.md")
+      if (!existsSync(skillFile)) continue
+      try {
+        const realPath = statSync(skillFile).isSymbolicLink() ? realpathSync(skillFile) : skillFile
+        if (seen.has(realPath)) continue
+        seen.add(realPath)
+      } catch {
+        continue
+      }
+      const skill = loadSkill(skillFile)
+      if (skill) skills.push(skill)
+    }
+    return skills
+  } catch {
+    return []
+  }
+}
+
+export function loadBuiltinSkills(role: SkillRole, misuzuRoot = resolveMisuzuRoot()) {
+  if (!misuzuRoot) return []
+  const builtinSkillsRoot = join(misuzuRoot, BUILTIN_SKILLS_RELATIVE_PATH)
+  return collectRoleSkills(builtinSkillsRoot, role)
+}
+
+export function loadWorkspaceSkills(role: SkillRole, workspaceRootDir: string) {
+  const workspace = getWorkspace(workspaceRootDir)
+  return collectRoleSkills(workspace.skillsRootDir, role)
+}
+
+export function loadAgentSkills(options: AgentSkillLoadOptions) {
+  const launchDir = options.launchDir ?? process.cwd()
+  const misuzuRoot = options.misuzuRoot ?? resolveMisuzuRoot()
+  const builtinSkills = loadBuiltinSkills(options.role, misuzuRoot)
+  const workspaceSkills = loadWorkspaceSkills(options.role, launchDir)
+  const extraSkills = options.extraSkills ?? []
+
+  return mergeSkillsByName(builtinSkills, workspaceSkills, extraSkills)
 }
 
 export function buildSkillsCatalog(skills: Skill[]) {
@@ -107,119 +178,4 @@ export function buildSkillsCatalog(skills: Skill[]) {
 
   lines.push("</available_skills>")
   return lines.join("\n")
-}
-
-export function extractSkillFrontmatter(content: string) {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/)
-  if (!match) {
-    return { frontmatter: {}, body: content }
-  }
-
-  try {
-    const frontmatter = parseYaml(match[1]) as SkillFrontmatter
-    return { frontmatter: frontmatter ?? {}, body: match[2] }
-  } catch {
-    console.warn("Failed to parse skill frontmatter, loading as plain content")
-    return { frontmatter: {}, body: match[2] }
-  }
-}
-
-function loadSkill(filePath: string) {
-  try {
-    const content = readFileSync(filePath, "utf-8")
-    const { frontmatter, body } = extractSkillFrontmatter(content)
-    const baseDir = dirname(filePath)
-
-    const name = frontmatter.name ?? basename(baseDir)
-    const description = frontmatter.description ?? ""
-    const allowedTools = frontmatter["allowed-tools"]
-      ? frontmatter["allowed-tools"].split(",").map((s) => s.trim())
-      : []
-
-    return { name, description, filePath, baseDir, body, allowedTools }
-  } catch {
-    console.warn(`Failed to load skill: ${filePath}`)
-    return null
-  }
-}
-
-/** load skills from a directory. */
-export async function importSkillsFromDirectory(dir: string) {
-  const resolvedDir = resolve(dir)
-  if (!existsSync(resolvedDir)) return []
-
-  // If root dir has SKILL.md, treat as single skill.
-  const rootSkill = join(resolvedDir, "SKILL.md")
-  if (existsSync(rootSkill)) {
-    const skill = loadSkill(rootSkill)
-    return skill ? [skill] : []
-  }
-
-  const skills: Skill[] = []
-  const seen = new Set<string>()
-
-  for (const entry of readdirSync(resolvedDir, { withFileTypes: true })) {
-    if (!entry.isDirectory() || entry.name.startsWith(".")) {
-      continue
-    }
-
-    const skillFile = join(resolvedDir, entry.name, "SKILL.md")
-    if (!existsSync(skillFile)) continue
-
-    try {
-      const realPath = statSync(skillFile).isSymbolicLink() ? realpathSync(skillFile) : skillFile
-      if (seen.has(realPath)) continue
-      seen.add(realPath)
-    } catch {
-      continue
-    }
-
-    const skill = loadSkill(skillFile)
-    if (skill) skills.push(skill)
-  }
-
-  return skills
-}
-
-async function collectRoleSkills(skillsRoot: string, role: Exclude<SkillRole, "shared">) {
-  return [
-    ...(await importSkillsFromDirectory(join(skillsRoot, "shared"))),
-    ...(await importSkillsFromDirectory(join(skillsRoot, role))),
-  ]
-}
-
-export function loadBuiltinSkills(
-  role: Exclude<SkillRole, "shared">,
-  misuzuRoot: string | undefined = resolveMisuzuRoot(),
-) {
-  if (!misuzuRoot) return []
-  const builtinSkillsRoot = join(misuzuRoot, BUILTIN_SKILLS_RELATIVE_PATH)
-  return collectRoleSkills(builtinSkillsRoot, role)
-}
-
-export function loadWorkspaceSkills(
-  role: Exclude<SkillRole, "shared">,
-  launchDir: string,
-  misuzuRoot: string | undefined = resolveMisuzuRoot(),
-) {
-  const resolvedLaunch = resolve(launchDir)
-  if (misuzuRoot && toComparablePath(misuzuRoot) === toComparablePath(resolvedLaunch)) {
-    return []
-  }
-  const markerDir = join(resolvedLaunch, WORKSPACE_MARKER)
-  if (existsSync(markerDir)) {
-    return collectRoleSkills(join(markerDir, "skills"), role)
-  } else {
-    return []
-  }
-}
-
-export async function loadAgentSkills(options: AgentSkillLoadOptions) {
-  const launchDir = options.launchDir ?? process.cwd()
-  const misuzuRoot = options.misuzuRoot ?? resolveMisuzuRoot()
-  const builtinSkills = await loadBuiltinSkills(options.role, misuzuRoot)
-  const workspaceSkills = await loadWorkspaceSkills(options.role, launchDir, misuzuRoot)
-  const extraSkills = options.extraSkills ?? []
-
-  return mergeSkillsByName(builtinSkills, workspaceSkills, extraSkills)
 }
