@@ -3,7 +3,15 @@ import { loadAgentSkills } from "../features/skill.ts"
 import { FeaturedAgent, type FeaturedAgentOptions } from "../agents/featured.ts"
 import { createBaseTools } from "../tools/index.ts"
 import { createContainer, type Container } from "../di/container.ts"
-import { persistenceStoreToken, providerRegistryToken, sessionContextToken } from "../di/tokens.ts"
+import {
+  loggerToken,
+  persistenceStoreToken,
+  providerRegistryToken,
+  sessionContextToken,
+} from "../di/tokens.ts"
+import { createWorkspaceLogger, getLogLevelFromEnv } from "../logging/logger.ts"
+import { ConsoleLogSink } from "../logging/sinks/console-sink.ts"
+import type { Logger } from "../logging/types.ts"
 import { NoopPersistenceStore } from "../persistence/noop-store.ts"
 import type { PersistenceStore } from "../persistence/store.ts"
 import { ProviderRegistry, type ProxyProviderOptions } from "../providers/index.ts"
@@ -48,29 +56,47 @@ export class Workspace {
     return this.container.resolve(persistenceStoreToken)
   }
 
+  get logger(): Logger {
+    return this.container.resolve(loggerToken)
+  }
+
   loadProxyProviderOptions() {
     try {
       return JSON.parse(readFileSync(this.providerConfigPath, "utf-8")) as ProxyProviderOptions[]
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        this.logger.debug("providers.json is missing, skip loading proxy providers", {
+          providerConfigPath: this.providerConfigPath,
+        })
         return []
       }
+
+      this.logger.error(
+        "Failed to load workspace provider config",
+        { providerConfigPath: this.providerConfigPath },
+        error,
+      )
       throw error
     }
   }
 
   bootstrap() {
     if (this.proxyProvidersLoaded) {
+      this.logger.debug("Workspace bootstrap skipped because it is already loaded")
       return []
     }
 
     const registeredModels = this.providers.registerProxyProviders(this.loadProxyProviderOptions())
     this.proxyProvidersLoaded = true
+    this.logger.info("Workspace bootstrap completed", {
+      registeredModelCount: registeredModels.length,
+    })
     return registeredModels
   }
 
   reloadConfig() {
     this.proxyProvidersLoaded = false
+    this.logger.info("Workspace config reload requested")
     return this.bootstrap()
   }
 
@@ -87,6 +113,7 @@ export class Workspace {
     this.mainAgent = new FeaturedAgent(
       {
         cwd: this.rootDir,
+        logger: this.logger.child({ component: "featured-agent" }),
         providers: this.providers,
         persistence: this.persistence,
         session: this.session,
@@ -97,6 +124,8 @@ export class Workspace {
         tools,
       },
     )
+
+    this.logger.info("Workspace main agent created", { sessionId: this.session.sessionId })
 
     return this.mainAgent
   }
@@ -110,9 +139,19 @@ export class Workspace {
   }
 }
 
-function createDefaultContainer(configureContainer?: (container: Container) => void) {
+function createDefaultContainer(
+  rootDir: string,
+  configureContainer?: (container: Container) => void,
+) {
   const container = createContainer()
 
+  container.registerSingleton(loggerToken, () =>
+    createWorkspaceLogger({
+      level: getLogLevelFromEnv(),
+      context: { workspaceRootDir: rootDir },
+      sinks: [new ConsoleLogSink(process.env.MISUZU_LOG_FORMAT === "json" ? "json" : "pretty")],
+    }),
+  )
   container.registerSingleton(providerRegistryToken, () => new ProviderRegistry())
   container.registerSingleton(sessionContextToken, () => new SessionContext())
   container.registerSingleton(persistenceStoreToken, () => new NoopPersistenceStore())
@@ -123,7 +162,11 @@ function createDefaultContainer(configureContainer?: (container: Container) => v
 
 export function createWorkspace(options: WorkspaceOptions = {}) {
   const rootDir = options.rootDir ?? process.cwd()
-  return new Workspace(rootDir, createDefaultContainer(options.configureContainer))
+  const paths = resolveWorkspacePaths(rootDir)
+  return new Workspace(
+    paths.rootDir,
+    createDefaultContainer(paths.rootDir, options.configureContainer),
+  )
 }
 
 export function getWorkspace(rootDir = process.cwd()) {

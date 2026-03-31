@@ -9,7 +9,6 @@ const workspaceRootDir = resolve(
 )
 const workspace = createWorkspace({ rootDir: workspaceRootDir })
 const proxyModels = workspace.bootstrap()
-
 const model =
   proxyModels[0] ??
   getModels("openai").find((item) => item.id === "gpt-5.3-codex") ??

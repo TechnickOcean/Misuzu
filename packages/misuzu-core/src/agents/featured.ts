@@ -9,6 +9,7 @@ import type { Model } from "@mariozechner/pi-ai"
 import { type Skill, buildSkillsCatalog } from "../features/skill.ts"
 import { convertToLlm } from "../features/messages/index.ts"
 import { checkCompact, compact } from "../features/compaction.ts"
+import type { Logger } from "../logging/types.ts"
 import type { PersistenceStore } from "../persistence/store.ts"
 import type { ProviderRegistry } from "../providers/index.ts"
 import type { SessionContext } from "../session/context.ts"
@@ -16,6 +17,7 @@ import { createBaseTools } from "../tools/index.ts"
 
 export interface FeaturedAgentDependencies {
   cwd: string
+  logger: Logger
   providers: ProviderRegistry
   persistence: PersistenceStore
   session: SessionContext
@@ -34,6 +36,7 @@ type ApiKeyResolver = (provider: string) => Promise<string | undefined> | string
 
 export class FeaturedAgent {
   agent: Agent
+  private readonly logger: Logger
 
   constructor(
     deps: FeaturedAgentDependencies,
@@ -47,6 +50,7 @@ export class FeaturedAgent {
     const skillCatalog = buildSkillsCatalog(skills)
     const inheritedApiKeyResolver =
       typeof opts.getApiKey === "function" ? (opts.getApiKey as ApiKeyResolver) : undefined
+    this.logger = deps.logger.child({ sessionId: deps.session.sessionId })
 
     this.agent = new Agent({
       ...opts,
@@ -80,8 +84,16 @@ export class FeaturedAgent {
       try {
         void Promise.resolve(
           deps.persistence.recordAgentEvent(deps.session.sessionId, event),
-        ).catch(() => {})
-      } catch {}
+        ).catch((error) => {
+          this.logger.warn("Failed to record agent event", { eventType: event.type }, error)
+        })
+      } catch (error) {
+        this.logger.warn(
+          "Failed to send agent event to persistence",
+          { eventType: event.type },
+          error,
+        )
+      }
     })
   }
 
@@ -94,7 +106,28 @@ export class FeaturedAgent {
   }
 
   async prompt(...args: Parameters<Agent["prompt"]>) {
-    return this.agent.prompt(...args)
+    const startedAt = Date.now()
+
+    this.logger.info("Agent prompt started", {
+      inputLength: typeof args[0] === "string" ? args[0].length : undefined,
+    })
+
+    try {
+      const result = await this.agent.prompt(...args)
+      this.logger.info("Agent prompt finished", {
+        durationMs: Date.now() - startedAt,
+      })
+      return result
+    } catch (error) {
+      this.logger.error(
+        "Agent prompt failed",
+        {
+          durationMs: Date.now() - startedAt,
+        },
+        error,
+      )
+      throw error
+    }
   }
 
   abort() {
