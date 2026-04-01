@@ -1,7 +1,8 @@
 import type { Agent, AgentMessage } from "@mariozechner/pi-agent-core"
-import type { ImageContent, TextContent } from "@mariozechner/pi-ai"
+import type { TextContent } from "@mariozechner/pi-ai"
 import { completeSimple } from "@mariozechner/pi-ai"
 import { compactionMessage } from "./messages/compaction.ts"
+import { textFromMessage } from "./utils.ts"
 
 const RESERVE_TOKENS = 16384
 const KEEP_RECENT_TOKENS = 20_000
@@ -36,36 +37,6 @@ Or "(none)"
 
 Messages:
 ${serialized}`
-}
-
-const extractText = (c: (ImageContent | TextContent)[]) =>
-  c.map((c) => (c.type === "text" ? c.text : "")).join("\n")
-
-function textFromMessage(msg: AgentMessage) {
-  switch (msg.role) {
-    case "user":
-      return `[User] ${typeof msg.content === "string" ? msg.content : extractText(msg.content)}`
-    case "assistant":
-      return msg.content
-        .map((c) => {
-          switch (c.type) {
-            case "text":
-              return `[Assistant] ${c.text}`
-            case "toolCall":
-              return `[ToolCall] ${c.name}(${JSON.stringify(c.arguments)})`
-            default:
-              return ""
-          }
-        })
-        .join("\n")
-    case "toolResult":
-      return `[ToolResult:${msg.toolName}] details: ${msg.details} content: ${extractText(msg.content)}`
-    case "compaction":
-      return compactionMessage.compactionContext(msg)
-    default:
-      return ""
-  }
-  return ""
 }
 
 /** Estimate token count for a message. Uses chars/4 heuristic. */

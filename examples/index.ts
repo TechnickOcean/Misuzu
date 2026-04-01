@@ -5,10 +5,7 @@ import { createWorkspace } from "../packages/misuzu-core/src/core/application/wo
 const workspaceRootDir = resolve(process.argv[2] ?? join(process.cwd(), "examples", "workspace"))
 const workspace = createWorkspace({ rootDir: workspaceRootDir })
 workspace.bootstrap()
-const model = workspace.providers.getModel("swpumc", "gpt-5.2-codex")
-if (!model) {
-  throw new Error("No model is available for the demo")
-}
+const model = workspace.providers.getModel("openrouter", "stepfun/step-3.5-flash:free")
 
 const featuredAgent = workspace.createMainAgent({
   initialState: {
@@ -16,7 +13,7 @@ const featuredAgent = workspace.createMainAgent({
   },
 })
 
-let streamedText = false
+let streamedText = true
 
 featuredAgent.subscribe((event) => {
   if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
@@ -40,6 +37,11 @@ featuredAgent.subscribe((event) => {
   }
 })
 
+if (!model) {
+  console.log("no models available!")
+  process.exit(1)
+}
+
 console.log(`Workspace: ${workspace.rootDir}`)
 console.log(`Model: ${model.provider}/${model.id}`)
 console.log("Type your prompt. Use /quit to exit.\n")
@@ -52,6 +54,14 @@ readline.on("line", async (line) => {
 
   if (!input) {
     readline.prompt()
+    return
+  }
+
+  if (input === "/compact") {
+    featuredAgent
+      .compact()
+      .then((_e) => readline.prompt())
+      .catch(() => {})
     return
   }
 

@@ -14,6 +14,7 @@ import type { PersistenceStore } from "../core/application/persistence/store.ts"
 import type { ProviderRegistry } from "../core/application/providers/index.ts"
 import type { SessionContext } from "../core/application/session/context.ts"
 import { createBaseTools } from "../tools/index.ts"
+import { textFromMessage } from "./features/utils.ts"
 
 export interface FeaturedAgentDependencies {
   cwd: string
@@ -87,6 +88,35 @@ export class FeaturedAgent {
         ).catch((error) => {
           this.logger.warn("Failed to record agent event", { eventType: event.type }, error)
         })
+        switch (event.type) {
+          case "agent_end":
+            this.logger.warn(
+              "[Agent] Loop Ended",
+              event.messages
+                .filter((m) => m.role === "assistant")
+                .map((m) => `${m.stopReason}\n${m.errorMessage}`)
+                .join("\n"),
+            )
+            break
+          case "tool_execution_start":
+            this.logger.info(
+              `[ToolCall] ${event.toolName}(${JSON.stringify(event.args).slice(0, 300)})`,
+            )
+            break
+          case "tool_execution_end":
+            if (event.isError)
+              this.logger.error(
+                `[ToolError] ${event.toolName} -> ${JSON.stringify(event.result).slice(0, 300)}`,
+              )
+            else
+              this.logger.info(
+                `[ToolResult] ${event.toolName} -> ${JSON.stringify(event.result).slice(0, 300)}`,
+              )
+            break
+          case "message_end":
+            this.logger.debug("[Message]", textFromMessage(event.message))
+            break
+        }
       } catch (error) {
         this.logger.warn(
           "Failed to send agent event to persistence",
@@ -106,26 +136,13 @@ export class FeaturedAgent {
   }
 
   async prompt(...args: Parameters<Agent["prompt"]>) {
-    const startedAt = Date.now()
-
-    this.logger.info("Agent prompt started", {
-      inputLength: typeof args[0] === "string" ? args[0].length : undefined,
-    })
-
+    this.logger.info(`[User] ${args[0]}`)
     try {
-      const result = await this.agent.prompt(...args)
-      this.logger.info("Agent prompt finished", {
-        durationMs: Date.now() - startedAt,
-      })
-      return result
+      const startTime = Date.now()
+      await this.agent.prompt(...args)
+      this.logger.info(`[Finish] output ended, duration(ms): ${Date.now() - startTime}`)
     } catch (error) {
-      this.logger.error(
-        "Agent prompt failed",
-        {
-          durationMs: Date.now() - startedAt,
-        },
-        error,
-      )
+      this.logger.error("Agent prompt failed", error)
       throw error
     }
   }
@@ -168,5 +185,21 @@ export class FeaturedAgent {
 
   followUp(message: string) {
     this.agent.followUp({ role: "user", content: message, timestamp: Date.now() })
+  }
+
+  async compact() {
+    try {
+      this.abort()
+      const compacted = await compact(this.agent)
+      if (compacted) {
+        this.agent.replaceMessages(compacted)
+        this.logger.info("[Compacted]", compacted)
+        return compacted
+      }
+      // silently fail for now
+    } catch (e) {
+      this.logger.error(`[Compaction] Failed to compact the context due to ${(e as Error).message}`)
+      throw e
+    }
   }
 }
