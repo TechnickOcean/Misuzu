@@ -10,6 +10,7 @@ let featuredAgent = workspace.mainAgent
 
 if (!featuredAgent)
   featuredAgent = await workspace.createMainAgent({
+    kind: "solver",
     initialState: {
       model,
     },

@@ -3,8 +3,8 @@ import path from "path"
 import type { AgentMessage } from "@mariozechner/pi-agent-core"
 import type { Logger } from "../../infrastructure/logging/types.ts"
 import type {
+  PersistedMainAgentState,
   PersistedWorkspaceState,
-  PersistedFeaturedAgentState,
   PersistenceStore,
   WorkspaceChange,
 } from "./store.ts"
@@ -281,8 +281,8 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
   }
 
   private async saveMessagesInChunks(
-    agentState: PersistedFeaturedAgentState,
-  ): Promise<PersistedFeaturedAgentState> {
+    agentState: PersistedMainAgentState,
+  ): Promise<PersistedMainAgentState> {
     const messages = agentState.agentState.messages || []
     if (messages.length === 0) {
       return agentState

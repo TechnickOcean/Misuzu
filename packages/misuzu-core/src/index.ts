@@ -4,6 +4,13 @@ export {
   type FeaturedAgentOptions,
 } from "./agents/featured.ts"
 export {
+  SolverAgent,
+  type SolverAgentOptions,
+  type SolverCoordinatorContext,
+  type SolverSpawnMode,
+} from "./agents/solver.ts"
+export { CoordinatorAgent, type CoordinatorAgentOptions } from "./agents/coordinator.ts"
+export {
   ProviderRegistry,
   type ProxyProviderModelMapping,
   type ProxyProviderOptions,
@@ -13,12 +20,20 @@ export {
   createWorkspace as createWorkspaceWithPersistence,
   getWorkspace,
   Workspace,
+  type MainAgent,
+  type CreateMainAgentOptions,
+  type CreateSolverMainAgentOptions,
+  type CreateCoordinatorMainAgentOptions,
   type WorkspaceOptions,
 } from "./core/application/workspace/index.ts"
 export {
   type PersistenceStore,
   type PersistedWorkspaceState,
-  type PersistedFeaturedAgentState,
+  type PersistedMainAgentState,
+  type PersistedMainAgentBaseState,
+  type PersistedMainAgentKind,
+  type PersistedSolverAgentMeta,
+  type PersistedCoordinatorAgentMeta,
   type WorkspaceChange,
 } from "./core/application/persistence/store.ts"
 export { JsonFilePersistenceAdapter } from "./core/application/persistence/json-adapter.ts"

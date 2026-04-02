@@ -1,8 +1,10 @@
 import type { AgentEvent, AgentState, AgentMessage } from "@mariozechner/pi-agent-core"
 import type { FeaturedAgent } from "../featured.ts"
 import type {
+  PersistedMainAgentKind,
+  PersistedMainAgentState,
   PersistenceStore,
-  PersistedFeaturedAgentState,
+  PersistedSolverAgentMeta,
 } from "../../core/application/persistence/store.ts"
 import type { Logger } from "../../core/infrastructure/logging/types.ts"
 
@@ -11,7 +13,9 @@ export class AgentStateProxy {
     private featuredAgent: FeaturedAgent,
     private persistence: PersistenceStore,
     private logger: Logger,
+    private mainAgentKind: PersistedMainAgentKind,
     private baseSystemPrompt?: string,
+    private solverMeta?: PersistedSolverAgentMeta,
   ) {}
 
   setBaseSystemPrompt(systemPrompt?: string) {
@@ -33,7 +37,7 @@ export class AgentStateProxy {
     return unsubscribe
   }
 
-  async restoreFromPersistedState(persistedState: PersistedFeaturedAgentState) {
+  async restoreFromPersistedState(persistedState: PersistedMainAgentState) {
     const { agentState } = persistedState
 
     if (agentState.messages && agentState.messages.length > 0) {
@@ -45,23 +49,41 @@ export class AgentStateProxy {
     })
   }
 
-  getPersistedState(): PersistedFeaturedAgentState {
+  getPersistedState(): PersistedMainAgentState {
     const agentState = this.featuredAgent.state
     const modelId = this.getCurrentModelId(agentState)
 
     const cleanedAgentState = this.sanitizeAgentState(agentState)
 
-    return {
+    const baseState = {
       modelId,
       baseSystemPrompt: this.baseSystemPrompt,
       agentState: cleanedAgentState,
-      featuredAgentOptions: {
+      mainAgentOptions: {
         initialState: {
           systemPrompt: this.baseSystemPrompt,
           thinkingLevel: agentState.thinkingLevel,
         },
       },
       lastModified: new Date().toISOString(),
+    }
+
+    if (this.mainAgentKind === "solver") {
+      if (!this.solverMeta) {
+        throw new Error("Cannot persist solver state: missing solver metadata")
+      }
+
+      return {
+        ...baseState,
+        kind: "solver",
+        solverMeta: this.solverMeta,
+      }
+    }
+
+    return {
+      ...baseState,
+      kind: "coordinator",
+      coordinatorMeta: {},
     }
   }
 

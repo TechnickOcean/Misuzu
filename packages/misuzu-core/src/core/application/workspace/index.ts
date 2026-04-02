@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs"
 import { loadAgentSkills } from "../../../agents/features/skill.ts"
-import { FeaturedAgent, type FeaturedAgentOptions } from "../../../agents/featured.ts"
+import { CoordinatorAgent, type CoordinatorAgentOptions } from "../../../agents/coordinator.ts"
 import { AgentStateProxy } from "../../../agents/features/agent-state-proxy.ts"
-import { createBaseTools } from "../../../tools/index.ts"
+import { SolverAgent, type SolverAgentOptions } from "../../../agents/solver.ts"
 import { createContainer, type Container } from "../../infrastructure/di/container.ts"
 import {
   loggerToken,
@@ -12,7 +12,7 @@ import {
 import { createWorkspaceLogger, getLogLevelFromEnv } from "../../infrastructure/logging/logger.ts"
 import { ConsoleLogSink } from "../../infrastructure/logging/sinks/console-sink.ts"
 import type { Logger } from "../../infrastructure/logging/types.ts"
-import type { PersistenceStore } from "../persistence/store.ts"
+import type { PersistedSolverAgentMeta, PersistenceStore } from "../persistence/store.ts"
 import { JsonFilePersistenceAdapter } from "../persistence/json-adapter.ts"
 import { ProviderRegistry, type ProxyProviderOptions } from "../providers/index.ts"
 import { resolveWorkspacePaths } from "./paths.ts"
@@ -24,13 +24,27 @@ export interface WorkspaceOptions {
   configureContainer?: (container: Container) => void
 }
 
+export interface CreateSolverMainAgentOptions extends SolverAgentOptions {
+  kind: "solver"
+}
+
+export interface CreateCoordinatorMainAgentOptions extends CoordinatorAgentOptions {
+  kind: "coordinator"
+}
+
+export type CreateMainAgentOptions =
+  | CreateSolverMainAgentOptions
+  | CreateCoordinatorMainAgentOptions
+
+export type MainAgent = SolverAgent | CoordinatorAgent
+
 export class Workspace {
   readonly rootDir: string
   readonly markerDir: string
   readonly skillsRootDir: string
   readonly providerConfigPath: string
 
-  mainAgent?: FeaturedAgent
+  mainAgent?: MainAgent
   private readonly container: Container
   private proxyProvidersLoaded = false
   private agentStateProxy?: AgentStateProxy
@@ -122,12 +136,14 @@ export class Workspace {
     return this.bootstrap()
   }
 
-  async createMainAgent(options: FeaturedAgentOptions = {}) {
+  async createMainAgent(options: CreateMainAgentOptions) {
     if (this.mainAgent) {
       throw new Error("Workspace already has a main agent")
     }
 
-    this.mainAgent = this.createMainAgentInternal(options)
+    const { agent, baseSystemPrompt, kind, solverMeta } = this.createMainAgentInternal(options)
+    this.mainAgent = agent
+    this.attachAgentStateTracking(agent, baseSystemPrompt, kind, solverMeta)
 
     if (this.agentStateProxy) {
       await this.safePersist(async () => {
@@ -143,39 +159,95 @@ export class Workspace {
     return this.mainAgent
   }
 
-  private createMainAgentInternal(options: FeaturedAgentOptions = {}) {
-    const skills = options.skills ?? loadAgentSkills({ role: "shared", launchDir: this.rootDir })
-    const tools = options.tools ?? createBaseTools(this.rootDir)
-    const baseSystemPrompt = options.initialState?.systemPrompt
-    const initialState = {
-      ...options.initialState,
-      systemPrompt: baseSystemPrompt,
+  private createMainAgentInternal(options: CreateMainAgentOptions): {
+    agent: MainAgent
+    baseSystemPrompt?: string
+    kind: "solver" | "coordinator"
+    solverMeta?: PersistedSolverAgentMeta
+  } {
+    if (options.kind === "solver") {
+      const { kind, ...solverOptions } = options
+      void kind
+      const baseSystemPrompt = solverOptions.initialState?.systemPrompt
+      const initialState = {
+        ...solverOptions.initialState,
+        systemPrompt: baseSystemPrompt,
+      }
+      const skills =
+        solverOptions.skills ?? loadAgentSkills({ role: "solver", launchDir: this.rootDir })
+
+      const agent = new SolverAgent(
+        {
+          cwd: this.rootDir,
+          logger: this.logger.child({ component: "solver-agent" }),
+          providers: this.providers,
+          persistence: this.persistence,
+        },
+        {
+          ...solverOptions,
+          initialState,
+          skills,
+        },
+      )
+
+      const solverMeta: PersistedSolverAgentMeta = {
+        spawnMode: solverOptions.spawnMode ?? "standalone",
+      }
+
+      return {
+        agent,
+        baseSystemPrompt,
+        kind: "solver",
+        solverMeta,
+      }
     }
 
-    const agent = new FeaturedAgent(
+    const { kind, ...coordinatorOptions } = options
+    void kind
+    const baseSystemPrompt = coordinatorOptions.initialState?.systemPrompt
+    const initialState = {
+      ...coordinatorOptions.initialState,
+      systemPrompt: baseSystemPrompt,
+    }
+    const skills =
+      coordinatorOptions.skills ?? loadAgentSkills({ role: "coordinator", launchDir: this.rootDir })
+
+    const agent = new CoordinatorAgent(
       {
         cwd: this.rootDir,
-        logger: this.logger.child({ component: "featured-agent" }),
+        logger: this.logger.child({ component: "coordinator-agent" }),
         providers: this.providers,
         persistence: this.persistence,
       },
       {
-        ...options,
+        ...coordinatorOptions,
         initialState,
         skills,
-        tools,
       },
     )
 
+    return {
+      agent,
+      baseSystemPrompt,
+      kind: "coordinator",
+    }
+  }
+
+  private attachAgentStateTracking(
+    agent: MainAgent,
+    baseSystemPrompt: string | undefined,
+    kind: "solver" | "coordinator",
+    solverMeta?: PersistedSolverAgentMeta,
+  ) {
     this.agentStateProxy = new AgentStateProxy(
       agent,
       this.persistence,
       this.logger,
+      kind,
       baseSystemPrompt,
+      solverMeta,
     )
     this.unsubscribeAgentTracking = this.agentStateProxy.enableTracking()
-
-    return agent
   }
 
   getModel(provider: string, modelId: string) {
@@ -197,20 +269,49 @@ export class Workspace {
       }
 
       if (persistedState.mainAgent) {
+        if (
+          persistedState.mainAgent.kind !== "solver" &&
+          persistedState.mainAgent.kind !== "coordinator"
+        ) {
+          throw new Error("[Workspace] Corrupted workspace state: unknown main agent kind")
+        }
+
+        if (
+          persistedState.mainAgent.kind === "solver" &&
+          !persistedState.mainAgent.solverMeta?.spawnMode
+        ) {
+          throw new Error("[Workspace] Corrupted workspace state: missing solver spawn mode")
+        }
+
         const model = this.validateAndResolvePersistedModel(persistedState.mainAgent)
 
-        const agentOptions = {
-          ...persistedState.mainAgent.featuredAgentOptions,
+        const restoredBaseOptions = {
+          ...persistedState.mainAgent.mainAgentOptions,
           initialState: {
-            ...persistedState.mainAgent.featuredAgentOptions.initialState,
+            ...persistedState.mainAgent.mainAgentOptions.initialState,
             systemPrompt:
               persistedState.mainAgent.baseSystemPrompt ??
-              persistedState.mainAgent.featuredAgentOptions.initialState?.systemPrompt,
+              persistedState.mainAgent.mainAgentOptions.initialState?.systemPrompt,
             model,
           },
-        } as FeaturedAgentOptions
+        }
 
-        this.mainAgent = this.createMainAgentInternal(agentOptions)
+        const restoredOptions: CreateMainAgentOptions =
+          persistedState.mainAgent.kind === "solver"
+            ? {
+                kind: "solver",
+                ...(restoredBaseOptions as SolverAgentOptions),
+                spawnMode: persistedState.mainAgent.solverMeta.spawnMode,
+              }
+            : {
+                kind: "coordinator",
+                ...(restoredBaseOptions as CoordinatorAgentOptions),
+              }
+
+        const { agent, baseSystemPrompt, kind, solverMeta } =
+          this.createMainAgentInternal(restoredOptions)
+        this.mainAgent = agent
+        this.attachAgentStateTracking(agent, baseSystemPrompt, kind, solverMeta)
 
         if (this.agentStateProxy) {
           await this.agentStateProxy.restoreFromPersistedState(persistedState.mainAgent)
