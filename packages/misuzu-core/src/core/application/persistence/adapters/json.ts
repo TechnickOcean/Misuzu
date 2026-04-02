@@ -1,13 +1,13 @@
 import { promises as fs } from "fs"
 import path from "path"
 import type { AgentMessage } from "@mariozechner/pi-agent-core"
-import type { Logger } from "../../infrastructure/logging/types.ts"
+import type { Logger } from "../../../infrastructure/logging/types.ts"
 import type {
-  PersistedMainAgentState,
+  PersistedSolverAgentState,
   PersistedWorkspaceState,
   PersistenceStore,
   WorkspaceChange,
-} from "./store.ts"
+} from "../store.ts"
 
 const STATE_VERSION = "1.0.0"
 const STATE_FILE_NAME = "workspace-state.json"
@@ -171,8 +171,11 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
               proxyProvidersLoaded: false,
             }
           }
-          this.misuzuState.mainAgent = change.agentState
-          this.misuzuState.lastModified = new Date().toISOString()
+          {
+            const state = this.misuzuState
+            state.mainAgent = change.agentState
+            state.lastModified = new Date().toISOString()
+          }
           break
         case "agent-message-added":
           if (this.misuzuState?.mainAgent) {
@@ -191,8 +194,11 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
               proxyProvidersLoaded: false,
             }
           }
-          this.misuzuState.mainAgent = change.agentState
-          this.misuzuState.lastModified = new Date().toISOString()
+          {
+            const state = this.misuzuState
+            state.mainAgent = change.agentState
+            state.lastModified = new Date().toISOString()
+          }
           break
         case "tool-execution":
           // 工具执行不需要额外持久化（已在消息中）
@@ -281,8 +287,8 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
   }
 
   private async saveMessagesInChunks(
-    agentState: PersistedMainAgentState,
-  ): Promise<PersistedMainAgentState> {
+    agentState: PersistedSolverAgentState,
+  ): Promise<PersistedSolverAgentState> {
     const messages = agentState.agentState.messages || []
     if (messages.length === 0) {
       return agentState

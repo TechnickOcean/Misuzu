@@ -4,18 +4,10 @@ export interface PersistedWorkspaceState {
   version: string
   lastModified: string
   proxyProvidersLoaded: boolean
-  mainAgent?: PersistedMainAgentState
+  mainAgent?: PersistedSolverAgentState
 }
 
-export type PersistedMainAgentKind = "solver" | "coordinator"
-
-export interface PersistedSolverAgentMeta {
-  spawnMode: "standalone" | "coordinated"
-}
-
-export type PersistedCoordinatorAgentMeta = Record<string, never>
-
-export interface PersistedMainAgentBaseState {
+export interface PersistedSolverAgentState {
   // Stored as "provider/modelId" and resolved from the registry at restore time.
   modelId: string
 
@@ -24,7 +16,7 @@ export interface PersistedMainAgentBaseState {
 
   agentState: AgentState
 
-  mainAgentOptions: {
+  solverAgentOptions: {
     initialState?: Partial<AgentState>
     skills?: unknown[]
     tools?: unknown[]
@@ -40,16 +32,6 @@ export interface PersistedMainAgentBaseState {
   lastModified: string
 }
 
-export type PersistedMainAgentState =
-  | (PersistedMainAgentBaseState & {
-      kind: "solver"
-      solverMeta: PersistedSolverAgentMeta
-    })
-  | (PersistedMainAgentBaseState & {
-      kind: "coordinator"
-      coordinatorMeta?: PersistedCoordinatorAgentMeta
-    })
-
 export interface PersistenceStore {
   initialize(workspaceRootDir: string): Promise<void>
   hasPersistedState(): Promise<boolean>
@@ -63,7 +45,7 @@ export interface PersistenceStore {
 export type WorkspaceChange =
   | { type: "state-initialized"; state: PersistedWorkspaceState }
   | { type: "providers-loaded" }
-  | { type: "main-agent-created"; agentState: PersistedMainAgentState }
+  | { type: "main-agent-created"; agentState: PersistedSolverAgentState }
   | { type: "agent-message-added"; message: AgentMessage; newMessageCount: number }
-  | { type: "agent-state-updated"; agentState: PersistedMainAgentState }
+  | { type: "agent-state-updated"; agentState: PersistedSolverAgentState }
   | { type: "tool-execution"; toolName: string; result: unknown }

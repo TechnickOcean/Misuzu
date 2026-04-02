@@ -1,16 +1,15 @@
 import "dotenv/config"
 import { createInterface } from "node:readline"
 import { join, resolve } from "node:path"
-import { createWorkspace } from "../packages/misuzu-core/src/core/application/workspace/index.ts"
+import { createSolverWorkspace } from "../packages/misuzu-core/src/core/application/workspace/index.ts"
 const workspaceRootDir = resolve(process.argv[2] ?? join(process.cwd(), "examples", "workspace"))
-const workspace = await createWorkspace({ rootDir: workspaceRootDir })
+const workspace = await createSolverWorkspace({ rootDir: workspaceRootDir })
 workspace.bootstrap()
 const model = workspace.providers.getModel("rightcode", "gpt-5.2")
 let featuredAgent = workspace.mainAgent
 
 if (!featuredAgent)
   featuredAgent = await workspace.createMainAgent({
-    kind: "solver",
     initialState: {
       model,
     },

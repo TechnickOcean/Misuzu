@@ -1,10 +1,8 @@
 import type { AgentEvent, AgentState, AgentMessage } from "@mariozechner/pi-agent-core"
 import type { FeaturedAgent } from "../featured.ts"
 import type {
-  PersistedMainAgentKind,
-  PersistedMainAgentState,
   PersistenceStore,
-  PersistedSolverAgentMeta,
+  PersistedSolverAgentState,
 } from "../../core/application/persistence/store.ts"
 import type { Logger } from "../../core/infrastructure/logging/types.ts"
 
@@ -13,9 +11,7 @@ export class AgentStateProxy {
     private featuredAgent: FeaturedAgent,
     private persistence: PersistenceStore,
     private logger: Logger,
-    private mainAgentKind: PersistedMainAgentKind,
     private baseSystemPrompt?: string,
-    private solverMeta?: PersistedSolverAgentMeta,
   ) {}
 
   setBaseSystemPrompt(systemPrompt?: string) {
@@ -37,7 +33,7 @@ export class AgentStateProxy {
     return unsubscribe
   }
 
-  async restoreFromPersistedState(persistedState: PersistedMainAgentState) {
+  async restoreFromPersistedState(persistedState: PersistedSolverAgentState) {
     const { agentState } = persistedState
 
     if (agentState.messages && agentState.messages.length > 0) {
@@ -49,7 +45,7 @@ export class AgentStateProxy {
     })
   }
 
-  getPersistedState(): PersistedMainAgentState {
+  getPersistedState(): PersistedSolverAgentState {
     const agentState = this.featuredAgent.state
     const modelId = this.getCurrentModelId(agentState)
 
@@ -59,7 +55,7 @@ export class AgentStateProxy {
       modelId,
       baseSystemPrompt: this.baseSystemPrompt,
       agentState: cleanedAgentState,
-      mainAgentOptions: {
+      solverAgentOptions: {
         initialState: {
           systemPrompt: this.baseSystemPrompt,
           thinkingLevel: agentState.thinkingLevel,
@@ -68,23 +64,7 @@ export class AgentStateProxy {
       lastModified: new Date().toISOString(),
     }
 
-    if (this.mainAgentKind === "solver") {
-      if (!this.solverMeta) {
-        throw new Error("Cannot persist solver state: missing solver metadata")
-      }
-
-      return {
-        ...baseState,
-        kind: "solver",
-        solverMeta: this.solverMeta,
-      }
-    }
-
-    return {
-      ...baseState,
-      kind: "coordinator",
-      coordinatorMeta: {},
-    }
+    return baseState
   }
 
   private getCurrentModelId(agentState: AgentState): string {

@@ -3,40 +3,35 @@ export {
   type FeaturedAgentDependencies,
   type FeaturedAgentOptions,
 } from "./agents/featured.ts"
-export {
-  SolverAgent,
-  type SolverAgentOptions,
-  type SolverCoordinatorContext,
-  type SolverSpawnMode,
-} from "./agents/solver.ts"
-export { CoordinatorAgent, type CoordinatorAgentOptions } from "./agents/coordinator.ts"
+export { SolverAgent, type SolverAgentOptions } from "./agents/solver.ts"
 export {
   ProviderRegistry,
   type ProxyProviderModelMapping,
   type ProxyProviderOptions,
 } from "./core/application/providers/index.ts"
 export {
-  createWorkspaceWithoutPersistence as createWorkspace,
-  createWorkspace as createWorkspaceWithPersistence,
-  getWorkspace,
-  Workspace,
-  type MainAgent,
-  type CreateMainAgentOptions,
-  type CreateSolverMainAgentOptions,
-  type CreateCoordinatorMainAgentOptions,
+  BaseWorkspace,
+  SolverWorkspace,
+  CTFRuntimeWorkspace,
+  createSolverWorkspace,
+  createSolverWorkspaceWithoutPersistence,
+  getSolverWorkspace,
+  createCTFRuntimeWorkspace,
+  createCTFRuntimeWorkspaceWithoutPersistence,
+  getCTFRuntimeWorkspace,
+  CTF_RUNTIME_STATE_VERSION,
+  type CTFRuntime,
+  type PersistedCTFRuntimeState,
+  type PersistedCTFRuntimeWorkspaceState,
   type WorkspaceOptions,
 } from "./core/application/workspace/index.ts"
 export {
   type PersistenceStore,
   type PersistedWorkspaceState,
-  type PersistedMainAgentState,
-  type PersistedMainAgentBaseState,
-  type PersistedMainAgentKind,
-  type PersistedSolverAgentMeta,
-  type PersistedCoordinatorAgentMeta,
+  type PersistedSolverAgentState,
   type WorkspaceChange,
 } from "./core/application/persistence/store.ts"
-export { JsonFilePersistenceAdapter } from "./core/application/persistence/json-adapter.ts"
+export { JsonFilePersistenceAdapter } from "./core/application/persistence/adapters/json.ts"
 export {
   ConsoleLogSink,
   type ConsoleLogFormat,

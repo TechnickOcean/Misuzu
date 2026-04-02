@@ -7,7 +7,7 @@ import { readdirSync, readFileSync, realpathSync } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { parse as parseYaml } from "yaml"
 import { resolveMisuzuRoot } from "../../utils/path.ts"
-import { resolveWorkspacePaths } from "../../core/application/workspace/paths.ts"
+import { resolveWorkspacePaths } from "../../core/application/workspace/shared/paths.ts"
 
 export interface SkillFrontmatter {
   name?: string
@@ -15,8 +15,6 @@ export interface SkillFrontmatter {
   "allowed-tools"?: string
   [key: string]: unknown
 }
-
-export type SkillRole = "shared" | "solver" | "coordinator"
 
 export interface Skill {
   name: string
@@ -28,7 +26,6 @@ export interface Skill {
 }
 
 export interface AgentSkillLoadOptions {
-  role: SkillRole
   launchDir?: string
   misuzuRoot?: string
   extraSkills?: Skill[]
@@ -98,15 +95,6 @@ function loadSkill(filePath: string) {
   }
 }
 
-function collectRoleSkills(skillsRoot: string, role: SkillRole) {
-  if (role === "shared") return importSkillsFromDirectory(join(skillsRoot, "shared"))
-  else
-    return [
-      ...importSkillsFromDirectory(join(skillsRoot, "shared")),
-      ...importSkillsFromDirectory(join(skillsRoot, role)),
-    ]
-}
-
 /** load skills from a skill/ directory. */
 function importSkillsFromDirectory(dir: string) {
   try {
@@ -140,22 +128,22 @@ function importSkillsFromDirectory(dir: string) {
   }
 }
 
-export function loadBuiltinSkills(role: SkillRole, misuzuRoot = resolveMisuzuRoot()) {
+export function loadBuiltinSkills(misuzuRoot = resolveMisuzuRoot()) {
   if (!misuzuRoot) return []
   const builtinSkillsRoot = join(misuzuRoot, BUILTIN_SKILLS_RELATIVE_PATH)
-  return collectRoleSkills(builtinSkillsRoot, role)
+  return importSkillsFromDirectory(builtinSkillsRoot)
 }
 
-export function loadWorkspaceSkills(role: SkillRole, workspaceRootDir: string) {
+export function loadWorkspaceSkills(workspaceRootDir: string) {
   const paths = resolveWorkspacePaths(workspaceRootDir)
-  return collectRoleSkills(paths.skillsRootDir, role)
+  return importSkillsFromDirectory(paths.skillsRootDir)
 }
 
 export function loadAgentSkills(options: AgentSkillLoadOptions) {
   const launchDir = options.launchDir ?? process.cwd()
   const misuzuRoot = options.misuzuRoot ?? resolveMisuzuRoot()
-  const builtinSkills = loadBuiltinSkills(options.role, misuzuRoot)
-  const workspaceSkills = loadWorkspaceSkills(options.role, launchDir)
+  const builtinSkills = loadBuiltinSkills(misuzuRoot)
+  const workspaceSkills = loadWorkspaceSkills(launchDir)
   const extraSkills = options.extraSkills ?? []
 
   return mergeSkillsByName(builtinSkills, workspaceSkills, extraSkills)

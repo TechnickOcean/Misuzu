@@ -2,17 +2,15 @@ import { afterEach, describe, expect, test } from "vite-plus/test"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { getModels } from "@mariozechner/pi-ai"
-import { Type } from "@sinclair/typebox"
-import { createWorkspaceWithoutPersistence } from "./index.ts"
+import { createSolverWorkspaceWithoutPersistence } from "./workspace.ts"
 
 const tempDirs: string[] = []
 
 async function createWorkspaceWithProviderConfig(config: unknown) {
   const workspaceDir = await mkdtemp(join(tmpdir(), "misuzu-workspace-"))
   tempDirs.push(workspaceDir)
-  const workspace = createWorkspaceWithoutPersistence({ rootDir: workspaceDir })
+  const workspace = createSolverWorkspaceWithoutPersistence({ rootDir: workspaceDir })
 
   await mkdir(workspace.markerDir, { recursive: true })
   await writeFile(workspace.providerConfigPath, JSON.stringify(config, null, 2), "utf-8")
@@ -44,7 +42,7 @@ describe("workspace provider registry", () => {
       },
     ])
 
-    const workspace = createWorkspaceWithoutPersistence({ rootDir: workspaceDir })
+    const workspace = createSolverWorkspaceWithoutPersistence({ rootDir: workspaceDir })
     const firstLoad = workspace.bootstrap()
     const secondLoad = workspace.bootstrap()
 
@@ -54,7 +52,7 @@ describe("workspace provider registry", () => {
 
   test("allows missing providers.json and returns empty registration", async () => {
     const workspaceDir = await createWorkspaceWithoutProviderConfig()
-    const workspace = createWorkspaceWithoutPersistence({ rootDir: workspaceDir })
+    const workspace = createSolverWorkspaceWithoutPersistence({ rootDir: workspaceDir })
     expect(workspace.bootstrap()).toEqual([])
   })
 
@@ -80,8 +78,8 @@ describe("workspace provider registry", () => {
       },
     ])
 
-    const wsA = createWorkspaceWithoutPersistence({ rootDir: workspaceA })
-    const wsB = createWorkspaceWithoutPersistence({ rootDir: workspaceB })
+    const wsA = createSolverWorkspaceWithoutPersistence({ rootDir: workspaceA })
+    const wsB = createSolverWorkspaceWithoutPersistence({ rootDir: workspaceB })
 
     wsA.bootstrap()
     wsB.bootstrap()
@@ -96,62 +94,21 @@ describe("workspace provider registry", () => {
 
   test("creates solver as main agent", async () => {
     const workspaceDir = await createWorkspaceWithoutProviderConfig()
-    const workspace = createWorkspaceWithoutPersistence({ rootDir: workspaceDir })
+    const workspace = createSolverWorkspaceWithoutPersistence({ rootDir: workspaceDir })
 
-    const mainAgent = await workspace.createMainAgent({ kind: "solver" })
+    const mainAgent = await workspace.createMainAgent()
 
     expect(mainAgent).toBeDefined()
     expect(mainAgent.state.systemPrompt).toContain("Solver agent")
     expect(mainAgent.state.systemPrompt).toContain("ctf-sandbox:latest")
   })
 
-  test("creates coordinator as main agent", async () => {
-    const workspaceDir = await createWorkspaceWithoutProviderConfig()
-    const workspace = createWorkspaceWithoutPersistence({ rootDir: workspaceDir })
-
-    const mainAgent = await workspace.createMainAgent({ kind: "coordinator" })
-
-    expect(mainAgent).toBeDefined()
-    expect(mainAgent.state.systemPrompt).toContain("Coordinator agent")
-  })
-
   test("rejects creating a second main agent", async () => {
     const workspaceDir = await createWorkspaceWithoutProviderConfig()
-    const workspace = createWorkspaceWithoutPersistence({ rootDir: workspaceDir })
+    const workspace = createSolverWorkspaceWithoutPersistence({ rootDir: workspaceDir })
 
-    await workspace.createMainAgent({ kind: "solver" })
+    await workspace.createMainAgent()
 
-    await expect(workspace.createMainAgent({ kind: "coordinator" })).rejects.toThrow(
-      "Workspace already has a main agent",
-    )
-  })
-
-  test("coordinated solver includes coordinator prompt and injected tools", async () => {
-    const workspaceDir = await createWorkspaceWithoutProviderConfig()
-    const workspace = createWorkspaceWithoutPersistence({ rootDir: workspaceDir })
-    const notifyEnvExpiredSchema = Type.Object({ reason: Type.String() })
-    const notifyEnvExpiredTool: AgentTool<typeof notifyEnvExpiredSchema> = {
-      name: "notify_env_expired",
-      label: "notify env expired",
-      description: "Notify coordinator to refresh challenge environment.",
-      parameters: notifyEnvExpiredSchema,
-      async execute(_toolCallId, _params) {
-        return {
-          content: [{ type: "text", text: "ok" }],
-          details: undefined,
-        }
-      },
-    }
-
-    const mainAgent = await workspace.createMainAgent({
-      kind: "solver",
-      spawnMode: "coordinated",
-      coordinatorContext: {
-        injectedTools: [notifyEnvExpiredTool],
-      },
-    })
-
-    expect(mainAgent.state.systemPrompt).toContain("coordinated by a Coordinator")
-    expect(mainAgent.state.tools?.some((tool) => tool.name === "notify_env_expired")).toBe(true)
+    await expect(workspace.createMainAgent()).rejects.toThrow("Workspace already has a main agent")
   })
 })
