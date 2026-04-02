@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vite-plus/test"
-import { createDockerTools } from "./docker.js"
+import { createDockerTools } from "./docker.ts"
 
 describe("docker tools", () => {
   test("uses injected cwd when running docker commands", async () => {

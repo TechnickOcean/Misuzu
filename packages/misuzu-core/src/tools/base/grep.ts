@@ -3,8 +3,8 @@ import { join } from "node:path"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { type Static, Type } from "@sinclair/typebox"
 import { glob } from "glob"
-import { resolveToCwd } from "../../utils/path.js"
-import { truncateHead, truncateLine, type TruncationResult } from "../../utils/truncate.js"
+import { resolveToCwd } from "../../utils/path.ts"
+import { truncateHead, truncateLine, type TruncationResult } from "../../utils/truncate.ts"
 
 const GREP_MAX_LINE_LENGTH = 500
 

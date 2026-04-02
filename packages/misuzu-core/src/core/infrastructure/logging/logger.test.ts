@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vite-plus/test"
-import { createWorkspaceLogger, getLogLevelFromEnv } from "./logger.js"
-import type { LogRecord, LogSink } from "./types.js"
+import { createWorkspaceLogger, getLogLevelFromEnv } from "./logger.ts"
+import type { LogRecord, LogSink } from "./types.ts"
 
 class MemoryLogSink implements LogSink {
   readonly records: LogRecord[] = []

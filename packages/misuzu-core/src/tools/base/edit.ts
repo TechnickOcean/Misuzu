@@ -6,8 +6,8 @@ import {
 } from "node:fs/promises"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { type Static, Type } from "@sinclair/typebox"
-import { resolveToCwd } from "../../utils/path.js"
-import { withFileMutationQueue } from "../../utils/file-mutation-queue.js"
+import { resolveToCwd } from "../../utils/path.ts"
+import { withFileMutationQueue } from "../../utils/file-mutation-queue.ts"
 
 const editSchema = Type.Object({
   path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),

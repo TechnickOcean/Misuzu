@@ -2,8 +2,8 @@ import { mkdir, writeFile as fsWriteFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { Type } from "@sinclair/typebox"
-import { resolveToCwd } from "../../utils/path.js"
-import { withFileMutationQueue } from "../../utils/file-mutation-queue.js"
+import { resolveToCwd } from "../../utils/path.ts"
+import { withFileMutationQueue } from "../../utils/file-mutation-queue.ts"
 
 const writeSchema = Type.Object({
   path: Type.String({ description: "Path to the file to write (relative or absolute)" }),

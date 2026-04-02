@@ -2,8 +2,8 @@ import { stat } from "node:fs/promises"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { type Static, Type } from "@sinclair/typebox"
 import { glob } from "glob"
-import { resolveToCwd } from "../../utils/path.js"
-import { truncateHead, type TruncationResult } from "../../utils/truncate.js"
+import { resolveToCwd } from "../../utils/path.ts"
+import { truncateHead, type TruncationResult } from "../../utils/truncate.ts"
 
 const findSchema = Type.Object({
   pattern: Type.String({ description: "Glob pattern to match files, e.g. '*.ts', '**/*.json'" }),

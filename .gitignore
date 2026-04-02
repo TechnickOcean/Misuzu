@@ -27,6 +27,4 @@ dist-ssr
 
 .env
 
-.misuzu/runtime
-.misuzu/workspaces
-.misuzu/providers/
+examples/workspace/.misuzu/

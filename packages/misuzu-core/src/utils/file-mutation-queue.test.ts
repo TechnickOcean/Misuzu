@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vite-plus/test"
-import { withFileMutationQueue } from "./file-mutation-queue.js"
+import { withFileMutationQueue } from "./file-mutation-queue.ts"
 
 describe("withFileMutationQueue", () => {
   test("executes operations sequentially for same path", async () => {

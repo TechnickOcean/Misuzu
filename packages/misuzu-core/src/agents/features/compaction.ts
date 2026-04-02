@@ -1,7 +1,7 @@
 import type { Agent, AgentMessage } from "@mariozechner/pi-agent-core"
 import type { TextContent } from "@mariozechner/pi-ai"
 import { completeSimple } from "@mariozechner/pi-ai"
-import { compactionMessage } from "./messages/compaction.ts"
+import { compactionMessageHandler } from "./messages/compaction.ts"
 import { textFromMessage } from "./utils.ts"
 
 const RESERVE_TOKENS = 16384
@@ -63,7 +63,7 @@ export function estimateTokens(message: AgentMessage) {
       )
       break
     case "compaction":
-      chars = compactionMessage.calculateToken(message)
+      chars = compactionMessageHandler.calculateToken(message)
       break
   }
   return Math.ceil(chars / 4)

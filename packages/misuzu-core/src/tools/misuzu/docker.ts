@@ -1,5 +1,5 @@
 import { type Static, Type } from "@sinclair/typebox"
-import { defaultBashOperations, type BashOperations } from "../base/bash.js"
+import { defaultBashOperations, type BashOperations } from "../base/bash.ts"
 
 function dockerCmd(args: string) {
   return `docker ${args}`

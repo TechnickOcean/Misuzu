@@ -1,5 +1,5 @@
 import { expect, test, describe } from "vite-plus/test"
-import { formatSize, truncateHead, truncateLine, truncateTail } from "./truncate.js"
+import { formatSize, truncateHead, truncateLine, truncateTail } from "./truncate.ts"
 
 describe("truncateHead", () => {
   test("returns content unchanged if within limits", () => {

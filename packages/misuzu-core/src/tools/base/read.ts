@@ -2,8 +2,8 @@ import { constants } from "node:fs"
 import { readFile as fsReadFile, access as fsAccess } from "node:fs/promises"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { type Static, Type } from "@sinclair/typebox"
-import { truncateHead, type TruncationResult } from "../../utils/truncate.js"
-import { resolveReadPath } from "../../utils/path.js"
+import { truncateHead, type TruncationResult } from "../../utils/truncate.ts"
+import { resolveReadPath } from "../../utils/path.ts"
 
 const readSchema = Type.Object({
   path: Type.String({ description: "Path to the file to read (relative or absolute)" }),

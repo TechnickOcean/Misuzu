@@ -2,8 +2,8 @@ import { describe, expect, test, beforeEach, afterEach } from "vite-plus/test"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { tmpdir } from "node:os"
-import { createFindTool } from "./find.js"
-import { createGrepTool } from "./grep.js"
+import { createFindTool } from "./find.ts"
+import { createGrepTool } from "./grep.ts"
 
 function textOf(content: { type: string; text?: string }[]) {
   return content

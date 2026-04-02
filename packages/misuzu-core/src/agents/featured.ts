@@ -12,7 +12,6 @@ import { checkCompact, compact } from "./features/compaction.ts"
 import type { Logger } from "../core/infrastructure/logging/types.ts"
 import type { PersistenceStore } from "../core/application/persistence/store.ts"
 import type { ProviderRegistry } from "../core/application/providers/index.ts"
-import type { SessionContext } from "../core/application/session/context.ts"
 import { createBaseTools } from "../tools/index.ts"
 import { textFromMessage } from "./features/utils.ts"
 
@@ -21,7 +20,6 @@ export interface FeaturedAgentDependencies {
   logger: Logger
   providers: ProviderRegistry
   persistence: PersistenceStore
-  session: SessionContext
 }
 
 export interface FeaturedAgentOptions {
@@ -38,7 +36,6 @@ type ApiKeyResolver = (provider: string) => Promise<string | undefined> | string
 export class FeaturedAgent {
   agent: Agent
   private readonly logger: Logger
-
   constructor(
     deps: FeaturedAgentDependencies,
     {
@@ -48,14 +45,13 @@ export class FeaturedAgent {
       ...opts
     }: FeaturedAgentOptions = {},
   ) {
+    this.logger = deps.logger.child({})
     const skillCatalog = buildSkillsCatalog(skills)
     const inheritedApiKeyResolver =
       typeof opts.getApiKey === "function" ? (opts.getApiKey as ApiKeyResolver) : undefined
-    this.logger = deps.logger.child({ sessionId: deps.session.sessionId })
 
     this.agent = new Agent({
       ...opts,
-      sessionId: deps.session.sessionId,
       getApiKey: async (provider) => {
         const proxyProviderApiKey = deps.providers.getApiKey(provider)
         if (proxyProviderApiKey !== undefined) {
@@ -83,11 +79,6 @@ export class FeaturedAgent {
 
     this.agent.subscribe((event) => {
       try {
-        void Promise.resolve(
-          deps.persistence.recordAgentEvent(deps.session.sessionId, event),
-        ).catch((error) => {
-          this.logger.warn("Failed to record agent event", { eventType: event.type }, error)
-        })
         switch (event.type) {
           case "agent_end":
             this.logger.warn(

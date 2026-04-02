@@ -1,76 +1,92 @@
-<!--VITE PLUS START-->
+# Misuzu Codebase Guidelines for AI Agents
 
-# Using Vite+, the Unified Toolchain for the Web
+## Build and Test Commands
 
-This project is using Vite+, a unified toolchain built on top of Vite, Rolldown, Vitest, tsdown, Oxlint, Oxfmt, and Vite Task. Vite+ wraps runtime management, package management, and frontend tooling in a single global CLI called `vp`. Vite+ is distinct from Vite, but it invokes Vite through `vp dev` and `vp build`.
+### Setup and Validation
 
-## Vite+ Workflow
+- `vp install` - Install dependencies (run after pulling changes)
+- `vp check` - Run format, lint, and TypeScript type checks
+- `vp check --fix` - Auto-fix formatting and linting issues
+- `vp test` - Run all tests
+- `vp test <file>` - Run single test file (e.g., `vp test container.test.ts`)
+- `vp test --watch` - Run tests in watch mode
+- `vp build` - Build monorepo packages (runs `vp pack` for packages)
+- `vp run ready` - Complete validation: format, lint, test, and build
 
-`vp` is a global binary that handles the full development lifecycle. Run `vp help` to print a list of commands and `vp <command> --help` for information about a specific command.
+### Per-Package Commands
 
-### Start
+When in a package directory (e.g., `packages/misuzu-core`):
 
-- create - Create a new project from a template
-- migrate - Migrate an existing project to Vite+
-- config - Configure hooks and agent integration
-- staged - Run linters on staged files
-- install (`i`) - Install dependencies
-- env - Manage Node.js versions
+- `vp pack` - Build TypeScript library with `.d.ts` files
+- `vp pack --watch` - Build with file watching
+- `vp lint --type-aware` - Type-aware linting with type checking enabled
 
-### Develop
+## Code Style Guidelines
 
-- dev - Run the development server
-- check - Run format, lint, and TypeScript type checks
-- lint - Lint code
-- fmt - Format code
-- test - Run tests
+### TypeScript & Formatting
 
-### Execute
+- **No semicolons**: Configure linter with `semi: false` (already set in vite.config.ts)
+- **Strict types**: `strict: true` enforced; use explicit types over `any`
+- **Module syntax**: ES modules only (`import`/`export`), no `require()`
+- **Extensions**: Include `.ts` in import paths when importing TypeScript files
+- **Imports**: Use `import type` for type-only imports; group: types, external deps, internal
+- **No useless Type**: Do not mark function returning types unless TypeScript cannot infer it, do not write useless type guards.
 
-- run - Run monorepo tasks
-- exec - Execute a command from local `node_modules/.bin`
-- dlx - Execute a package binary without installing it as a dependency
-- cache - Manage the task cache
+### Naming & Structure
 
-### Build
+- **Files**: Use kebab-case for non-component files (e.g., `base-tools.ts`, `di-container.ts`)
+- **Classes**: PascalCase (e.g., `Container`, `FeaturedAgent`)
+- **Interfaces**: PascalCase, prefix with capital letter (e.g., `FeaturedAgentOptions`)
+- **Functions**: camelCase (e.g., `createContainer`, `registerSingleton`)
+- **Constants**: UPPER_SNAKE_CASE if exported module constants
 
-- build - Build for production
-- pack - Build libraries
-- preview - Preview production build
+### Error Handling
 
-### Manage Dependencies
+- Use descriptive error messages with context
+- Example: `` `Missing dependency for token: ${String(token.description)}` ``
+- Always throw `Error` or specific error types, not raw strings
+- Test error cases explicitly (see container.test.ts for patterns)
 
-Vite+ automatically detects and wraps the underlying package manager such as pnpm, npm, or Yarn through the `packageManager` field in `package.json` or package manager-specific lockfiles.
+### Testing Patterns
 
-- add - Add packages to dependencies
-- remove (`rm`, `un`, `uninstall`) - Remove packages from dependencies
-- update (`up`) - Update packages to latest versions
-- dedupe - Deduplicate dependencies
-- outdated - Check for outdated packages
-- list (`ls`) - List installed packages
-- why (`explain`) - Show why a package is installed
-- info (`view`, `show`) - View package information from the registry
-- link (`ln`) / unlink - Manage local package links
-- pm - Forward a command to the package manager
+- Import from `vite-plus/test`, not `vitest`: `import { describe, expect, test } from "vite-plus/test"`
+- Use descriptive test names: `"resolves singleton dependencies only once"`
+- Test both success and error cases
+- Keep tests focused and isolated
+- File naming: `.test.ts` suffix for test files
 
-### Maintain
+### Monorepo Structure
 
-- upgrade - Update `vp` itself to the latest version
+- `packages/` - Published libraries (e.g., misuzu-core)
+- `apps/` - Applications
+- `examples/` - Example code in workspace catalog
+- Each package has independent `tsconfig.json` and `vite.config.ts`
+- Workspace uses pnpm with version catalog for dependency management
 
-These commands map to their corresponding tools. For example, `vp dev --port 3000` runs Vite's dev server and works the same as Vite. `vp test` runs JavaScript tests through the bundled Vitest. The version of all tools can be checked using `vp --version`. This is useful when researching documentation, features, and bugs.
+## Vite+ Toolchain
 
-## Common Pitfalls
+This project uses Vite+, a unified toolchain wrapping Vite, Rolldown, Vitest, tsdown, Oxlint, and Oxfmt via global `vp` CLI.
 
-- **Using the package manager directly:** Do not use pnpm, npm, or Yarn directly. Vite+ can handle all package manager operations.
-- **Always use Vite commands to run tools:** Don't attempt to run `vp vitest` or `vp oxlint`. They do not exist. Use `vp test` and `vp lint` instead.
-- **Running scripts:** Vite+ built-in commands (`vp dev`, `vp build`, `vp test`, etc.) always run the Vite+ built-in tool, not any `package.json` script of the same name. To run a custom script that shares a name with a built-in command, use `vp run <script>`. For example, if you have a custom `dev` script that runs multiple services concurrently, run it with `vp run dev`, not `vp dev` (which always starts Vite's dev server).
-- **Do not install Vitest, Oxlint, Oxfmt, or tsdown directly:** Vite+ wraps these tools. They must not be installed directly. You cannot upgrade these tools by installing their latest versions. Always use Vite+ commands.
-- **Use Vite+ wrappers for one-off binaries:** Use `vp dlx` instead of package-manager-specific `dlx`/`npx` commands.
-- **Import JavaScript modules from `vite-plus`:** Instead of importing from `vite` or `vitest`, all modules should be imported from the project's `vite-plus` dependency. For example, `import { defineConfig } from 'vite-plus';` or `import { expect, test, vi } from 'vite-plus/test';`. You must not install `vitest` to import test utilities.
-- **Type-Aware Linting:** There is no need to install `oxlint-tsgolint`, `vp lint --type-aware` works out of the box.
+### Key Commands
 
-## Review Checklist for Agents
+- `vp` - View all commands
+- `vp check` - Format + lint + type check
+- `vp fmt` - Format with Oxfmt
+- `vp lint` - Lint with Oxlint
+- `vp pack` - Build libraries with type declarations
+- `vp add/remove/update` - Manage dependencies
 
-- [ ] Run `vp install` after pulling remote changes and before getting started.
-- [ ] Run `vp check` and `vp test` to validate changes.
-<!--VITE PLUS END-->
+### Critical Rules
+
+- **Never** use pnpm/npm/yarn directly; use `vp` wrappers
+- **Never** install Vitest, Oxlint, or tsdown; they're bundled with Vite+
+- **Always** import test utilities from `vite-plus/test`, not `vitest`
+- **Always** import build config from `vite-plus`, not `vite`
+- Type-aware linting enabled by default: `vp lint` includes type checking
+
+## Agent Checklist
+
+- [ ] Run `vp install` after pulling changes
+- [ ] Run `vp check --fix` to format and lint code
+- [ ] Run `vp test` to ensure tests pass
+- [ ] Run `vp build` (or `npm run ready` for full validation)

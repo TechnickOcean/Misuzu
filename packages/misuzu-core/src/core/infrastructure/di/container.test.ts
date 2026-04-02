@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vite-plus/test"
-import { createContainer, createToken } from "./container.js"
+import { createContainer, createToken } from "./container.ts"
 
 describe("container", () => {
   test("resolves singleton dependencies only once", () => {

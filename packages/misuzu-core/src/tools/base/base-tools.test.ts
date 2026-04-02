@@ -2,10 +2,10 @@ import { expect, test, describe, beforeEach, afterEach } from "vite-plus/test"
 import { mkdir, writeFile, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { createReadTool } from "./read.js"
-import { createWriteTool } from "./write.js"
-import { createEditTool } from "./edit.js"
-import { buildShellSpawnConfig, createBashTool } from "./bash.js"
+import { createReadTool } from "./read.ts"
+import { createWriteTool } from "./write.ts"
+import { createEditTool } from "./edit.ts"
+import { buildShellSpawnConfig, createBashTool } from "./bash.ts"
 
 let testDir: string
 

@@ -5,7 +5,7 @@ import { join } from "node:path"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { type Static, Type } from "@sinclair/typebox"
 import { spawn } from "node:child_process"
-import { truncateTail, type TruncationResult } from "../../utils/truncate.js"
+import { truncateTail, type TruncationResult } from "../../utils/truncate.ts"
 
 const bashSchema = Type.Object({
   command: Type.String({ description: "Command to execute" }),

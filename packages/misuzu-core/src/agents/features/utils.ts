@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core"
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai"
-import { compactionMessage } from "./messages/compaction.ts"
+import { compactionMessageHandler } from "./messages/compaction.ts"
 
 const extractText = (c: (ImageContent | TextContent)[]) =>
   c.map((c) => (c.type === "text" ? c.text : "")).join("\n")
@@ -25,7 +25,7 @@ export function textFromMessage(msg: AgentMessage) {
     case "toolResult":
       return `[ToolResult:${msg.toolName}] details: ${msg.details} content: ${extractText(msg.content)}`
     case "compaction":
-      return compactionMessage.compactionContext(msg)
+      return compactionMessageHandler.compactionContext(msg)
     default:
       return ""
   }

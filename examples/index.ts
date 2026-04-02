@@ -3,15 +3,17 @@ import { createInterface } from "node:readline"
 import { join, resolve } from "node:path"
 import { createWorkspace } from "../packages/misuzu-core/src/core/application/workspace/index.ts"
 const workspaceRootDir = resolve(process.argv[2] ?? join(process.cwd(), "examples", "workspace"))
-const workspace = createWorkspace({ rootDir: workspaceRootDir })
+const workspace = await createWorkspace({ rootDir: workspaceRootDir })
 workspace.bootstrap()
-const model = workspace.providers.getModel("openrouter", "stepfun/step-3.5-flash:free")
+const model = workspace.providers.getModel("rightcode", "gpt-5.2")
+let featuredAgent = workspace.mainAgent
 
-const featuredAgent = workspace.createMainAgent({
-  initialState: {
-    model,
-  },
-})
+if (!featuredAgent)
+  featuredAgent = await workspace.createMainAgent({
+    initialState: {
+      model,
+    },
+  })
 
 let streamedText = true
 
