@@ -8,6 +8,9 @@ export {
 export {
   CTFRuntimeWorkspace,
   type CTFRuntime,
+  type CTFSolver,
+  type CTFSolverTask,
+  type CTFSolverTaskResult,
   createCTFRuntimeWorkspace,
   createCTFRuntimeWorkspaceWithoutPersistence,
   getCTFRuntimeWorkspace,

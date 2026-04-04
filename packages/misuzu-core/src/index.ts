@@ -3,6 +3,7 @@ export {
   type FeaturedAgentDependencies,
   type FeaturedAgentOptions,
 } from "./agents/featured.ts"
+export { EnvironmentAgent, type EnvironmentAgentOptions } from "./agents/environment.ts"
 export { SolverAgent, type SolverAgentOptions } from "./agents/solver.ts"
 export {
   ProviderRegistry,
@@ -21,6 +22,9 @@ export {
   getCTFRuntimeWorkspace,
   CTF_RUNTIME_STATE_VERSION,
   type CTFRuntime,
+  type CTFSolver,
+  type CTFSolverTask,
+  type CTFSolverTaskResult,
   type PersistedCTFRuntimeState,
   type PersistedCTFRuntimeWorkspaceState,
   type WorkspaceOptions,
