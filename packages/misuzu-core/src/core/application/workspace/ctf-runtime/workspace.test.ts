@@ -4,6 +4,13 @@ import { join } from "node:path"
 import { afterEach, describe, expect, test } from "vite-plus/test"
 import { getModels } from "@mariozechner/pi-ai"
 import { createCTFRuntimeWorkspace, createCTFRuntimeWorkspaceWithoutPersistence } from "../index.ts"
+import type {
+  CTFPlatformPlugin,
+  ChallengeDetail,
+  ChallengeSummary,
+  ContestUpdate,
+  PluginConfig,
+} from "../../../../../../../plugins/index.ts"
 
 const tempDirs: string[] = []
 
@@ -154,5 +161,232 @@ describe("ctf runtime fifo scheduler", () => {
 
     expect(observedTaskIds).toEqual(["task-1", "task-2"])
     expect(results.map((result) => result.taskId)).toEqual(["task-1", "task-2"])
+  })
+})
+
+class MockPlatformPlugin implements CTFPlatformPlugin {
+  readonly meta = {
+    id: "mock-platform",
+    name: "Mock Platform",
+    match: () => true,
+  }
+
+  private updates: ContestUpdate[] = []
+  private readonly detailById = new Map<number, ChallengeDetail>()
+
+  constructor(private challenges: ChallengeSummary[]) {
+    for (const challenge of challenges) {
+      this.detailById.set(challenge.id, {
+        id: challenge.id,
+        title: challenge.title,
+        category: challenge.category,
+        score: challenge.score,
+        content: `${challenge.title} description`,
+        hints: [],
+        requiresContainer: false,
+        attempts: 0,
+        attachments: [],
+      })
+    }
+  }
+
+  addChallenge(challenge: ChallengeSummary) {
+    this.challenges = [...this.challenges, challenge]
+    this.detailById.set(challenge.id, {
+      id: challenge.id,
+      title: challenge.title,
+      category: challenge.category,
+      score: challenge.score,
+      content: `${challenge.title} description`,
+      hints: [],
+      requiresContainer: false,
+      attempts: 0,
+      attachments: [],
+    })
+  }
+
+  pushUpdate(update: ContestUpdate) {
+    this.updates.push(update)
+  }
+
+  async setup(_config: PluginConfig) {}
+
+  async login() {
+    return {
+      mode: "cookie" as const,
+      cookie: "sid=mock",
+      refreshable: false,
+    }
+  }
+
+  async refreshAuth(session: Awaited<ReturnType<MockPlatformPlugin["login"]>>) {
+    return session
+  }
+
+  async ensureAuthenticated() {
+    return {
+      mode: "cookie" as const,
+      cookie: "sid=mock",
+      refreshable: false,
+    }
+  }
+
+  getAuthSession() {
+    return {
+      mode: "cookie" as const,
+      cookie: "sid=mock",
+      refreshable: false,
+    }
+  }
+
+  async listContests() {
+    return [{ id: 1, title: "Mock Contest" }]
+  }
+
+  async bindContest() {
+    return { id: 1, title: "Mock Contest" }
+  }
+
+  async listChallenges() {
+    return [...this.challenges]
+  }
+
+  async getChallenge(challengeId: number) {
+    const detail = this.detailById.get(challengeId)
+    if (!detail) {
+      throw new Error(`Missing challenge detail: ${String(challengeId)}`)
+    }
+    return detail
+  }
+
+  async submitFlagRaw() {
+    return {
+      submissionId: 1,
+      status: "WrongAnswer",
+      accepted: false,
+    }
+  }
+
+  async pollUpdates() {
+    const updates = [...this.updates]
+    this.updates = []
+    return {
+      cursor: String(Date.now()),
+      updates,
+    }
+  }
+}
+
+describe("ctf runtime platform integration", () => {
+  test("requires plugin to exist when plugin id is provided", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    await expect(
+      workspace.initializeRuntime({
+        pluginId: "missing-plugin",
+        pluginConfig: {
+          baseUrl: "https://example.com",
+          contest: { mode: "auto" },
+          auth: { mode: "cookie", cookie: "sid=abc" },
+        },
+      }),
+    ).rejects.toThrow("Required plugin is missing")
+  })
+
+  test("initializes platform, creates challenge solvers, syncs notices and new challenges", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    const plugin = new MockPlatformPlugin([
+      {
+        id: 101,
+        title: "checkin",
+        category: "misc",
+        score: 100,
+        solvedCount: 10,
+      },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "cookie", cookie: "sid=abc" },
+      },
+      cron: {
+        noticePollIntervalMs: 60_000,
+        challengeSyncIntervalMs: 60_000,
+      },
+    })
+
+    expect(workspace.getManagedChallengeIds()).toEqual([101])
+    const solver = workspace.getChallengeSolver(101)
+    expect(solver).toBeDefined()
+
+    let steerCallCount = 0
+    const originalSteer = solver!.steer.bind(solver)
+    solver!.steer = (message: string) => {
+      steerCallCount += 1
+      originalSteer(message)
+    }
+
+    plugin.pushUpdate({
+      id: 1,
+      time: Date.now(),
+      type: "Notice",
+      message: "checkin hint updated, please refresh attachment",
+    })
+
+    await workspace.syncNoticesOnce()
+
+    expect(steerCallCount).toBe(1)
+
+    plugin.addChallenge({
+      id: 102,
+      title: "new-pwn",
+      category: "pwn",
+      score: 300,
+      solvedCount: 0,
+    })
+
+    await workspace.syncChallengesOnce()
+
+    expect(workspace.getManagedChallengeIds().sort((a, b) => a - b)).toEqual([101, 102])
+
+    await workspace.shutdown()
+  })
+
+  test("supports platform initialization during workspace creation", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const plugin = new MockPlatformPlugin([
+      {
+        id: 201,
+        title: "auto-init",
+        category: "web",
+        score: 50,
+        solvedCount: 1,
+      },
+    ])
+
+    const workspace = await createCTFRuntimeWorkspace({
+      rootDir,
+      runtime: {
+        plugin,
+        pluginConfig: {
+          baseUrl: "https://example.com",
+          contest: { mode: "auto" },
+          auth: { mode: "cookie", cookie: "sid=abc" },
+        },
+        cron: {
+          noticePollIntervalMs: 60_000,
+          challengeSyncIntervalMs: 60_000,
+        },
+      },
+    })
+
+    expect(workspace.getManagedChallengeIds()).toEqual([201])
+    await workspace.shutdown()
   })
 })

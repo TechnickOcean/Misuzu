@@ -20,6 +20,18 @@ export interface WorkspaceOptions {
   configureContainer?: (container: Container) => void
 }
 
+interface WorkspaceCronJob {
+  name: string
+  intervalMs: number
+  running: boolean
+  timer: NodeJS.Timeout
+  handler: () => Promise<void> | void
+}
+
+export interface RegisterCronJobOptions {
+  runOnStart?: boolean
+}
+
 export class BaseWorkspace {
   readonly rootDir: string
   readonly markerDir: string
@@ -27,6 +39,7 @@ export class BaseWorkspace {
   readonly providerConfigPath: string
 
   protected readonly container: Container
+  private readonly cronJobs = new Map<string, WorkspaceCronJob>()
 
   constructor(rootDir: string, container: Container) {
     const paths = resolveWorkspacePaths(rootDir)
@@ -66,7 +79,77 @@ export class BaseWorkspace {
     })
   }
 
+  protected registerCronJob(
+    name: string,
+    intervalMs: number,
+    handler: () => Promise<void> | void,
+    options: RegisterCronJobOptions = {},
+  ) {
+    if (intervalMs <= 0) {
+      throw new Error(`[Workspace] Invalid cron interval for job ${name}: ${String(intervalMs)}`)
+    }
+
+    this.unregisterCronJob(name)
+
+    const job: WorkspaceCronJob = {
+      name,
+      intervalMs,
+      handler,
+      running: false,
+      timer: setInterval(() => {
+        void this.runCronJob(name)
+      }, intervalMs),
+    }
+
+    job.timer.unref?.()
+    this.cronJobs.set(name, job)
+
+    this.logger.info("[Workspace] Cron job registered", { name, intervalMs })
+
+    if (options.runOnStart) {
+      void this.runCronJob(name)
+    }
+  }
+
+  protected unregisterCronJob(name: string) {
+    const existing = this.cronJobs.get(name)
+    if (!existing) {
+      return
+    }
+
+    clearInterval(existing.timer)
+    this.cronJobs.delete(name)
+    this.logger.info("[Workspace] Cron job unregistered", { name })
+  }
+
+  protected async runCronJob(name: string) {
+    const job = this.cronJobs.get(name)
+    if (!job) {
+      return
+    }
+
+    if (job.running) {
+      return
+    }
+
+    job.running = true
+    try {
+      await job.handler()
+    } catch (error) {
+      this.logger.warn("[Workspace] Cron job execution failed", { name }, error)
+    } finally {
+      job.running = false
+    }
+  }
+
+  protected clearCronJobs() {
+    for (const name of this.cronJobs.keys()) {
+      this.unregisterCronJob(name)
+    }
+  }
+
   async shutdown() {
+    this.clearCronJobs()
     await this.persistence.flush()
     this.logger.info("[Workspace] Workspace shutdown completed")
   }

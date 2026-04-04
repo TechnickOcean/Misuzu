@@ -4,7 +4,11 @@ import { EnvironmentAgent, type EnvironmentAgentOptions } from "../../../../agen
 import { SolverAgent, type SolverAgentOptions } from "../../../../agents/solver.ts"
 import { resolveWorkspacePaths } from "../shared/paths.ts"
 import type { Container } from "../../../infrastructure/di/container.ts"
-import { providerRegistryToken } from "../../../infrastructure/di/tokens.ts"
+import {
+  loggerToken,
+  persistenceStoreToken,
+  providerRegistryToken,
+} from "../../../infrastructure/di/tokens.ts"
 import { ProviderRegistry, type ProxyProviderOptions } from "../../providers/index.ts"
 import {
   BaseWorkspace,
@@ -12,9 +16,28 @@ import {
   createWorkspaceContainer,
 } from "../base/workspace.ts"
 import { CTFRuntimePersistence } from "./persistence.ts"
+import {
+  RuntimeOrchestrator,
+  SolverHub,
+  SyncService,
+  QueueService,
+  orchestratorToken,
+  queueToken,
+  solverHubToken,
+  syncToken,
+  type RuntimeCronOptions,
+  type RuntimeInitOptions,
+  type SolverRunner,
+  type SolverTask,
+  type SolverTaskResult,
+} from "./services/index.ts"
 import type { PersistedCTFRuntimeState } from "./state.ts"
 
 const runtimeWorkspaceRegistry = new Map<string, CTFRuntimeWorkspace>()
+
+export interface CTFRuntimeWorkspaceOptions extends WorkspaceOptions {
+  runtime?: RuntimeInitOptions
+}
 
 export interface CTFRuntime {
   runtimeId: string
@@ -23,45 +46,27 @@ export interface CTFRuntime {
   shutdown?: () => Promise<void> | void
 }
 
-export interface CTFSolverTask {
-  taskId: string
-  payload: unknown
-}
-
-export interface CTFSolverTaskResult {
-  taskId: string
-  solverId: string
-  output: unknown
-}
-
-export interface CTFSolver {
-  solverId: string
-  solve(task: CTFSolverTask): Promise<unknown>
-}
-
-interface PendingSolverTask {
-  task: CTFSolverTask
-  resolve: (result: CTFSolverTaskResult) => void
-  reject: (error: unknown) => void
-}
+export type CTFSolverTask = SolverTask
+export type CTFSolverTaskResult = SolverTaskResult
+export type CTFSolver = SolverRunner
 
 export class CTFRuntimeWorkspace extends BaseWorkspace {
   runtime?: CTFRuntime
 
-  private readonly solverRegistry = new Map<string, CTFSolver>()
-  private readonly pendingTaskQueue: PendingSolverTask[] = []
-  private readonly idleSolverQueue: string[] = []
-  private readonly busySolverIds = new Set<string>()
-
   private proxyProvidersLoaded = false
-  private taskSequence = 0
-
   private readonly runtimePersistence: CTFRuntimePersistence
   private pendingRuntimeState?: PersistedCTFRuntimeState
+
+  private readonly queue: QueueService
+  private readonly solverHub: SolverHub
+  private readonly orchestrator: RuntimeOrchestrator
 
   constructor(rootDir: string, container: Container) {
     super(rootDir, container)
     this.runtimePersistence = new CTFRuntimePersistence(this.logger)
+    this.queue = this.container.resolve(queueToken)
+    this.solverHub = this.container.resolve(solverHubToken)
+    this.orchestrator = this.container.resolve(orchestratorToken)
   }
 
   override async initPersistence() {
@@ -153,37 +158,48 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     )
   }
 
-  registerSolver(solver: CTFSolver) {
-    if (this.solverRegistry.has(solver.solverId)) {
-      throw new Error(`Solver already registered: ${solver.solverId}`)
-    }
-
-    this.solverRegistry.set(solver.solverId, solver)
-    this.idleSolverQueue.push(solver.solverId)
-    this.scheduleSolverDispatch()
+  get platformConfigPath() {
+    return join(this.markerDir, "platform.json")
   }
 
-  unregisterSolver(solverId: string) {
-    this.solverRegistry.delete(solverId)
-    this.removeIdleSolver(solverId)
+  getManagedChallengeIds() {
+    return this.solverHub.getManagedChallengeIds()
   }
 
-  enqueueTask(payload: unknown, taskId = this.nextTaskId()) {
-    const task: CTFSolverTask = { taskId, payload }
+  getChallengeSolver(challengeId: number) {
+    return this.solverHub.getChallengeSolver(challengeId)
+  }
 
-    return new Promise<CTFSolverTaskResult>((resolve, reject) => {
-      this.pendingTaskQueue.push({ task, resolve, reject })
-      this.scheduleSolverDispatch()
+  async initializeRuntime(options: RuntimeInitOptions) {
+    await this.orchestrator.initialize(options, {
+      registerCronJob: (name, intervalMs, handler) => {
+        this.registerCronJob(name, intervalMs, handler)
+      },
     })
   }
 
+  async syncChallengesOnce() {
+    await this.orchestrator.syncChallengesOnce()
+  }
+
+  async syncNoticesOnce() {
+    await this.orchestrator.syncNoticesOnce()
+  }
+
+  registerSolver(solver: CTFSolver) {
+    this.queue.registerSolver(solver)
+  }
+
+  unregisterSolver(solverId: string) {
+    this.queue.unregisterSolver(solverId)
+  }
+
+  enqueueTask(payload: unknown, taskId?: string) {
+    return this.queue.enqueueTask(payload, taskId)
+  }
+
   getSchedulerState() {
-    return {
-      pendingTaskCount: this.pendingTaskQueue.length,
-      idleSolverCount: this.idleSolverQueue.length,
-      busySolverCount: this.busySolverIds.size,
-      registeredSolverCount: this.solverRegistry.size,
-    }
+    return this.queue.getState()
   }
 
   async attachRuntime(runtime: CTFRuntime) {
@@ -230,74 +246,64 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     }
 
     await this.runtime?.shutdown?.()
+    await super.shutdown()
 
     this.logger.info("[CTFRuntimeWorkspace] Workspace shutdown completed")
   }
-
-  private nextTaskId() {
-    this.taskSequence += 1
-    return `task-${this.taskSequence}`
-  }
-
-  private scheduleSolverDispatch() {
-    while (this.pendingTaskQueue.length > 0 && this.idleSolverQueue.length > 0) {
-      const pendingTask = this.pendingTaskQueue.shift()
-      const solverId = this.idleSolverQueue.shift()
-
-      if (!pendingTask || !solverId) {
-        return
-      }
-
-      const solver = this.solverRegistry.get(solverId)
-      if (!solver) {
-        continue
-      }
-
-      this.busySolverIds.add(solverId)
-
-      void Promise.resolve(solver.solve(pendingTask.task))
-        .then((output) => {
-          pendingTask.resolve({
-            taskId: pendingTask.task.taskId,
-            solverId,
-            output,
-          })
-        })
-        .catch((error) => {
-          pendingTask.reject(error)
-        })
-        .finally(() => {
-          this.busySolverIds.delete(solverId)
-
-          if (this.solverRegistry.has(solverId)) {
-            this.idleSolverQueue.push(solverId)
-          }
-
-          this.scheduleSolverDispatch()
-        })
-    }
-  }
-
-  private removeIdleSolver(solverId: string) {
-    const solverIndex = this.idleSolverQueue.indexOf(solverId)
-    if (solverIndex >= 0) {
-      this.idleSolverQueue.splice(solverIndex, 1)
-    }
-  }
 }
 
-export function createCTFRuntimeWorkspaceWithoutPersistence(options: WorkspaceOptions = {}) {
+function registerCTFRuntimeServices(container: Container, rootDir: string) {
+  container.registerSingleton(queueToken, () => new QueueService())
+
+  container.registerSingleton(solverHubToken, (currentContainer) => {
+    return new SolverHub({
+      rootDir,
+      logger: currentContainer.resolve(loggerToken),
+      providers: currentContainer.resolve(providerRegistryToken),
+      persistence: currentContainer.resolve(persistenceStoreToken),
+      queue: currentContainer.resolve(queueToken),
+    })
+  })
+
+  container.registerSingleton(syncToken, (currentContainer) => {
+    return new SyncService({
+      logger: currentContainer.resolve(loggerToken),
+      solverHub: currentContainer.resolve(solverHubToken),
+    })
+  })
+
+  container.registerSingleton(orchestratorToken, (currentContainer) => {
+    return new RuntimeOrchestrator({
+      logger: currentContainer.resolve(loggerToken),
+      solverHub: currentContainer.resolve(solverHubToken),
+      syncService: currentContainer.resolve(syncToken),
+    })
+  })
+}
+
+export function createCTFRuntimeWorkspaceWithoutPersistence(
+  options: CTFRuntimeWorkspaceOptions = {},
+) {
   const rootDir = options.rootDir ?? process.cwd()
   const paths = resolveWorkspacePaths(rootDir)
+
   return new CTFRuntimeWorkspace(
     paths.rootDir,
-    createWorkspaceContainer(paths.rootDir, options.configureContainer),
+    createWorkspaceContainer(paths.rootDir, (container) => {
+      registerCTFRuntimeServices(container, paths.rootDir)
+      options.configureContainer?.(container)
+    }),
   )
 }
 
-export async function createCTFRuntimeWorkspace(options: WorkspaceOptions = {}) {
+export async function createCTFRuntimeWorkspace(options: CTFRuntimeWorkspaceOptions = {}) {
   const workspace = createCTFRuntimeWorkspaceWithoutPersistence(options)
   await workspace.initPersistence()
+
+  if (options.runtime) {
+    await workspace.initializeRuntime(options.runtime)
+  }
+
   return workspace
 }
 
@@ -312,3 +318,5 @@ export async function getCTFRuntimeWorkspace(rootDir = process.cwd()) {
   runtimeWorkspaceRegistry.set(paths.rootDir, workspace)
   return workspace
 }
+
+export type { RuntimeCronOptions, RuntimeInitOptions }
