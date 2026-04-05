@@ -174,8 +174,8 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
   private readonly detailById = new Map<number, ChallengeDetail>()
   private pollCursor = 0
   private readonly seenPollCursors: Array<string | undefined> = []
-  private persistedState: Record<string, unknown> = {}
-  private restoredState?: Record<string, unknown>
+  private loginCallCount = 0
+  private readonly seenContestIds: number[] = []
 
   constructor(private challenges: ChallengeSummary[]) {
     for (const challenge of challenges) {
@@ -212,21 +212,22 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
     this.updates.push(update)
   }
 
-  setPersistedState(state: Record<string, unknown>) {
-    this.persistedState = state
-  }
-
-  getRestoredState() {
-    return this.restoredState
-  }
-
   getSeenPollCursors() {
     return [...this.seenPollCursors]
+  }
+
+  getLoginCallCount() {
+    return this.loginCallCount
+  }
+
+  getSeenContestIds() {
+    return [...this.seenContestIds]
   }
 
   async setup(_config: PluginConfig) {}
 
   async login() {
+    this.loginCallCount += 1
     return {
       mode: "cookie" as const,
       cookie: "sid=mock",
@@ -234,48 +235,40 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
     }
   }
 
-  async refreshAuth(session: Awaited<ReturnType<MockPlatformPlugin["login"]>>) {
-    return session
-  }
-
-  async ensureAuthenticated() {
-    return {
-      mode: "cookie" as const,
-      cookie: "sid=mock",
-      refreshable: false,
+  async validateSession(session: Awaited<ReturnType<MockPlatformPlugin["login"]>>) {
+    if (session.cookie !== "sid=mock") {
+      throw new Error("invalid session")
     }
   }
 
-  getAuthSession() {
-    return {
-      mode: "cookie" as const,
-      cookie: "sid=mock",
-      refreshable: false,
+  async listContests(session: { cookie?: string }) {
+    if (session.cookie !== "sid=mock") {
+      throw new Error("invalid session")
     }
-  }
 
-  getPersistedState() {
-    return this.persistedState
-  }
-
-  async restoreFromPersistedState(state: Record<string, unknown>) {
-    this.restoredState = state
-    this.persistedState = state
-  }
-
-  async listContests() {
     return [{ id: 1, title: "Mock Contest" }]
   }
 
-  async bindContest() {
-    return { id: 1, title: "Mock Contest" }
-  }
+  async listChallenges(context: { session: { cookie?: string }; contestId: number }) {
+    if (context.session.cookie !== "sid=mock") {
+      throw new Error("invalid session")
+    }
 
-  async listChallenges() {
+    this.seenContestIds.push(context.contestId)
     return [...this.challenges]
   }
 
-  async getChallenge(challengeId: number) {
+  async getChallenge(context: {
+    session: { cookie?: string }
+    contestId: number
+    challengeId: number
+  }) {
+    if (context.session.cookie !== "sid=mock") {
+      throw new Error("invalid session")
+    }
+
+    this.seenContestIds.push(context.contestId)
+    const { challengeId } = context
     const detail = this.detailById.get(challengeId)
     if (!detail) {
       throw new Error(`Missing challenge detail: ${String(challengeId)}`)
@@ -283,21 +276,37 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
     return detail
   }
 
-  async submitFlagRaw() {
+  async submitFlagRaw(context: {
+    session: { cookie?: string }
+    contestId: number
+    challengeId: number
+    flag: string
+  }) {
+    if (context.session.cookie !== "sid=mock") {
+      throw new Error("invalid session")
+    }
+
+    this.seenContestIds.push(context.contestId)
+
     return {
       submissionId: 1,
-      status: "WrongAnswer",
+      status: `${context.challengeId}:${context.flag}`,
       accepted: false,
     }
   }
 
-  async pollUpdates(cursor?: string) {
-    this.seenPollCursors.push(cursor)
+  async pollUpdates(context: { session: { cookie?: string }; contestId: number; cursor?: string }) {
+    if (context.session.cookie !== "sid=mock") {
+      throw new Error("invalid session")
+    }
+
+    this.seenContestIds.push(context.contestId)
+    this.seenPollCursors.push(context.cursor)
 
     const updates = [...this.updates]
     this.updates = []
 
-    const cursorValue = cursor ? Number(cursor) : this.pollCursor
+    const cursorValue = context.cursor ? Number(context.cursor) : this.pollCursor
     const baseCursor = Number.isFinite(cursorValue) ? cursorValue : this.pollCursor
     this.pollCursor = baseCursor + 1
 
@@ -484,7 +493,7 @@ describe("ctf runtime platform integration", () => {
     await workspace.shutdown()
   })
 
-  test("restores plugin state, notice cursor and queue sequence from runtime snapshot", async () => {
+  test("restores auth session, contest binding and queue sequence from runtime snapshot", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
     const firstPlugin = new MockPlatformPlugin([
       {
@@ -495,8 +504,6 @@ describe("ctf runtime platform integration", () => {
         solvedCount: 3,
       },
     ])
-    firstPlugin.setPersistedState({ token: "persisted-token", phase: 1 })
-
     const runtime = {
       plugin: firstPlugin,
       pluginConfig: {
@@ -513,6 +520,7 @@ describe("ctf runtime platform integration", () => {
     const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir, runtime })
     const firstTask = await firstWorkspace.enqueueTask({ challenge: 151 })
     expect(firstTask.taskId).toBe("task-1")
+    expect(firstPlugin.getLoginCallCount()).toBe(1)
 
     await firstWorkspace.syncNoticesOnce()
     await firstWorkspace.shutdown()
@@ -535,10 +543,11 @@ describe("ctf runtime platform integration", () => {
       },
     })
 
-    expect(restoredPlugin.getRestoredState()).toEqual({ token: "persisted-token", phase: 1 })
+    expect(restoredPlugin.getLoginCallCount()).toBe(0)
 
     await restoredWorkspace.syncNoticesOnce()
     expect(restoredPlugin.getSeenPollCursors()).toContain("1")
+    expect(restoredPlugin.getSeenContestIds()).toContain(1)
 
     const secondTask = await restoredWorkspace.enqueueTask({ challenge: 151 })
     expect(secondTask.taskId).toBe("task-2")

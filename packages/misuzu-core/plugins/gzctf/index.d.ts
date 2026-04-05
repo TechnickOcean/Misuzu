@@ -2,9 +2,7 @@ import type {
   AuthSession,
   CTFPlatformPlugin,
   ChallengeDetail,
-  ChallengeSummary,
-  ContestBinding,
-  ContestSummary,
+  PlatformRequestContext,
   PluginAuthConfig,
   PluginConfig,
   PollResult,
@@ -16,22 +14,12 @@ export declare class GzctfPlugin implements CTFPlatformPlugin {
     name: string
   }
   private readonly fetchImpl
-  private config?
   private baseUrl
-  private contestId?
-  private authSession
   constructor(fetchImpl?: FetchLike)
   setup(config: PluginConfig): Promise<void>
   login(auth?: PluginAuthConfig): Promise<AuthSession>
-  refreshAuth(session: AuthSession): Promise<AuthSession>
-  ensureAuthenticated(): Promise<AuthSession>
-  getAuthSession(): AuthSession | null
-  getPersistedState(): {
-    authSession: AuthSession | null
-    contestId: number | undefined
-  }
-  restoreFromPersistedState(state: Record<string, unknown>): void
-  listContests(): Promise<
+  validateSession(session: AuthSession): Promise<void>
+  listContests(session: AuthSession): Promise<
     {
       id: number
       title: string
@@ -39,12 +27,21 @@ export declare class GzctfPlugin implements CTFPlatformPlugin {
       end: number | undefined
     }[]
   >
-  bindContest(binding?: ContestBinding): Promise<ContestSummary>
-  listChallenges(): Promise<ChallengeSummary[]>
-  getChallenge(challengeId: number): Promise<ChallengeDetail>
+  listChallenges(context: PlatformRequestContext): Promise<
+    {
+      id: number
+      title: string
+      category: string
+      score: number
+      solvedCount: number
+    }[]
+  >
+  getChallenge(context: PlatformRequestContext & { challengeId: number }): Promise<ChallengeDetail>
   submitFlagRaw(
-    challengeId: number,
-    flag: string,
+    context: PlatformRequestContext & {
+      challengeId: number
+      flag: string
+    },
   ): Promise<
     | {
         status: string
@@ -57,10 +54,11 @@ export declare class GzctfPlugin implements CTFPlatformPlugin {
         accepted: boolean
       }
   >
-  pollUpdates(cursor?: string): Promise<PollResult>
-  openContainer(challengeId: number): Promise<ChallengeDetail>
-  destroyContainer(challengeId: number): Promise<ChallengeDetail>
-  private requireContestId
+  pollUpdates(context: PlatformRequestContext & { cursor?: string }): Promise<PollResult>
+  openContainer(context: PlatformRequestContext & { challengeId: number }): Promise<ChallengeDetail>
+  destroyContainer(
+    context: PlatformRequestContext & { challengeId: number },
+  ): Promise<ChallengeDetail>
   private mapChallengeDetail
   private ensureSessionAuthenticated
   private request

@@ -1,4 +1,4 @@
-import type { PluginConfig } from "../../../../../plugins/index.ts"
+import type { AuthSession, PluginConfig } from "../../../../../plugins/index.ts"
 
 export const CTF_RUNTIME_STATE_VERSION = "1.0.0"
 
@@ -46,13 +46,18 @@ export interface PersistedCTFRuntimeSyncState {
   noticeCursor?: string
 }
 
+export interface PersistedCTFRuntimePlatformState {
+  authSession?: AuthSession
+  contestId?: number
+}
+
 export interface PersistedCTFRuntimeSolverHubState {
   managedChallenges: PersistedCTFRuntimeManagedChallenge[]
 }
 
 export interface PersistedCTFRuntimeSnapshot {
   runtimeConfig: PersistedCTFRuntimeConfig
-  pluginState?: Record<string, unknown>
+  platform: PersistedCTFRuntimePlatformState
   sync: PersistedCTFRuntimeSyncState
   queue: PersistedCTFRuntimeQueueState
   solverHub: PersistedCTFRuntimeSolverHubState

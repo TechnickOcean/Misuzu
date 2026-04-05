@@ -3,12 +3,13 @@ import type {
   CTFPlatformPlugin,
   ChallengeDetail,
   ChallengeSummary,
-  ContestBinding,
   ContestSummary,
+  PlatformRequestContext,
   PluginAuthConfig,
   PluginConfig,
   PollResult,
 } from "../protocol.ts"
+import { PlatformAuthError } from "../protocol.ts"
 import { openHeadedAuth } from "../utils.ts"
 
 interface GzctfContest {
@@ -75,37 +76,11 @@ function trimTrailingSlash(input: string) {
   return input.endsWith("/") ? input.slice(0, -1) : input
 }
 
-function parseContestIdFromUrl(url: string) {
-  const match = /\/games\/(\d+)/.exec(url)
-  if (!match) {
-    throw new Error(`Unable to parse contest id from URL: ${url}`)
-  }
-  return Number(match[1])
-}
-
 function normalizeHint(hint: string | { content?: string; text?: string }) {
   if (typeof hint === "string") {
     return hint
   }
   return hint.content ?? hint.text ?? ""
-}
-
-function isAuthSession(value: unknown): value is AuthSession {
-  if (!value || typeof value !== "object") {
-    return false
-  }
-
-  const candidate = value as Partial<AuthSession>
-  if (
-    candidate.mode !== "manual" &&
-    candidate.mode !== "cookie" &&
-    candidate.mode !== "token" &&
-    candidate.mode !== "credentials"
-  ) {
-    return false
-  }
-
-  return typeof candidate.refreshable === "boolean"
 }
 
 function isContainerActive(detail: GzctfChallengeDetailResponse) {
@@ -135,35 +110,14 @@ export class GzctfPlugin implements CTFPlatformPlugin {
   }
 
   private readonly fetchImpl: FetchLike
-  private config?: PluginConfig
   private baseUrl = ""
-  private contestId?: number
-  private authSession: AuthSession | null = null
 
   constructor(fetchImpl: FetchLike = fetch) {
     this.fetchImpl = fetchImpl
   }
 
   async setup(config: PluginConfig) {
-    this.config = config
     this.baseUrl = trimTrailingSlash(config.baseUrl)
-
-    if (!this.authSession) {
-      this.authSession = await this.login(config.auth)
-    }
-
-    await this.ensureAuthenticated()
-
-    if (typeof this.contestId === "number") {
-      const contests = await this.listContests()
-      if (!contests.some((contest) => contest.id === this.contestId)) {
-        this.contestId = undefined
-      }
-    }
-
-    if (!this.contestId) {
-      await this.bindContest(config.contest)
-    }
   }
 
   async login(auth: PluginAuthConfig = { mode: "manual" }): Promise<AuthSession> {
@@ -208,50 +162,12 @@ export class GzctfPlugin implements CTFPlatformPlugin {
     }
   }
 
-  async refreshAuth(session: AuthSession): Promise<AuthSession> {
-    if (session.mode === "cookie" || session.mode === "token") {
-      await this.ensureSessionAuthenticated(session)
-      this.authSession = session
-      return session
-    }
-
-    throw new Error("Authentication expired. Manual login is required.")
-  }
-
-  async ensureAuthenticated(): Promise<AuthSession> {
-    let session = this.authSession
-    if (!session) {
-      session = await this.login(this.config?.auth)
-      this.authSession = session
-    }
-
+  async validateSession(session: AuthSession): Promise<void> {
     await this.ensureSessionAuthenticated(session)
-    return session
   }
 
-  getAuthSession(): AuthSession | null {
-    return this.authSession
-  }
-
-  getPersistedState() {
-    return {
-      authSession: this.authSession,
-      contestId: this.contestId,
-    }
-  }
-
-  restoreFromPersistedState(state: Record<string, unknown>) {
-    if (isAuthSession(state.authSession)) {
-      this.authSession = state.authSession
-    }
-
-    if (typeof state.contestId === "number" && Number.isInteger(state.contestId)) {
-      this.contestId = state.contestId
-    }
-  }
-
-  async listContests() {
-    const response = await this.request<GzctfGameListResponse>("/api/game")
+  async listContests(session: AuthSession): Promise<ContestSummary[]> {
+    const response = await this.request<GzctfGameListResponse>("/api/game", undefined, session)
     return response.data.map((contest) => ({
       id: contest.id,
       title: contest.title,
@@ -260,52 +176,12 @@ export class GzctfPlugin implements CTFPlatformPlugin {
     }))
   }
 
-  async bindContest(binding: ContestBinding = { mode: "auto" }) {
-    const contests = await this.listContests()
-    if (contests.length === 0) {
-      throw new Error("No contests found for this platform")
-    }
-
-    let selected: ContestSummary | undefined
-
-    switch (binding.mode) {
-      case "id":
-        selected = contests.find((contest) => contest.id === binding.value)
-        break
-      case "title":
-        selected = contests.find((contest) => contest.title === binding.value)
-        break
-      case "url": {
-        const contestId = parseContestIdFromUrl(binding.value)
-        selected = contests.find((contest) => contest.id === contestId)
-        break
-      }
-      case "auto": {
-        const now = Date.now()
-        selected =
-          contests.find(
-            (contest) =>
-              typeof contest.start === "number" &&
-              typeof contest.end === "number" &&
-              contest.start <= now &&
-              now <= contest.end,
-          ) ?? contests[0]
-        break
-      }
-    }
-
-    if (!selected) {
-      throw new Error(`Unable to bind contest for mode: ${binding.mode}`)
-    }
-
-    this.contestId = selected.id
-    return selected
-  }
-
-  async listChallenges() {
-    const contestId = this.requireContestId()
+  async listChallenges(context: PlatformRequestContext) {
+    const { contestId, session } = context
     const response = await this.request<GzctfChallengeDetailsResponse>(
       `/api/game/${contestId}/details`,
+      undefined,
+      session,
     )
 
     const entries = Object.entries(response.challenges)
@@ -325,17 +201,24 @@ export class GzctfPlugin implements CTFPlatformPlugin {
     return flattened
   }
 
-  async getChallenge(challengeId: number) {
-    const contestId = this.requireContestId()
+  async getChallenge(context: PlatformRequestContext & { challengeId: number }) {
+    const { contestId, challengeId, session } = context
     const detail = await this.request<GzctfChallengeDetailResponse>(
       `/api/game/${contestId}/challenges/${challengeId}`,
+      undefined,
+      session,
     )
 
     return this.mapChallengeDetail(detail)
   }
 
-  async submitFlagRaw(challengeId: number, flag: string) {
-    const contestId = this.requireContestId()
+  async submitFlagRaw(
+    context: PlatformRequestContext & {
+      challengeId: number
+      flag: string
+    },
+  ) {
+    const { contestId, challengeId, flag, session } = context
     const submissionIdText = await this.requestText(
       `/api/game/${contestId}/challenges/${challengeId}`,
       {
@@ -345,6 +228,7 @@ export class GzctfPlugin implements CTFPlatformPlugin {
         },
         body: JSON.stringify({ flag }),
       },
+      session,
     )
 
     const submissionId = Number(submissionIdText)
@@ -358,6 +242,8 @@ export class GzctfPlugin implements CTFPlatformPlugin {
     for (let i = 0; i < 8; i += 1) {
       const status = await this.request<string>(
         `/api/game/${contestId}/challenges/${challengeId}/status/${submissionId}`,
+        undefined,
+        session,
       )
 
       if (FINISHED_STATUSES.has(status)) {
@@ -378,9 +264,17 @@ export class GzctfPlugin implements CTFPlatformPlugin {
     }
   }
 
-  async pollUpdates(cursor?: string): Promise<PollResult> {
-    const contestId = this.requireContestId()
-    const notices = await this.request<GzctfNotice[]>(`/api/game/${contestId}/notices`)
+  async pollUpdates(
+    context: PlatformRequestContext & {
+      cursor?: string
+    },
+  ): Promise<PollResult> {
+    const { contestId, cursor, session } = context
+    const notices = await this.request<GzctfNotice[]>(
+      `/api/game/${contestId}/notices`,
+      undefined,
+      session,
+    )
 
     const lastSeenId = cursor ? Number(cursor) : 0
     const sorted = [...notices].sort((a, b) => a.id - b.id)
@@ -400,21 +294,33 @@ export class GzctfPlugin implements CTFPlatformPlugin {
     }
   }
 
-  async openContainer(challengeId: number): Promise<ChallengeDetail> {
-    const contestId = this.requireContestId()
+  async openContainer(
+    context: PlatformRequestContext & {
+      challengeId: number
+    },
+  ): Promise<ChallengeDetail> {
+    const { contestId, challengeId, session } = context
     const current = await this.request<GzctfChallengeDetailResponse>(
       `/api/game/${contestId}/challenges/${challengeId}`,
+      undefined,
+      session,
     )
     if (isContainerActive(current)) {
       return this.mapChallengeDetail(current)
     }
 
-    await this.requestText(`/api/game/${contestId}/container/${challengeId}`, {
-      method: "POST",
-    })
+    await this.requestText(
+      `/api/game/${contestId}/container/${challengeId}`,
+      {
+        method: "POST",
+      },
+      session,
+    )
 
     const updated = await this.request<GzctfChallengeDetailResponse>(
       `/api/game/${contestId}/challenges/${challengeId}`,
+      undefined,
+      session,
     )
     if (!isContainerActive(updated)) {
       throw new Error(`Container was not started for challenge ${challengeId}`)
@@ -423,34 +329,39 @@ export class GzctfPlugin implements CTFPlatformPlugin {
     return this.mapChallengeDetail(updated)
   }
 
-  async destroyContainer(challengeId: number): Promise<ChallengeDetail> {
-    const contestId = this.requireContestId()
+  async destroyContainer(
+    context: PlatformRequestContext & {
+      challengeId: number
+    },
+  ): Promise<ChallengeDetail> {
+    const { contestId, challengeId, session } = context
     const current = await this.request<GzctfChallengeDetailResponse>(
       `/api/game/${contestId}/challenges/${challengeId}`,
+      undefined,
+      session,
     )
     if (!isContainerActive(current)) {
       return this.mapChallengeDetail(current)
     }
 
-    await this.requestText(`/api/game/${contestId}/container/${challengeId}`, {
-      method: "POST",
-    })
+    await this.requestText(
+      `/api/game/${contestId}/container/${challengeId}`,
+      {
+        method: "POST",
+      },
+      session,
+    )
 
     const updated = await this.request<GzctfChallengeDetailResponse>(
       `/api/game/${contestId}/challenges/${challengeId}`,
+      undefined,
+      session,
     )
     if (isContainerActive(updated)) {
       throw new Error(`Container was not destroyed for challenge ${challengeId}`)
     }
 
     return this.mapChallengeDetail(updated)
-  }
-
-  private requireContestId() {
-    if (!this.contestId) {
-      throw new Error("Contest is not bound. Call setup() or bindContest() first")
-    }
-    return this.contestId
   }
 
   private mapChallengeDetail(detail: GzctfChallengeDetailResponse): ChallengeDetail {
@@ -486,34 +397,37 @@ export class GzctfPlugin implements CTFPlatformPlugin {
 
   private async ensureSessionAuthenticated(session: AuthSession) {
     const response = await this.fetchWithSession("/api/account/profile", undefined, session)
+    if (isAuthRejected(response.status)) {
+      throw new PlatformAuthError(`Authentication check failed (${response.status})`)
+    }
+
     if (!response.ok) {
       throw new Error(`Authentication check failed (${response.status})`)
     }
+
     await response.text()
   }
 
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await this.fetchWithRetry(path, init)
+  private async request<T>(
+    path: string,
+    init: RequestInit | undefined,
+    session: AuthSession,
+  ): Promise<T> {
+    const response = await this.fetchWithRetry(path, init, session)
     const text = await response.text()
     return parseJsonOrRaw<T>(text)
   }
 
-  private async requestText(path: string, init?: RequestInit) {
-    const response = await this.fetchWithRetry(path, init)
+  private async requestText(path: string, init: RequestInit | undefined, session: AuthSession) {
+    const response = await this.fetchWithRetry(path, init, session)
     return response.text()
   }
 
-  private async fetchWithRetry(path: string, init?: RequestInit) {
-    const session = this.authSession ?? undefined
-    let response = await this.fetchWithSession(path, init, session)
+  private async fetchWithRetry(path: string, init: RequestInit | undefined, session: AuthSession) {
+    const response = await this.fetchWithSession(path, init, session)
 
-    if (isAuthRejected(response.status) && session) {
-      try {
-        this.authSession = await this.refreshAuth(session)
-      } catch {
-        throw new Error("Authentication expired. Re-authentication is required.")
-      }
-      response = await this.fetchWithSession(path, init, this.authSession)
+    if (isAuthRejected(response.status)) {
+      throw new PlatformAuthError(`Authentication rejected by platform (${response.status})`)
     }
 
     if (!response.ok) {

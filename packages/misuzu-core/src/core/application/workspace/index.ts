@@ -26,6 +26,7 @@ export {
   type PersistedCTFRuntimeQueueState,
   type PersistedCTFRuntimeQueueTask,
   type PersistedCTFRuntimeInflightTask,
+  type PersistedCTFRuntimePlatformState,
   type PersistedCTFRuntimeSyncState,
   type PersistedCTFRuntimeSolverHubState,
   type PersistedCTFRuntimeManagedChallenge,

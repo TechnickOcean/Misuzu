@@ -33,9 +33,9 @@ Do not move runtime policy into the plugin.
 Read `plugins/protocol.ts` and map each required method to expected platform endpoints:
 
 - `setup`
-- `ensureAuthenticated`
+- `login`
+- `validateSession`
 - `listContests`
-- `bindContest`
 - `listChallenges`
 - `getChallenge`
 - `submitFlagRaw`
@@ -45,8 +45,6 @@ Optional methods:
 
 - `openContainer`
 - `destroyContainer`
-- `getPersistedState`
-- `restoreFromPersistedState`
 
 ### 2) Discover API behavior
 
@@ -63,14 +61,13 @@ Prefer API over DOM scraping whenever possible.
   - notices/update endpoint
   - container lifecycle endpoint(s)
 
-### 3) Handle contest binding (important)
+### 3) Keep plugin stateless (important)
 
-Always support multi-contest hosting:
+Contest binding, auth session persistence, and retry strategy are handled by runtime core.
 
-- `auto`: choose active contest (`start <= now <= end`) or fallback to first.
-- `id`: direct match.
-- `title`: exact title match.
-- `url`: parse contest ID from URL.
+- Plugin receives `session` and `contestId` via context arguments.
+- Plugin must not keep long-lived auth/contest state internally.
+- Plugin should focus on endpoint calls and response mapping only.
 
 ### 4) Normalize challenge data
 
@@ -103,33 +100,16 @@ Do not add brute-force retry loops here; runtime owns submit strategy.
 Implement protocol auth methods clearly:
 
 1. `login(auth)`
-2. `ensureAuthenticated()`
-3. `refreshAuth(session)`
-4. `getAuthSession()`
+2. `validateSession(session)`
 
 Rules:
 
 - For captcha-heavy platforms, support `manual` and `cookie` first.
-- On protected API `401/403`, attempt one refresh and retry once.
-- If still unauthorized, throw explicit re-auth required error so runtime can pause solver tasks.
-
-### 5.2) Persist plugin runtime state
-
-If plugin keeps runtime-facing state (for example auth session, bound contest id, or platform cursors),
-implement:
-
-1. `getPersistedState()`
-2. `restoreFromPersistedState(state)`
-
-Rules:
-
-- Persist only data needed for restart/resume.
-- Validate restored shape before using it.
-- Let `setup()` verify restored state is still valid and fallback to normal login/bind flow when stale.
+- On protected API `401/403`, throw `PlatformAuthError` so runtime can re-login and retry.
 
 ### 6) Implement poll updates for runtime
 
-`pollUpdates(cursor)` should:
+`pollUpdates({ session, contestId, cursor })` should:
 
 - fetch notices/announcements/events
 - produce sorted incremental updates
@@ -182,6 +162,5 @@ In plugin README, explicitly document:
 - `vp test` passes
 - README includes example config and limitations
 - plugin is registered in `plugins/catalog.json`
-- `bindContest` supports `auto/id/title/url`
+- plugin methods are context-driven (`{ session, contestId, ... }`) and stateless
 - submit flow and update polling are both implemented and tested against real responses
-- if plugin stores runtime state, persistence hooks are implemented and validated

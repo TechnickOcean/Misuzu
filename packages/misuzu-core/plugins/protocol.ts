@@ -31,6 +31,11 @@ export interface PluginConfig {
   auth?: PluginAuthConfig
 }
 
+export interface PlatformRequestContext {
+  session: AuthSession
+  contestId: number
+}
+
 export interface ContestSummary {
   id: number
   title: string
@@ -86,6 +91,21 @@ export interface PollResult {
   updates: ContestUpdate[]
 }
 
+export class PlatformAuthError extends Error {
+  constructor(message = "Platform authentication required") {
+    super(message)
+    this.name = "PlatformAuthError"
+  }
+}
+
+export function isPlatformAuthError(error: unknown): error is PlatformAuthError {
+  if (!error || typeof error !== "object") {
+    return false
+  }
+
+  return (error as { name?: string }).name === "PlatformAuthError"
+}
+
 export interface CTFPlatformPlugin {
   meta: {
     id: string
@@ -93,17 +113,21 @@ export interface CTFPlatformPlugin {
   }
   setup(config: PluginConfig): Promise<void>
   login(auth?: PluginAuthConfig): Promise<AuthSession>
-  refreshAuth(session: AuthSession): Promise<AuthSession>
-  ensureAuthenticated(): Promise<AuthSession>
-  getAuthSession(): AuthSession | null
-  getPersistedState?(): Record<string, unknown>
-  restoreFromPersistedState?(state: Record<string, unknown>): Promise<void> | void
-  listContests(): Promise<ContestSummary[]>
-  bindContest(binding?: ContestBinding): Promise<ContestSummary>
-  listChallenges(): Promise<ChallengeSummary[]>
-  getChallenge(challengeId: number): Promise<ChallengeDetail>
-  submitFlagRaw(challengeId: number, flag: string): Promise<SubmitResult>
-  pollUpdates(cursor?: string): Promise<PollResult>
-  openContainer?(challengeId: number): Promise<ChallengeDetail>
-  destroyContainer?(challengeId: number): Promise<ChallengeDetail>
+  validateSession(session: AuthSession): Promise<void>
+  listContests(session: AuthSession): Promise<ContestSummary[]>
+  listChallenges(context: PlatformRequestContext): Promise<ChallengeSummary[]>
+  getChallenge(context: PlatformRequestContext & { challengeId: number }): Promise<ChallengeDetail>
+  submitFlagRaw(
+    context: PlatformRequestContext & {
+      challengeId: number
+      flag: string
+    },
+  ): Promise<SubmitResult>
+  pollUpdates(context: PlatformRequestContext & { cursor?: string }): Promise<PollResult>
+  openContainer?(
+    context: PlatformRequestContext & { challengeId: number },
+  ): Promise<ChallengeDetail>
+  destroyContainer?(
+    context: PlatformRequestContext & { challengeId: number },
+  ): Promise<ChallengeDetail>
 }

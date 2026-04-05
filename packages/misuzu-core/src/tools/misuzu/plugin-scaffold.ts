@@ -170,8 +170,8 @@ function buildIndexTemplate(pluginId: string) {
   CTFPlatformPlugin,
   ChallengeDetail,
   ChallengeSummary,
-  ContestBinding,
   ContestSummary,
+  PlatformRequestContext,
   PluginAuthConfig,
   PluginConfig,
   PollResult,
@@ -184,9 +184,6 @@ export class ${className}Plugin implements CTFPlatformPlugin {
     id: "${pluginId}",
     name: "${className}",
   }
-
-  private authSession: AuthSession | null = null
-  private contestId?: number
 
   async setup(_config: PluginConfig) {
     throw new Error("Not implemented")
@@ -210,56 +207,29 @@ export class ${className}Plugin implements CTFPlatformPlugin {
     throw new Error("Not implemented")
   }
 
-  async refreshAuth(_session: AuthSession): Promise<AuthSession> {
+  async validateSession(_session: AuthSession): Promise<void> {
     throw new Error("Not implemented")
   }
 
-  async ensureAuthenticated(): Promise<AuthSession> {
+  async listContests(_session: AuthSession): Promise<ContestSummary[]> {
     throw new Error("Not implemented")
   }
 
-  getAuthSession(): AuthSession | null {
-    return this.authSession
-  }
-
-  getPersistedState(): Record<string, unknown> {
-    return {
-      authSession: this.authSession,
-      contestId: this.contestId,
-    }
-  }
-
-  async restoreFromPersistedState(state: Record<string, unknown>) {
-    if (state.authSession && typeof state.authSession === "object") {
-      this.authSession = state.authSession as AuthSession
-    }
-
-    if (typeof state.contestId === "number" && Number.isInteger(state.contestId)) {
-      this.contestId = state.contestId
-    }
-  }
-
-  async listContests(): Promise<ContestSummary[]> {
+  async listChallenges(_context: PlatformRequestContext): Promise<ChallengeSummary[]> {
     throw new Error("Not implemented")
   }
 
-  async bindContest(_binding?: ContestBinding): Promise<ContestSummary> {
+  async getChallenge(_context: PlatformRequestContext & { challengeId: number }): Promise<ChallengeDetail> {
     throw new Error("Not implemented")
   }
 
-  async listChallenges(): Promise<ChallengeSummary[]> {
+  async submitFlagRaw(
+    _context: PlatformRequestContext & { challengeId: number; flag: string },
+  ): Promise<SubmitResult> {
     throw new Error("Not implemented")
   }
 
-  async getChallenge(_challengeId: number): Promise<ChallengeDetail> {
-    throw new Error("Not implemented")
-  }
-
-  async submitFlagRaw(_challengeId: number, _flag: string): Promise<SubmitResult> {
-    throw new Error("Not implemented")
-  }
-
-  async pollUpdates(_cursor?: string): Promise<PollResult> {
+  async pollUpdates(_context: PlatformRequestContext & { cursor?: string }): Promise<PollResult> {
     throw new Error("Not implemented")
   }
 }
@@ -292,7 +262,7 @@ Platform: ${displayName ?? pluginId}
 
 - Keep plugin imports aligned with built-in workspace shared modules: use \`../protocol.ts\` and \`../utils.ts\`.
 - Register plugin metadata in \`plugins/catalog.json\` so workspace plugin list can discover it.
+- Keep plugin stateless: auth and contest binding are managed by runtime core.
 - Keep notice polling runtime-only and avoid exposing it directly to solver tools.
-- If plugin keeps auth or contest state, implement \`getPersistedState\` and \`restoreFromPersistedState\`.
 `
 }

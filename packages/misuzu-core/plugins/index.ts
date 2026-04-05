@@ -1,6 +1,7 @@
 export * from "./protocol.ts"
 export {
   type PluginTool,
+  type SolverToolPlugin,
   type PluginToolTransformerOptions,
   transformPluginToTools,
 } from "./transformer.ts"

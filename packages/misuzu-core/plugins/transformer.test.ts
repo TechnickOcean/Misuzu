@@ -1,43 +1,11 @@
 import { describe, expect, test } from "vite-plus/test"
-import type { CTFPlatformPlugin } from "./protocol.ts"
-import { transformPluginToTools } from "./transformer.ts"
+import { type SolverToolPlugin, transformPluginToTools } from "./transformer.ts"
 
-function createMockPlugin(): CTFPlatformPlugin {
+function createMockPlugin(): SolverToolPlugin {
   return {
     meta: {
       id: "mock-platform",
       name: "Mock Platform",
-    },
-    async setup() {},
-    async login() {
-      return {
-        mode: "cookie",
-        cookie: "sid=abc",
-        refreshable: false,
-      }
-    },
-    async refreshAuth(session) {
-      return session
-    },
-    async ensureAuthenticated() {
-      return {
-        mode: "cookie",
-        cookie: "sid=abc",
-        refreshable: false,
-      }
-    },
-    getAuthSession() {
-      return {
-        mode: "cookie",
-        cookie: "sid=abc",
-        refreshable: false,
-      }
-    },
-    async listContests() {
-      return [{ id: 1, title: "Demo" }]
-    },
-    async bindContest() {
-      return { id: 1, title: "Demo" }
     },
     async listChallenges() {
       return [{ id: 101, title: "ez", category: "misc", score: 100, solvedCount: 10 }]
@@ -60,12 +28,6 @@ function createMockPlugin(): CTFPlatformPlugin {
         submissionId: 11,
         status: `${challengeId}:${flag}`,
         accepted: false,
-      }
-    },
-    async pollUpdates(cursor?: string) {
-      return {
-        cursor: cursor ?? "1",
-        updates: [],
       }
     },
     async openContainer(challengeId: number) {
@@ -123,11 +85,9 @@ describe("plugin to tools transformer", () => {
     const tools = transformPluginToTools(createMockPlugin())
     const names = tools.map((tool) => tool.name)
 
-    expect(names).not.toContain("mock_platform_list_contests")
-    expect(names).not.toContain("mock_platform_bind_contest")
     expect(names).not.toContain("mock_platform_poll_updates")
-    expect(names).not.toContain("mock_platform_login")
-    expect(names).not.toContain("mock_platform_ensure_authenticated")
+    expect(names).not.toContain("mock_platform_validate_session")
+    expect(names).not.toContain("mock_platform_list_contests")
   })
 
   test("wraps plugin method output as tool result", async () => {

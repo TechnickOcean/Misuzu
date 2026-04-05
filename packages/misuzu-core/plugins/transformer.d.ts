@@ -1,6 +1,16 @@
-import type { CTFPlatformPlugin } from "./protocol.ts"
 export interface PluginToolTransformerOptions {
   namespace?: string
+}
+export interface SolverToolPlugin {
+  meta: {
+    id: string
+    name: string
+  }
+  listChallenges(): Promise<unknown>
+  getChallenge(challengeId: number): Promise<unknown>
+  submitFlagRaw(challengeId: number, flag: string): Promise<unknown>
+  openContainer?(challengeId: number): Promise<unknown>
+  destroyContainer?(challengeId: number): Promise<unknown>
 }
 export interface PluginTool {
   name: string
@@ -21,6 +31,6 @@ export interface PluginTool {
   }>
 }
 export declare function transformPluginToTools(
-  plugin: CTFPlatformPlugin,
+  plugin: SolverToolPlugin,
   options?: PluginToolTransformerOptions,
 ): PluginTool[]

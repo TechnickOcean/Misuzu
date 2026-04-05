@@ -37,8 +37,7 @@ export class SyncService {
   }
 
   async syncChallengesOnce() {
-    const plugin = this.solverHub.getPlugin()
-    const latestChallenges = await plugin.listChallenges()
+    const latestChallenges = await this.solverHub.listChallenges()
     const latestChallengeIds = new Set<number>()
 
     for (const challenge of latestChallenges) {
@@ -63,8 +62,7 @@ export class SyncService {
   }
 
   async syncNoticesOnce() {
-    const plugin = this.solverHub.getPlugin()
-    const result = await plugin.pollUpdates(this.solverHub.getNoticeCursor())
+    const result = await this.solverHub.pollUpdates(this.solverHub.getNoticeCursor())
     this.solverHub.setNoticeCursor(result.cursor)
 
     for (const update of result.updates) {

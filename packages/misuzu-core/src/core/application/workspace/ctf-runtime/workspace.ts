@@ -198,8 +198,9 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
       {
         ...options,
         restore: {
-          pluginState: restoreSnapshot?.pluginState,
-          noticeCursor: restoreSnapshot?.sync.noticeCursor,
+          authSession: restoreSnapshot?.platform?.authSession,
+          contestId: restoreSnapshot?.platform?.contestId,
+          noticeCursor: restoreSnapshot?.sync?.noticeCursor,
         },
       },
       {
@@ -338,7 +339,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
 
     return {
       runtimeConfig: this.runtimeConfig,
-      pluginState: this.solverHub.getPluginPersistedState(),
+      platform: this.solverHub.getPlatformState(),
       sync: {
         noticeCursor: this.solverHub.getNoticeCursor(),
       },
