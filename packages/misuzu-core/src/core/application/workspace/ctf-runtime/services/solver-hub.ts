@@ -9,21 +9,18 @@ import {
 import { createBaseTools } from "../../../../../tools/index.ts"
 import type { Logger } from "../../../../infrastructure/logging/types.ts"
 import {
-  isPlatformAuthError,
   transformPluginToTools,
-  type AuthSession,
   type CTFPlatformPlugin,
   type ChallengeDetail,
   type ChallengeSummary,
-  type ContestBinding,
-  type ContestSummary,
-  type PluginAuthConfig,
   type PlatformRequestContext,
   type SolverToolPlugin,
 } from "../../../../../../plugins/index.ts"
 import type { RuntimeInitOptions } from "./orchestrator.ts"
 import { type SolverTask, type SolverTaskResult, QueueService } from "./queue.ts"
 import { SolverWorkspaceService } from "./solver-workspaces.ts"
+import { PlatformAuthManager } from "./auth-manager.ts"
+import { PlatformContestManager } from "./contest-manager.ts"
 import type {
   PersistedCTFRuntimePlatformState,
   PersistedCTFRuntimeSolverHubState,
@@ -45,22 +42,26 @@ export interface SolverHubDeps {
 export class SolverHub {
   private platformPlugin?: CTFPlatformPlugin
   private platformPluginId?: string
-  private platformAuthConfig?: PluginAuthConfig
-  private platformContestBinding: ContestBinding = { mode: "auto" }
-  private platformSession?: AuthSession
-  private platformContestId?: number
   private platformNoticeCursor?: string
   private readonly challengeSolvers = new Map<number, ChallengeSolverBinding>()
 
   private readonly logger: Logger
   private readonly queue: QueueService
   private readonly solverWorkspaces: SolverWorkspaceService
+  private readonly authManager: PlatformAuthManager
+  private readonly contestManager: PlatformContestManager
   private onStateChanged: () => void = () => {}
 
   constructor(deps: SolverHubDeps) {
     this.logger = deps.logger
     this.queue = deps.queue
     this.solverWorkspaces = deps.solverWorkspaces
+    this.authManager = new PlatformAuthManager({
+      onStateChanged: () => this.notifyStateChanged(),
+    })
+    this.contestManager = new PlatformContestManager({
+      onStateChanged: () => this.notifyStateChanged(),
+    })
   }
 
   setStateChangeListener(listener: () => void) {
@@ -79,10 +80,15 @@ export class SolverHub {
 
     this.platformPlugin = plugin
     this.platformPluginId = pluginId
-    this.platformAuthConfig = options.pluginConfig.auth
-    this.platformContestBinding = options.pluginConfig.contest
-    this.platformSession = this.normalizeAuthSession(options.restore?.authSession)
-    this.platformContestId = options.restore?.contestId
+    this.authManager.initialize({
+      plugin,
+      authConfig: options.pluginConfig.auth,
+      restoredSession: options.restore?.authSession,
+    })
+    this.contestManager.initialize({
+      binding: options.pluginConfig.contest,
+      restoredContestId: options.restore?.contestId,
+    })
     this.platformNoticeCursor = options.restore?.noticeCursor
 
     await this.ensureRuntimeContext()
@@ -120,8 +126,8 @@ export class SolverHub {
 
   getPlatformState(): PersistedCTFRuntimePlatformState {
     return {
-      authSession: this.platformSession,
-      contestId: this.platformContestId,
+      authSession: this.authManager.getSessionState(),
+      contestId: this.contestManager.getContestIdState(),
     }
   }
 
@@ -329,101 +335,21 @@ export class SolverHub {
 
   private async withRuntimeContext<T>(
     operation: (context: PlatformRequestContext) => Promise<T>,
-    allowRetry = true,
   ): Promise<T> {
-    const context = await this.ensureRuntimeContext()
+    return this.authManager.withSession(async (session) => {
+      const contestId = await this.contestManager.resolveContestId(async () =>
+        this.requirePlugin().listContests(session),
+      )
 
-    try {
-      return await operation(context)
-    } catch (error) {
-      if (!allowRetry || !isPlatformAuthError(error)) {
-        throw error
-      }
-
-      this.platformSession = undefined
-      const refreshedContext = await this.ensureRuntimeContext()
-      return operation(refreshedContext)
-    }
+      return operation({
+        session,
+        contestId,
+      })
+    })
   }
 
   private async ensureRuntimeContext(): Promise<PlatformRequestContext> {
-    const session = await this.ensureSession()
-    const contestId = await this.ensureContestId(session)
-
-    return {
-      session,
-      contestId,
-    }
-  }
-
-  private async ensureSession() {
-    const plugin = this.requirePlugin()
-
-    if (this.platformSession) {
-      try {
-        await plugin.validateSession(this.platformSession)
-        return this.platformSession
-      } catch (error) {
-        if (!isPlatformAuthError(error)) {
-          throw error
-        }
-
-        this.platformSession = undefined
-      }
-    }
-
-    const session = await plugin.login(this.platformAuthConfig)
-    this.platformSession = session
-    this.notifyStateChanged()
-    return session
-  }
-
-  private async ensureContestId(session: AuthSession) {
-    const plugin = this.requirePlugin()
-    const contests = await plugin.listContests(session)
-
-    if (contests.length === 0) {
-      throw new Error("No contests found for this platform")
-    }
-
-    if (typeof this.platformContestId === "number") {
-      if (contests.some((contest) => contest.id === this.platformContestId)) {
-        return this.platformContestId
-      }
-
-      this.platformContestId = undefined
-    }
-
-    const selected = selectContestByBinding(contests, this.platformContestBinding)
-    if (!selected) {
-      throw new Error(`Unable to bind contest for mode: ${this.platformContestBinding.mode}`)
-    }
-
-    this.platformContestId = selected.id
-    this.notifyStateChanged()
-    return selected.id
-  }
-
-  private normalizeAuthSession(session: AuthSession | undefined) {
-    if (!session) {
-      return undefined
-    }
-
-    if (!isAuthMode(session.mode)) {
-      return undefined
-    }
-
-    if (typeof session.refreshable !== "boolean") {
-      return undefined
-    }
-
-    return {
-      mode: session.mode,
-      cookie: typeof session.cookie === "string" ? session.cookie : undefined,
-      bearerToken: typeof session.bearerToken === "string" ? session.bearerToken : undefined,
-      expiresAt: typeof session.expiresAt === "number" ? session.expiresAt : undefined,
-      refreshable: session.refreshable,
-    } satisfies AuthSession
+    return this.withRuntimeContext(async (context) => context)
   }
 
   private async resolvePluginOrThrow(pluginId: string | undefined) {
@@ -527,42 +453,4 @@ function buildChallengeSolverPrompt(
     "Attachments:",
     attachments,
   ].join("\n")
-}
-
-function selectContestByBinding(contests: ContestSummary[], binding: ContestBinding) {
-  switch (binding.mode) {
-    case "id":
-      return contests.find((contest) => contest.id === binding.value)
-    case "title":
-      return contests.find((contest) => contest.title === binding.value)
-    case "url": {
-      const contestId = parseContestIdFromUrl(binding.value)
-      return contests.find((contest) => contest.id === contestId)
-    }
-    case "auto": {
-      const now = Date.now()
-      return (
-        contests.find(
-          (contest) =>
-            typeof contest.start === "number" &&
-            typeof contest.end === "number" &&
-            contest.start <= now &&
-            now <= contest.end,
-        ) ?? contests[0]
-      )
-    }
-  }
-}
-
-function parseContestIdFromUrl(url: string) {
-  const match = /\/games\/(\d+)/.exec(url)
-  if (!match) {
-    throw new Error(`Unable to parse contest id from URL: ${url}`)
-  }
-
-  return Number(match[1])
-}
-
-function isAuthMode(value: unknown): value is AuthSession["mode"] {
-  return value === "manual" || value === "cookie" || value === "token" || value === "credentials"
 }

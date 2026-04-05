@@ -16,3 +16,8 @@ export {
   solverWorkspaceServiceToken,
   syncToken,
 } from "./tokens.ts"
+export { PlatformAuthManager, type PlatformAuthManagerInitOptions } from "./auth-manager.ts"
+export {
+  PlatformContestManager,
+  type PlatformContestManagerInitOptions,
+} from "./contest-manager.ts"
