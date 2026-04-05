@@ -8,6 +8,8 @@ const LOG_LEVEL_WEIGHT: Record<LogLevel, number> = {
   error: 40,
 }
 
+const DEFAULT_LOG_SOURCE = "misuzu"
+
 function normalizeLogLevel(level: string | undefined): LogLevel {
   const normalized = level?.toLowerCase()
 
@@ -35,6 +37,24 @@ function normalizeError(error: unknown): LogError {
   return {
     message: String(error),
   }
+}
+
+function normalizeSource(source: string) {
+  return source.trim().replace(/[[\]]/g, "")
+}
+
+function resolveLogSource(context: LogContext) {
+  const candidate = context.component
+  if (typeof candidate === "string" && candidate.trim().length > 0) {
+    return normalizeSource(candidate)
+  }
+
+  return DEFAULT_LOG_SOURCE
+}
+
+function formatLogMessage(message: string, context: LogContext) {
+  const source = resolveLogSource(context)
+  return `[${source}] ${message}`
 }
 
 export interface LoggerOptions {
@@ -90,7 +110,7 @@ export class WorkspaceLogger implements Logger {
     const record: LogRecord = {
       timestamp: Date.now(),
       level,
-      message,
+      message: formatLogMessage(message, this.context),
       context: this.context,
     }
 

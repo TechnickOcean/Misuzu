@@ -83,7 +83,7 @@ export class CTFRuntimePersistence {
       const raw = await fs.readFile(this.stateFilePath, "utf-8")
       const state = JSON.parse(raw) as PersistedCTFRuntimeWorkspaceState
       if (state.version !== CTF_RUNTIME_STATE_VERSION) {
-        this.logger.warn("[CTFRuntimePersistence] State version mismatch", {
+        this.logger.warn("State version mismatch", {
           expected: CTF_RUNTIME_STATE_VERSION,
           actual: state.version,
         })
@@ -94,7 +94,7 @@ export class CTFRuntimePersistence {
         return null
       }
 
-      this.logger.warn("[CTFRuntimePersistence] Failed to load runtime state", error)
+      this.logger.warn("Failed to load runtime state", error)
       return null
     }
   }

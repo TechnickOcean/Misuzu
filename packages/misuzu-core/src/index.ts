@@ -74,7 +74,6 @@ export {
 export {
   type BuiltinPluginCatalogEntry,
   findBuiltinPlugin,
-  listBuiltinPlugins,
   loadBuiltinPluginCatalog,
   resolveBuiltinPluginEntryPath,
 } from "./plugins/catalog.ts"

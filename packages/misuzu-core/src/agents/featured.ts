@@ -45,7 +45,7 @@ export class FeaturedAgent {
       ...opts
     }: FeaturedAgentOptions = {},
   ) {
-    this.logger = deps.logger.child({})
+    this.logger = deps.logger.child({ component: this.constructor.name })
     const skillCatalog = buildSkillsCatalog(skills)
     const inheritedApiKeyResolver =
       typeof opts.getApiKey === "function" ? (opts.getApiKey as ApiKeyResolver) : undefined
@@ -82,7 +82,7 @@ export class FeaturedAgent {
         switch (event.type) {
           case "agent_end":
             this.logger.warn(
-              "[Agent] Loop Ended",
+              "Agent loop ended",
               event.messages
                 .filter((m) => m.role === "assistant")
                 .map((m) => `${m.stopReason}\n${m.errorMessage}`)
@@ -91,21 +91,21 @@ export class FeaturedAgent {
             break
           case "tool_execution_start":
             this.logger.info(
-              `[ToolCall] ${event.toolName}(${JSON.stringify(event.args).slice(0, 300)})`,
+              `Tool call started: ${event.toolName}(${JSON.stringify(event.args).slice(0, 300)})`,
             )
             break
           case "tool_execution_end":
             if (event.isError)
               this.logger.error(
-                `[ToolError] ${event.toolName} -> ${JSON.stringify(event.result).slice(0, 300)}`,
+                `Tool call failed: ${event.toolName} -> ${JSON.stringify(event.result).slice(0, 300)}`,
               )
             else
               this.logger.info(
-                `[ToolResult] ${event.toolName} -> ${JSON.stringify(event.result).slice(0, 300)}`,
+                `Tool call completed: ${event.toolName} -> ${JSON.stringify(event.result).slice(0, 300)}`,
               )
             break
           case "message_end":
-            this.logger.debug("[Message]", textFromMessage(event.message))
+            this.logger.debug("Message received", textFromMessage(event.message))
             break
         }
       } catch (error) {
@@ -127,11 +127,11 @@ export class FeaturedAgent {
   }
 
   async prompt(...args: Parameters<Agent["prompt"]>) {
-    this.logger.info(`[User] ${args[0]}`)
+    this.logger.info(`User prompt: ${args[0]}`)
     try {
       const startTime = Date.now()
       await this.agent.prompt(...args)
-      this.logger.info(`[Finish] output ended, duration(ms): ${Date.now() - startTime}`)
+      this.logger.info(`Prompt finished, duration(ms): ${Date.now() - startTime}`)
     } catch (error) {
       this.logger.error("Agent prompt failed", error)
       throw error
@@ -184,12 +184,12 @@ export class FeaturedAgent {
       const compacted = await compact(this.agent)
       if (compacted) {
         this.agent.replaceMessages(compacted)
-        this.logger.info("[Compacted]", compacted)
+        this.logger.info("Context compacted", compacted)
         return compacted
       }
       // silently fail for now
     } catch (e) {
-      this.logger.error(`[Compaction] Failed to compact the context due to ${(e as Error).message}`)
+      this.logger.error(`Failed to compact context: ${(e as Error).message}`)
       throw e
     }
   }

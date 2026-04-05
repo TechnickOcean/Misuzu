@@ -31,7 +31,7 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
     const existingState = await this.loadStateFile()
     if (existingState) {
       this.misuzuState = existingState
-      this.logger.info("[Persistence] Loaded existing workspace state", {
+      this.logger.info("Loaded existing workspace state", {
         mainAgentExists: !!existingState.mainAgent,
       })
     }
@@ -62,7 +62,7 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
         )
         this.misuzuState.mainAgent.agentState.messages = messages
       } catch (error) {
-        this.logger.error("[Persistence] Failed to load agent messages", error)
+        this.logger.error("Failed to load agent messages", error)
         throw error
       }
     }
@@ -139,7 +139,7 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
 
     this.debounceTimer = setTimeout(() => {
       this.flushImmediate().catch((error) => {
-        this.logger.error("[Persistence] Failed to flush changes", error)
+        this.logger.error("Failed to flush changes", error)
       })
     }, 500)
   }
@@ -238,7 +238,7 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
       const state = JSON.parse(content) as PersistedWorkspaceState
 
       if (state.version !== STATE_VERSION) {
-        this.logger.warn("[Persistence] State version mismatch", {
+        this.logger.warn("State version mismatch", {
           expected: STATE_VERSION,
           actual: state.version,
         })
@@ -249,7 +249,7 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return null
       }
-      this.logger.warn("[Persistence] Failed to load state file", error)
+      this.logger.warn("Failed to load state file", error)
       return null
     }
   }
@@ -279,9 +279,9 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
 
     try {
       await fs.writeFile(stateFilePath, JSON.stringify(stateToSave, null, 2), "utf-8")
-      this.logger.debug("[Persistence] Saved workspace state")
+      this.logger.debug("Saved workspace state")
     } catch (error) {
-      this.logger.error("[Persistence] Failed to save state file", error)
+      this.logger.error("Failed to save state file", error)
       throw error
     }
   }
@@ -309,7 +309,7 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
         fileIndices.push(fileIndex)
         messageCounts.push(chunk.length)
       } catch (error) {
-        this.logger.error(`[Persistence] Failed to save message chunk ${fileIndex}`, error)
+        this.logger.error(`Failed to save message chunk ${fileIndex}`, error)
         throw error
       }
     }
@@ -339,7 +339,7 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
         const chunk = JSON.parse(content) as AgentMessage[]
         messages.push(...chunk)
       } catch (error) {
-        this.logger.error(`[Persistence] Failed to load message chunk ${fileIndex}`, error)
+        this.logger.error(`Failed to load message chunk ${fileIndex}`, error)
         throw error
       }
     }

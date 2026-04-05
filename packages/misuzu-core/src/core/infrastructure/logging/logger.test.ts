@@ -15,7 +15,7 @@ describe("workspace logger", () => {
     const sink = new MemoryLogSink()
     const logger = createWorkspaceLogger({
       level: "debug",
-      context: { scope: "test" },
+      context: { component: "test" },
       sinks: [sink],
     })
 
@@ -26,6 +26,7 @@ describe("workspace logger", () => {
     })
 
     expect(sink.records).toHaveLength(1)
+    expect(sink.records[0].message).toBe("[test] Testing redaction")
     expect(sink.records[0].data).toEqual({
       apiKey: "[REDACTED]",
       nested: { token: "[REDACTED]" },
@@ -37,7 +38,7 @@ describe("workspace logger", () => {
     const sink = new MemoryLogSink()
     const parent = createWorkspaceLogger({
       level: "warn",
-      context: { workspace: "ws-1" },
+      context: { workspaceRoot: "ws-1" },
       sinks: [sink],
     })
 
@@ -45,7 +46,22 @@ describe("workspace logger", () => {
     parent.child({ component: "agent" }).error("This should be logged")
 
     expect(sink.records).toHaveLength(1)
-    expect(sink.records[0].context).toEqual({ workspace: "ws-1", component: "agent" })
+    expect(sink.records[0].message).toBe("[agent] This should be logged")
+    expect(sink.records[0].context).toEqual({ workspaceRoot: "ws-1", component: "agent" })
+  })
+
+  test("always prepends source prefix", () => {
+    const sink = new MemoryLogSink()
+    const logger = createWorkspaceLogger({
+      level: "debug",
+      context: { component: "agent" },
+      sinks: [sink],
+    })
+
+    logger.info("[AlreadyPrefixed] hello")
+
+    expect(sink.records).toHaveLength(1)
+    expect(sink.records[0].message).toBe("[agent] [AlreadyPrefixed] hello")
   })
 
   test("parses log level from env with safe fallback", () => {

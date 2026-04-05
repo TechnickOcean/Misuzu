@@ -5,12 +5,14 @@ import {
   type EnvironmentAgentOptions,
 } from "../../../../agents/environment.ts"
 import { SolverAgent, type SolverAgentOptions } from "../../../../agents/solver.ts"
-import { listBuiltinPlugins, type BuiltinPluginCatalogEntry } from "../../../../plugins/catalog.ts"
+import {
+  loadBuiltinPluginCatalog,
+  type BuiltinPluginCatalogEntry,
+} from "../../../../plugins/catalog.ts"
 import { resolveWorkspacePaths } from "../shared/paths.ts"
 import type { Container } from "../../../infrastructure/di/container.ts"
 import { loggerToken, providerRegistryToken } from "../../../infrastructure/di/tokens.ts"
 import { ProviderRegistry } from "../../providers/index.ts"
-import type { SolverWorkspace } from "../solver/workspace.ts"
 import {
   BaseWorkspace,
   type WorkspaceOptions,
@@ -68,12 +70,13 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
 
   constructor(rootDir: string, container: Container) {
     super(rootDir, container)
-    this.runtimePersistence = new CTFRuntimePersistence(this.logger)
+    this.runtimePersistence = new CTFRuntimePersistence(
+      this.logger.child({ component: "CTFRuntimePersistence" }),
+    )
     this.providerBootstrap = new ProxyProviderBootstrap({
-      logger: this.logger,
+      logger: this.logger.child({ component: "ProxyProviderBootstrap" }),
       providers: this.providers,
       providerConfigPath: this.providerConfigPath,
-      logPrefix: "[CTFRuntimeWorkspace]",
     })
     this.queue = this.container.resolve(queueToken)
     this.solverHub = this.container.resolve(solverHubToken)
@@ -119,7 +122,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     )
   }
 
-  async deriveSolverWorkspace(solverId: string): Promise<SolverWorkspace> {
+  async deriveSolverWorkspace(solverId: string) {
     return this.solverWorkspaces.getOrCreateWorkspace(solverId)
   }
 
@@ -157,7 +160,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
   }
 
   listAvailablePlugins(): BuiltinPluginCatalogEntry[] {
-    return listBuiltinPlugins()
+    return loadBuiltinPluginCatalog()
   }
 
   getManagedChallengeIds() {
@@ -247,37 +250,47 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     await this.solverWorkspaces.shutdown()
     await super.shutdown()
 
-    this.logger.info("[CTFRuntimeWorkspace] Workspace shutdown completed")
+    this.logger.info("Workspace shutdown completed")
   }
 }
 
 function registerCTFRuntimeServices(container: Container, rootDir: string) {
   container.registerSingleton(queueToken, () => new QueueService())
   container.registerSingleton(solverWorkspaceServiceToken, (currentContainer) => {
+    const logger = currentContainer
+      .resolve(loggerToken)
+      .child({ component: "SolverWorkspaceService" })
+
     return new SolverWorkspaceService({
       rootDir,
-      logger: currentContainer.resolve(loggerToken),
+      logger,
     })
   })
 
   container.registerSingleton(solverHubToken, (currentContainer) => {
+    const logger = currentContainer.resolve(loggerToken).child({ component: "SolverHub" })
+
     return new SolverHub({
-      logger: currentContainer.resolve(loggerToken),
+      logger,
       queue: currentContainer.resolve(queueToken),
       solverWorkspaces: currentContainer.resolve(solverWorkspaceServiceToken),
     })
   })
 
   container.registerSingleton(syncToken, (currentContainer) => {
+    const logger = currentContainer.resolve(loggerToken).child({ component: "SyncService" })
+
     return new SyncService({
-      logger: currentContainer.resolve(loggerToken),
+      logger,
       solverHub: currentContainer.resolve(solverHubToken),
     })
   })
 
   container.registerSingleton(orchestratorToken, (currentContainer) => {
+    const logger = currentContainer.resolve(loggerToken).child({ component: "RuntimeOrchestrator" })
+
     return new RuntimeOrchestrator({
-      logger: currentContainer.resolve(loggerToken),
+      logger,
       solverHub: currentContainer.resolve(solverHubToken),
       syncService: currentContainer.resolve(syncToken),
     })

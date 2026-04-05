@@ -56,7 +56,7 @@ export class RuntimeOrchestrator {
       await this.syncService.syncChallengesOnce()
     })
 
-    this.logger.info("[CTFRuntimeWorkspace] Platform runtime initialized", {
+    this.logger.info("Platform runtime initialized", {
       pluginId: this.solverHub.getPluginId(),
       challengeCount: this.solverHub.getManagedChallengeIds().length,
       noticePollIntervalMs,

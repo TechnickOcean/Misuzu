@@ -39,6 +39,7 @@ export class BaseWorkspace {
   readonly providerConfigPath: string
 
   protected readonly container: Container
+  private scopedLogger?: Logger
   private readonly cronJobs = new Map<string, WorkspaceCronJob>()
 
   constructor(rootDir: string, container: Container) {
@@ -67,7 +68,13 @@ export class BaseWorkspace {
   }
 
   get logger(): Logger {
-    return this.container.resolve(loggerToken)
+    if (!this.scopedLogger) {
+      this.scopedLogger = this.container.resolve(loggerToken).child({
+        component: this.constructor.name,
+      })
+    }
+
+    return this.scopedLogger
   }
 
   protected safePersist(action: () => Promise<void>) {
@@ -75,7 +82,7 @@ export class BaseWorkspace {
       if ((error as Error).message === "PersistenceStore not initialized") {
         return
       }
-      this.logger.warn("[Workspace] Failed to persist change", error)
+      this.logger.warn("Failed to persist change", error)
     })
   }
 
@@ -86,7 +93,7 @@ export class BaseWorkspace {
     options: RegisterCronJobOptions = {},
   ) {
     if (intervalMs <= 0) {
-      throw new Error(`[Workspace] Invalid cron interval for job ${name}: ${String(intervalMs)}`)
+      throw new Error(`Invalid cron interval for job ${name}: ${String(intervalMs)}`)
     }
 
     this.unregisterCronJob(name)
@@ -104,7 +111,7 @@ export class BaseWorkspace {
     job.timer.unref?.()
     this.cronJobs.set(name, job)
 
-    this.logger.info("[Workspace] Cron job registered", { name, intervalMs })
+    this.logger.info("Cron job registered", { name, intervalMs })
 
     if (options.runOnStart) {
       void this.runCronJob(name)
@@ -119,7 +126,7 @@ export class BaseWorkspace {
 
     clearInterval(existing.timer)
     this.cronJobs.delete(name)
-    this.logger.info("[Workspace] Cron job unregistered", { name })
+    this.logger.info("Cron job unregistered", { name })
   }
 
   protected async runCronJob(name: string) {
@@ -136,7 +143,7 @@ export class BaseWorkspace {
     try {
       await job.handler()
     } catch (error) {
-      this.logger.warn("[Workspace] Cron job execution failed", { name }, error)
+      this.logger.warn("Cron job execution failed", { name }, error)
     } finally {
       job.running = false
     }
@@ -151,7 +158,7 @@ export class BaseWorkspace {
   async shutdown() {
     this.clearCronJobs()
     await this.persistence.flush()
-    this.logger.info("[Workspace] Workspace shutdown completed")
+    this.logger.info("Workspace shutdown completed")
   }
 }
 
@@ -163,13 +170,15 @@ export function createWorkspaceContainer(
 
   const logger = createWorkspaceLogger({
     level: getLogLevelFromEnv(),
-    context: { workspaceRootDir: rootDir },
+    context: { component: "workspace", workspaceRootDir: rootDir },
     sinks: [new ConsoleLogSink(process.env.MISUZU_LOG_FORMAT === "json" ? "json" : "pretty")],
   })
 
   container.registerSingleton(loggerToken, () => logger)
   container.registerSingleton(providerRegistryToken, () => new ProviderRegistry())
-  container.registerSingleton(persistenceStoreToken, () => new JsonFilePersistenceAdapter(logger))
+  container.registerSingleton(persistenceStoreToken, () => {
+    return new JsonFilePersistenceAdapter(logger.child({ component: "JsonFilePersistenceAdapter" }))
+  })
 
   configureContainer?.(container)
   return container

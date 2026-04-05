@@ -21,10 +21,6 @@ export function loadBuiltinPluginCatalog() {
   return entries.map((entry, index) => normalizeCatalogEntry(entry, index, catalogPath))
 }
 
-export function listBuiltinPlugins() {
-  return loadBuiltinPluginCatalog()
-}
-
 export function findBuiltinPlugin(pluginId: string) {
   return loadBuiltinPluginCatalog().find((entry) => entry.id === pluginId)
 }

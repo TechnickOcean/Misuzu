@@ -47,7 +47,7 @@ export class SolverWorkspaceService {
     workspace.bootstrap()
 
     this.solverWorkspaces.set(solverId, workspace)
-    this.logger.info("[CTFRuntimeWorkspace] Derived solver workspace created", {
+    this.logger.info("Derived solver workspace created", {
       solverId,
       solverRootDir,
       configRootDir: this.rootDir,

@@ -33,10 +33,9 @@ export class SolverWorkspace extends BaseWorkspace {
     this.configRootDir = configPaths.rootDir
 
     this.providerBootstrap = new ProxyProviderBootstrap({
-      logger: this.logger,
+      logger: this.logger.child({ component: "ProxyProviderBootstrap" }),
       providers: this.providers,
       providerConfigPath: configPaths.providerConfigPath,
-      logPrefix: "[SolverWorkspace]",
       onProvidersLoaded: () => {
         const persistence = this.persistence
         if (persistence) {
@@ -64,7 +63,7 @@ export class SolverWorkspace extends BaseWorkspace {
       })
     }
 
-    this.logger.info("[Workspace] Main agent created")
+    this.logger.info("Main agent created")
 
     return this.mainAgent
   }
@@ -97,7 +96,7 @@ export class SolverWorkspace extends BaseWorkspace {
         return
       }
 
-      this.logger.info("[Workspace] Restoring workspace state from persistence")
+      this.logger.info("Restoring workspace state from persistence")
 
       if (persistedState.mainAgent) {
         const model = this.validateAndResolvePersistedModel(persistedState.mainAgent)
@@ -123,12 +122,12 @@ export class SolverWorkspace extends BaseWorkspace {
           await this.agentStateProxy.restoreFromPersistedState(persistedState.mainAgent)
         }
 
-        this.logger.info("[Workspace] Main agent state restored", {
+        this.logger.info("Main agent state restored", {
           messageCount: persistedState.mainAgent.agentState.messages?.length ?? 0,
         })
       }
     } catch (error) {
-      this.logger.error("[Workspace] Failed to restore workspace state", error)
+      this.logger.error("Failed to restore workspace state", error)
       throw error
     }
   }
@@ -177,7 +176,7 @@ export class SolverWorkspace extends BaseWorkspace {
     this.agentStateProxy = new AgentStateProxy(
       agent,
       this.persistence,
-      this.logger,
+      this.logger.child({ component: "AgentStateProxy" }),
       baseSystemPrompt,
     )
     this.unsubscribeAgentTracking = this.agentStateProxy.enableTracking()
@@ -185,15 +184,13 @@ export class SolverWorkspace extends BaseWorkspace {
 
   private validateAndResolvePersistedModel(persistedAgent: { modelId?: string }) {
     if (!persistedAgent.modelId) {
-      throw new Error(
-        "[Workspace] Corrupted workspace state: missing modelId. Cannot restore agent.",
-      )
+      throw new Error("Corrupted workspace state: missing modelId. Cannot restore agent.")
     }
 
     const separatorIndex = persistedAgent.modelId.indexOf("/")
     if (separatorIndex <= 0 || separatorIndex === persistedAgent.modelId.length - 1) {
       throw new Error(
-        `[Workspace] Corrupted workspace state: invalid modelId format "${persistedAgent.modelId}". Expected "provider/modelId".`,
+        `Corrupted workspace state: invalid modelId format "${persistedAgent.modelId}". Expected "provider/modelId".`,
       )
     }
 
@@ -203,12 +200,12 @@ export class SolverWorkspace extends BaseWorkspace {
     const model = this.providers.getModel(provider, modelId)
     if (!model) {
       throw new Error(
-        `[Workspace] Corrupted workspace state: model not found in registry (provider: "${provider}", modelId: "${modelId}"). ` +
+        `Corrupted workspace state: model not found in registry (provider: "${provider}", modelId: "${modelId}"). ` +
           "The model may have been removed from the provider registry or API.",
       )
     }
 
-    this.logger.debug("[Workspace] Agent state validation passed", {
+    this.logger.debug("Agent state validation passed", {
       modelId: persistedAgent.modelId,
       model: `${model.provider}/${model.id}`,
     })

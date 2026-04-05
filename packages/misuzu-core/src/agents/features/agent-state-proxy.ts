@@ -23,11 +23,7 @@ export class AgentStateProxy {
       try {
         this.handleAgentEvent(event)
       } catch (error) {
-        this.logger.error(
-          "[AgentStateProxy] Failed to handle agent event",
-          { eventType: event.type },
-          error,
-        )
+        this.logger.error("Failed to handle agent event", { eventType: event.type }, error)
       }
     })
     return unsubscribe
@@ -40,7 +36,7 @@ export class AgentStateProxy {
       this.featuredAgent.replaceMessages(agentState.messages)
     }
 
-    this.logger.info("[AgentStateProxy] Restored agent state from persistence", {
+    this.logger.info("Restored agent state from persistence", {
       messageCount: agentState.messages?.length ?? 0,
     })
   }
@@ -128,7 +124,7 @@ export class AgentStateProxy {
       })
       .catch((error) => {
         if ((error as Error).message !== "PersistenceStore not initialized") {
-          this.logger.warn("[AgentStateProxy] Failed to record state update", error)
+          this.logger.warn("Failed to record state update", error)
         }
       })
   }

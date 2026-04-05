@@ -55,7 +55,7 @@ export class SyncService {
 
     for (const binding of this.solverHub.getChallengeBindings()) {
       if (!latestChallengeIds.has(binding.challenge.id)) {
-        this.logger.warn("[CTFRuntimeWorkspace] Challenge removed from platform listing", {
+        this.logger.warn("Challenge removed from platform listing", {
           challengeId: binding.challenge.id,
         })
       }

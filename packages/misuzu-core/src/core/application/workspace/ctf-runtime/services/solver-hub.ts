@@ -3,7 +3,7 @@ import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { type SolverAgent, type SolverAgentOptions } from "../../../../../agents/solver.ts"
 import {
   findBuiltinPlugin,
-  listBuiltinPlugins,
+  loadBuiltinPluginCatalog,
   resolveBuiltinPluginEntryPath,
 } from "../../../../../plugins/catalog.ts"
 import { createBaseTools } from "../../../../../tools/index.ts"
@@ -49,7 +49,7 @@ export class SolverHub {
 
   async initialize(options: RuntimeInitOptions) {
     if (this.platformPlugin) {
-      throw new Error("[CTFRuntimeWorkspace] Platform runtime is already initialized")
+      throw new Error("Platform runtime is already initialized")
     }
 
     const plugin = options.plugin ?? (await this.resolvePluginOrThrow(options.pluginId))
@@ -81,7 +81,7 @@ export class SolverHub {
 
   getPlugin() {
     if (!this.platformPlugin) {
-      throw new Error("[CTFRuntimeWorkspace] Platform runtime is not initialized")
+      throw new Error("Platform runtime is not initialized")
     }
 
     return this.platformPlugin
@@ -134,7 +134,7 @@ export class SolverHub {
       solve: async (task) => this.solveWithBinding(binding, task),
     })
 
-    this.logger.info("[CTFRuntimeWorkspace] Challenge solver created", {
+    this.logger.info("Challenge solver created", {
       challengeId: challenge.id,
       challengeTitle: challenge.title,
       solverId,
@@ -202,24 +202,22 @@ export class SolverHub {
   private async resolvePluginOrThrow(pluginId: string | undefined) {
     if (!pluginId) {
       throw new Error(
-        "[CTFRuntimeWorkspace] Missing pluginId in runtime config. Select a plugin from built-in plugin catalog.",
+        "Missing pluginId in runtime config. Select a plugin from built-in plugin catalog.",
       )
     }
 
     const pluginEntry = findBuiltinPlugin(pluginId)
     if (!pluginEntry) {
-      const availableIds = listBuiltinPlugins().map((entry) => entry.id)
+      const availableIds = loadBuiltinPluginCatalog().map((entry) => entry.id)
       throw new Error(
-        `[CTFRuntimeWorkspace] Required plugin is missing from catalog: ${pluginId}. Available plugins: ${availableIds.join(", ") || "none"}`,
+        `Required plugin is missing from catalog: ${pluginId}. Available plugins: ${availableIds.join(", ") || "none"}`,
       )
     }
 
     const plugin = await this.loadPluginFromPath(resolveBuiltinPluginEntryPath(pluginEntry))
 
     if (plugin.meta.id !== pluginId) {
-      throw new Error(
-        `[CTFRuntimeWorkspace] Platform plugin id mismatch: expected ${pluginId}, actual ${plugin.meta.id}`,
-      )
+      throw new Error(`Platform plugin id mismatch: expected ${pluginId}, actual ${plugin.meta.id}`)
     }
 
     return plugin
@@ -235,7 +233,7 @@ export class SolverHub {
 
     if (!candidate || typeof candidate !== "object" || typeof candidate.setup !== "function") {
       throw new Error(
-        `[CTFRuntimeWorkspace] Invalid platform plugin module. Expected a plugin factory export from ${modulePath}.`,
+        `Invalid platform plugin module. Expected a plugin factory export from ${modulePath}.`,
       )
     }
 
