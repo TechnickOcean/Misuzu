@@ -90,7 +90,6 @@ export interface CTFPlatformPlugin {
   meta: {
     id: string
     name: string
-    match: (url: string) => boolean
   }
   setup(config: PluginConfig): Promise<void>
   login(auth?: PluginAuthConfig): Promise<AuthSession>

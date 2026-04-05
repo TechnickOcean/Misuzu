@@ -14,7 +14,6 @@ export declare class GzctfPlugin implements CTFPlatformPlugin {
   readonly meta: {
     id: string
     name: string
-    match: (url: string) => boolean
   }
   private readonly fetchImpl
   private config?

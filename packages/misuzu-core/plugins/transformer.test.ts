@@ -7,7 +7,6 @@ function createMockPlugin(): CTFPlatformPlugin {
     meta: {
       id: "mock-platform",
       name: "Mock Platform",
-      match: () => true,
     },
     async setup() {},
     async login() {

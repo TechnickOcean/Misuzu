@@ -1,8 +1,11 @@
-import { access } from "node:fs/promises"
-import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { type SolverAgent, type SolverAgentOptions } from "../../../../../agents/solver.ts"
+import {
+  findBuiltinPlugin,
+  listBuiltinPlugins,
+  resolveBuiltinPluginEntryPath,
+} from "../../../../../plugins/catalog.ts"
 import { createBaseTools } from "../../../../../tools/index.ts"
 import type { Logger } from "../../../../infrastructure/logging/types.ts"
 import {
@@ -23,7 +26,6 @@ export interface ChallengeSolverBinding {
 }
 
 export interface SolverHubDeps {
-  platformPluginDir: string
   logger: Logger
   queue: QueueService
   solverWorkspaces: SolverWorkspaceService
@@ -35,13 +37,11 @@ export class SolverHub {
   private platformNoticeCursor?: string
   private readonly challengeSolvers = new Map<number, ChallengeSolverBinding>()
 
-  private readonly platformPluginDir: string
   private readonly logger: Logger
   private readonly queue: QueueService
   private readonly solverWorkspaces: SolverWorkspaceService
 
   constructor(deps: SolverHubDeps) {
-    this.platformPluginDir = deps.platformPluginDir
     this.logger = deps.logger
     this.queue = deps.queue
     this.solverWorkspaces = deps.solverWorkspaces
@@ -52,9 +52,7 @@ export class SolverHub {
       throw new Error("[CTFRuntimeWorkspace] Platform runtime is already initialized")
     }
 
-    const plugin =
-      options.plugin ??
-      (await this.resolvePluginOrThrow(options.pluginId, options.pluginConfig.baseUrl))
+    const plugin = options.plugin ?? (await this.resolvePluginOrThrow(options.pluginId))
     const pluginId = options.pluginId ?? plugin.meta.id
 
     await plugin.setup(options.pluginConfig)
@@ -201,42 +199,30 @@ export class SolverHub {
     return output
   }
 
-  private async resolvePluginOrThrow(pluginId: string | undefined, baseUrl: string) {
-    const modulePath = join(this.platformPluginDir, "index.ts")
-    const hasModule = await this.hasPluginModule(modulePath)
-    if (!hasModule) {
+  private async resolvePluginOrThrow(pluginId: string | undefined) {
+    if (!pluginId) {
       throw new Error(
-        [
-          `[CTFRuntimeWorkspace] Platform plugin is missing: ${modulePath}`,
-          "Deploy a plugin into workspace .misuzu/platform-plugin first.",
-        ].join(" "),
+        "[CTFRuntimeWorkspace] Missing pluginId in runtime config. Select a plugin from built-in plugin catalog.",
       )
     }
 
-    const plugin = await this.loadPluginFromPath(modulePath)
+    const pluginEntry = findBuiltinPlugin(pluginId)
+    if (!pluginEntry) {
+      const availableIds = listBuiltinPlugins().map((entry) => entry.id)
+      throw new Error(
+        `[CTFRuntimeWorkspace] Required plugin is missing from catalog: ${pluginId}. Available plugins: ${availableIds.join(", ") || "none"}`,
+      )
+    }
 
-    if (pluginId && plugin.meta.id !== pluginId) {
+    const plugin = await this.loadPluginFromPath(resolveBuiltinPluginEntryPath(pluginEntry))
+
+    if (plugin.meta.id !== pluginId) {
       throw new Error(
         `[CTFRuntimeWorkspace] Platform plugin id mismatch: expected ${pluginId}, actual ${plugin.meta.id}`,
       )
     }
 
-    if (!pluginId && !plugin.meta.match(baseUrl)) {
-      throw new Error(
-        `[CTFRuntimeWorkspace] Platform plugin ${plugin.meta.id} does not match baseUrl: ${baseUrl}`,
-      )
-    }
-
     return plugin
-  }
-
-  private async hasPluginModule(modulePath: string) {
-    try {
-      await access(modulePath)
-      return true
-    } catch {
-      return false
-    }
   }
 
   private async loadPluginFromPath(modulePath: string) {

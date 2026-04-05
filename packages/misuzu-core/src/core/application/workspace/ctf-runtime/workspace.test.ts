@@ -20,76 +20,6 @@ async function createRuntimeWorkspaceDir() {
   return dir
 }
 
-async function writeDeployedPlatformPlugin(rootDir: string, pluginId: string) {
-  const platformPluginDir = join(rootDir, ".misuzu", "platform-plugin")
-  await mkdir(platformPluginDir, { recursive: true })
-
-  await writeFile(
-    join(platformPluginDir, "index.ts"),
-    [
-      "export function createPlugin() {",
-      "  return {",
-      `    meta: { id: ${JSON.stringify(pluginId)}, name: ${JSON.stringify(pluginId)}, match: () => true },`,
-      "    async setup() {},",
-      "    async login() { return { mode: 'cookie', cookie: 'sid=mock', refreshable: false } },",
-      "    async refreshAuth(session) { return session },",
-      "    async ensureAuthenticated() { return { mode: 'cookie', cookie: 'sid=mock', refreshable: false } },",
-      "    getAuthSession() { return { mode: 'cookie', cookie: 'sid=mock', refreshable: false } },",
-      "    async listContests() { return [{ id: 1, title: 'Mock Contest' }] },",
-      "    async bindContest() { return { id: 1, title: 'Mock Contest' } },",
-      "    async listChallenges() { return [] },",
-      "    async getChallenge() { throw new Error('not used in this test') },",
-      "    async submitFlagRaw() { return { status: 'WrongAnswer', accepted: false } },",
-      "    async pollUpdates() { return { updates: [] } },",
-      "  }",
-      "}",
-    ].join("\n"),
-    "utf-8",
-  )
-}
-
-async function writeChallengePlatformPlugin(rootDir: string, pluginId: string) {
-  const platformPluginDir = join(rootDir, ".misuzu", "platform-plugin")
-  await mkdir(platformPluginDir, { recursive: true })
-
-  await writeFile(
-    join(platformPluginDir, "index.ts"),
-    [
-      "export function createPlugin() {",
-      "  return {",
-      `    meta: { id: ${JSON.stringify(pluginId)}, name: ${JSON.stringify(pluginId)}, match: () => true },`,
-      "    async setup() {},",
-      "    async login() { return { mode: 'cookie', cookie: 'sid=mock', refreshable: false } },",
-      "    async refreshAuth(session) { return session },",
-      "    async ensureAuthenticated() { return { mode: 'cookie', cookie: 'sid=mock', refreshable: false } },",
-      "    getAuthSession() { return { mode: 'cookie', cookie: 'sid=mock', refreshable: false } },",
-      "    async listContests() { return [{ id: 1, title: 'Mock Contest' }] },",
-      "    async bindContest() { return { id: 1, title: 'Mock Contest' } },",
-      "    async listChallenges() {",
-      "      return [{ id: 301, title: 'derived-solver', category: 'misc', score: 100, solvedCount: 0 }]",
-      "    },",
-      "    async getChallenge(challengeId) {",
-      "      return {",
-      "        id: challengeId,",
-      "        title: 'derived-solver',",
-      "        category: 'misc',",
-      "        score: 100,",
-      "        content: 'test challenge',",
-      "        hints: [],",
-      "        requiresContainer: false,",
-      "        attempts: 0,",
-      "        attachments: [],",
-      "      }",
-      "    },",
-      "    async submitFlagRaw() { return { status: 'WrongAnswer', accepted: false } },",
-      "    async pollUpdates() { return { updates: [] } },",
-      "  }",
-      "}",
-    ].join("\n"),
-    "utf-8",
-  )
-}
-
 afterEach(async () => {
   await Promise.all(
     tempDirs.splice(0, tempDirs.length).map((dir) => rm(dir, { recursive: true, force: true })),
@@ -238,7 +168,6 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
   readonly meta = {
     id: "mock-platform",
     name: "Mock Platform",
-    match: () => true,
   }
 
   private updates: ContestUpdate[] = []
@@ -348,22 +277,10 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
 }
 
 describe("ctf runtime platform integration", () => {
-  test("loads deployed platform plugin from workspace marker directory", async () => {
+  test("lists built-in plugins from catalog", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
-    await writeDeployedPlatformPlugin(rootDir, "deployed-plugin")
-
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    await workspace.initializeRuntime({
-      pluginId: "deployed-plugin",
-      pluginConfig: {
-        baseUrl: "https://example.com",
-        contest: { mode: "auto" },
-        auth: { mode: "cookie", cookie: "sid=abc" },
-      },
-    })
-
-    expect(workspace.getManagedChallengeIds()).toEqual([])
+    expect(workspace.listAvailablePlugins().some((entry) => entry.id === "gzctf")).toBe(true)
     await workspace.shutdown()
   })
 
@@ -401,11 +318,19 @@ describe("ctf runtime platform integration", () => {
       "utf-8",
     )
 
-    await writeChallengePlatformPlugin(rootDir, "deployed-plugin")
+    const plugin = new MockPlatformPlugin([
+      {
+        id: 301,
+        title: "derived-solver",
+        category: "misc",
+        score: 100,
+        solvedCount: 0,
+      },
+    ])
 
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
     await workspace.initializeRuntime({
-      pluginId: "deployed-plugin",
+      plugin,
       pluginConfig: {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
@@ -445,7 +370,22 @@ describe("ctf runtime platform integration", () => {
           auth: { mode: "cookie", cookie: "sid=abc" },
         },
       }),
-    ).rejects.toThrow("Platform plugin is missing")
+    ).rejects.toThrow("missing from catalog")
+  })
+
+  test("requires pluginId when runtime plugin is not provided", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    await expect(
+      workspace.initializeRuntime({
+        pluginConfig: {
+          baseUrl: "https://example.com",
+          contest: { mode: "auto" },
+          auth: { mode: "cookie", cookie: "sid=abc" },
+        },
+      }),
+    ).rejects.toThrow("Missing pluginId")
   })
 
   test("initializes platform, creates challenge solvers, syncs notices and new challenges", async () => {

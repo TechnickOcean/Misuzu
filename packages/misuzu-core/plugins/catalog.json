@@ -1,0 +1,8 @@
+[
+  {
+    "id": "gzctf",
+    "name": "GZCTF",
+    "entry": "gzctf/index.ts",
+    "description": "GZCTF platform adapter with contest binding and async submission support."
+  }
+]

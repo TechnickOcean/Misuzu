@@ -114,7 +114,6 @@ export class GzctfPlugin implements CTFPlatformPlugin {
   readonly meta = {
     id: "gzctf",
     name: "GZ::CTF",
-    match: (url: string) => url.includes("gzctf") || url.includes("x1ct34m.com"),
   }
 
   private readonly fetchImpl: FetchLike

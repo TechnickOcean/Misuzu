@@ -20,5 +20,5 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "examples", "plugins"]
+  "include": ["src", "examples", "plugins", "src/utils/index.ts"]
 }

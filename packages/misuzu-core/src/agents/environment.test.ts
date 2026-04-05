@@ -86,9 +86,6 @@ describe("environment agent", () => {
     expect(environmentAgent.state.systemPrompt).toContain("Environment agent")
     expect(environmentAgent.state.systemPrompt).toContain("custom-plugin-skill")
     expect(environmentAgent.state.tools.map((tool) => tool.name)).toContain("scaffold_plugin")
-    expect(environmentAgent.state.tools.map((tool) => tool.name)).toContain(
-      "deploy_platform_plugin",
-    )
   })
 
   test("default factory uses built-in plugins workspace and target deployment path", async () => {
@@ -105,12 +102,8 @@ describe("environment agent", () => {
     expect(normalize(environmentAgent.workspaceBaseDir)).toBe(
       normalize(resolveDefaultEnvironmentBaseDir()),
     )
-    expect(environmentAgent.targetWorkspaceDir).toBe(workspaceRoot)
     expect(environmentAgent.state.systemPrompt).toContain("Standard plugin workflow")
-    expect(environmentAgent.state.systemPrompt).toContain("deploy_platform_plugin")
+    expect(environmentAgent.state.systemPrompt).toContain("plugins/catalog.json")
     expect(environmentAgent.state.systemPrompt).toContain("plugin-authoring skill")
-    expect(environmentAgent.state.systemPrompt).toContain(
-      normalize(join(workspaceRoot, ".misuzu", "platform-plugin")),
-    )
   })
 })

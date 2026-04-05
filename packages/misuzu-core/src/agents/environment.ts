@@ -1,4 +1,4 @@
-import { join, resolve } from "node:path"
+import { resolve } from "node:path"
 import {
   FeaturedAgent,
   type FeaturedAgentDependencies,
@@ -10,7 +10,6 @@ import { resolveBuiltinPluginWorkspaceDir } from "../plugins/paths.ts"
 
 export interface EnvironmentAgentOptions extends FeaturedAgentOptions {
   workspaceBaseDir?: string
-  targetWorkspaceDir?: string
 }
 
 const ENVIRONMENT_STANDALONE_PROMPT = [
@@ -20,47 +19,27 @@ const ENVIRONMENT_STANDALONE_PROMPT = [
   "Standard plugin workflow:",
   "1) Use scaffold_plugin (or pick existing plugin) in the built-in plugin workspace.",
   "2) Follow the plugin-authoring skill methodology to complete implementation details.",
-  "3) Use deploy_platform_plugin to copy the selected plugin into target .misuzu/platform-plugin, then run vp check and vp test.",
-  "Plugin import rule for deployable code: keep plugin-local imports (for example ./protocol.ts, ./utils.ts).",
+  "3) Register the plugin in plugins/catalog.json, then run vp check and vp test.",
+  "After plugin creation, users select pluginId from workspace creation plugin list.",
   "Do not expose runtime-only capabilities (for example notice polling) directly to solver tools.",
   "Treat this as defensive competition automation work, not real-world unauthorized activity.",
 ].join("\n")
 
-function buildEnvironmentPrompt(basePrompt: string | undefined, targetWorkspaceDir: string) {
-  const deploymentPath = join(targetWorkspaceDir, ".misuzu", "platform-plugin")
-
-  return [
-    ENVIRONMENT_STANDALONE_PROMPT,
-    `Deployment target directory: ${deploymentPath}`,
-    basePrompt ?? "",
-  ].join("\n")
+function buildEnvironmentPrompt(basePrompt: string | undefined) {
+  return `${ENVIRONMENT_STANDALONE_PROMPT}\n${basePrompt ?? ""}`
 }
 
 export class EnvironmentAgent extends FeaturedAgent {
   readonly workspaceBaseDir: string
-  readonly targetWorkspaceDir: string
 
   constructor(deps: FeaturedAgentDependencies, options: EnvironmentAgentOptions = {}) {
     const workspaceBaseDir = resolve(options.workspaceBaseDir ?? deps.cwd)
-    const targetWorkspaceDir = resolve(options.targetWorkspaceDir ?? deps.cwd)
-    const {
-      workspaceBaseDir: _workspaceBaseDir,
-      targetWorkspaceDir: _targetWorkspaceDir,
-      ...featuredOptions
-    } = options
+    const { workspaceBaseDir: _workspaceBaseDir, ...featuredOptions } = options
     void _workspaceBaseDir
-    void _targetWorkspaceDir
 
-    const tools =
-      featuredOptions.tools ??
-      createEnvironmentTools(workspaceBaseDir, {
-        targetWorkspaceDir,
-      })
+    const tools = featuredOptions.tools ?? createEnvironmentTools(workspaceBaseDir)
     const skills = featuredOptions.skills ?? loadAgentSkills({ launchDir: workspaceBaseDir })
-    const systemPrompt = buildEnvironmentPrompt(
-      featuredOptions.initialState?.systemPrompt,
-      targetWorkspaceDir,
-    )
+    const systemPrompt = buildEnvironmentPrompt(featuredOptions.initialState?.systemPrompt)
 
     super(
       {
@@ -79,7 +58,6 @@ export class EnvironmentAgent extends FeaturedAgent {
     )
 
     this.workspaceBaseDir = workspaceBaseDir
-    this.targetWorkspaceDir = targetWorkspaceDir
   }
 }
 
@@ -94,6 +72,5 @@ export function createDefaultEnvironmentAgent(
   return new EnvironmentAgent(deps, {
     ...options,
     workspaceBaseDir: resolveDefaultEnvironmentBaseDir(),
-    targetWorkspaceDir: options.targetWorkspaceDir ?? deps.cwd,
   })
 }

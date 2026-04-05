@@ -5,6 +5,7 @@ import {
   type EnvironmentAgentOptions,
 } from "../../../../agents/environment.ts"
 import { SolverAgent, type SolverAgentOptions } from "../../../../agents/solver.ts"
+import { listBuiltinPlugins, type BuiltinPluginCatalogEntry } from "../../../../plugins/catalog.ts"
 import { resolveWorkspacePaths } from "../shared/paths.ts"
 import type { Container } from "../../../infrastructure/di/container.ts"
 import { loggerToken, providerRegistryToken } from "../../../infrastructure/di/tokens.ts"
@@ -17,7 +18,6 @@ import {
 } from "../base/workspace.ts"
 import { ProxyProviderBootstrap } from "../shared/proxy-provider-bootstrap.ts"
 import { CTFRuntimePersistence } from "./persistence.ts"
-import { resolveWorkspacePlatformPluginDir } from "../../../../plugins/paths.ts"
 import {
   RuntimeOrchestrator,
   SolverHub,
@@ -124,7 +124,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
   }
 
   createEnvironmentAgent(options: EnvironmentAgentOptions = {}) {
-    const { workspaceBaseDir, targetWorkspaceDir, ...agentOptions } = options
+    const { workspaceBaseDir, ...agentOptions } = options
 
     if (!workspaceBaseDir) {
       return createDefaultEnvironmentAgent(
@@ -134,10 +134,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
           providers: this.providers,
           persistence: this.persistence,
         },
-        {
-          ...agentOptions,
-          targetWorkspaceDir: targetWorkspaceDir ?? this.rootDir,
-        },
+        agentOptions,
       )
     }
 
@@ -151,7 +148,6 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
       {
         ...agentOptions,
         workspaceBaseDir,
-        targetWorkspaceDir: targetWorkspaceDir ?? this.rootDir,
       },
     )
   }
@@ -160,8 +156,8 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     return join(this.markerDir, "platform.json")
   }
 
-  get platformPluginDir() {
-    return resolveWorkspacePlatformPluginDir(this.rootDir)
+  listAvailablePlugins(): BuiltinPluginCatalogEntry[] {
+    return listBuiltinPlugins()
   }
 
   getManagedChallengeIds() {
@@ -256,8 +252,6 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
 }
 
 function registerCTFRuntimeServices(container: Container, rootDir: string) {
-  const platformPluginDir = resolveWorkspacePlatformPluginDir(rootDir)
-
   container.registerSingleton(queueToken, () => new QueueService())
   container.registerSingleton(solverWorkspaceServiceToken, (currentContainer) => {
     return new SolverWorkspaceService({
@@ -268,7 +262,6 @@ function registerCTFRuntimeServices(container: Container, rootDir: string) {
 
   container.registerSingleton(solverHubToken, (currentContainer) => {
     return new SolverHub({
-      platformPluginDir,
       logger: currentContainer.resolve(loggerToken),
       queue: currentContainer.resolve(queueToken),
       solverWorkspaces: currentContainer.resolve(solverWorkspaceServiceToken),

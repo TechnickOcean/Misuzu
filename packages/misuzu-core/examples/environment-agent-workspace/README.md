@@ -6,7 +6,7 @@ This example starts an `EnvironmentAgent` with built-in plugin workspace default
 
 - Create `CTFRuntimeWorkspace` and bootstrap provider config.
 - Create `EnvironmentAgent` through workspace factory (defaults to built-in `packages/misuzu-core/plugins`).
-- Deploy selected plugin into workspace `.misuzu/platform-plugin` using `deploy_platform_plugin`.
+- Register plugin metadata in `plugins/catalog.json` so it appears in workspace plugin selection.
 - Interact with the agent in a CLI loop.
 
 ## Usage
@@ -16,7 +16,7 @@ This example starts an `EnvironmentAgent` with built-in plugin workspace default
 2. Run:
 
 ```bash
-node --import tsx examples/environment-agent-workspace/index.ts examples/environment-agent-workspace
+node --import tsx packages/misuzu-core/examples/environment-agent-workspace/index.ts packages/misuzu-core/examples/environment-agent-workspace
 ```
 
 ## Suggested prompt
@@ -25,8 +25,9 @@ Ask the environment agent:
 
 `scaffold a plugin for a new platform named acme-ctf`
 
-Then deploy it:
+Then register it:
 
-`deploy the acme-ctf plugin to this workspace`
+`register acme-ctf in plugins/catalog.json with entry acme-ctf/index.ts`
 
 Then continue with endpoint mapping and implementation based on the `plugin-authoring` skill.
+After that, go back to workspace creation page and select `acme-ctf` from plugin list.

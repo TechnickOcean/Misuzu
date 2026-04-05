@@ -17,9 +17,15 @@ workspace.bootstrapProviders()
 const runtimeConfig = loadRuntimeConfig(workspace.platformConfigPath)
 await workspace.initializeRuntime(runtimeConfig)
 
+const availablePlugins = workspace.listAvailablePlugins()
+const selectedPluginLabel = runtimeConfig.pluginId ?? "(inline plugin object)"
+
 console.log(`Workspace: ${workspace.rootDir}`)
 console.log(`Platform config: ${workspace.platformConfigPath}`)
-console.log(`Platform plugin dir: ${workspace.platformPluginDir}`)
+console.log(
+  `Available plugins: ${availablePlugins.map((entry) => `${entry.id} (${entry.name})`).join(", ") || "(none)"}`,
+)
+console.log(`Selected plugin: ${selectedPluginLabel}`)
 console.log(`Managed challenge count: ${workspace.getManagedChallengeIds().length}`)
 console.log("Type /challenges, /sync, /notice, /quit")
 

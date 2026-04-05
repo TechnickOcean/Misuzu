@@ -72,6 +72,13 @@ export {
   providerRegistryToken,
 } from "./core/infrastructure/di/tokens.ts"
 export {
+  type BuiltinPluginCatalogEntry,
+  findBuiltinPlugin,
+  listBuiltinPlugins,
+  loadBuiltinPluginCatalog,
+  resolveBuiltinPluginEntryPath,
+} from "./plugins/catalog.ts"
+export {
+  resolveBuiltinPluginCatalogPath,
   resolveBuiltinPluginWorkspaceDir,
-  resolveWorkspacePlatformPluginDir,
 } from "./plugins/paths.ts"

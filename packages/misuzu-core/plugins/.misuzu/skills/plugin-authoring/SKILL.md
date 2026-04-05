@@ -1,6 +1,6 @@
 ---
 name: plugin-authoring
-description: Build a CTF platform plugin in the built-in plugins workspace, then deploy it into .misuzu/platform-plugin for runtime use.
+description: Build a CTF platform plugin in the built-in plugins workspace and register it in plugins/catalog.json for runtime selection.
 allowed-tools: Read, Find, Grep, Edit, Write, Bash(curl:*), Bash(vp check), Bash(vp test)
 ---
 
@@ -22,7 +22,7 @@ At minimum, generate:
 
 1. `plugins/<plugin-id>/index.ts` (adapter implementation)
 2. `plugins/<plugin-id>/README.md` (config + endpoint notes + caveats)
-3. `deploy_platform_plugin` result under target `.misuzu/platform-plugin`
+3. `plugins/catalog.json` contains an entry for `<plugin-id>`
 
 Do not move runtime policy into the plugin.
 
@@ -132,15 +132,15 @@ Implement `openContainer` and `destroyContainer` with post-action verification:
 - read challenge detail again
 - validate resulting state (`instanceEntry` exists or cleared)
 
-### 8) Deploy to workspace runtime plugin directory
+### 8) Register plugin in catalog
 
-Use `deploy_platform_plugin` after implementation:
+After implementation, ensure `plugins/catalog.json` has an entry:
 
-- Source: built-in plugin workspace plugin directory
-- Target: `<workspace>/.misuzu/platform-plugin`
-- Ensure deployed `index.ts` imports local files (for example `./protocol.ts`, `./utils.ts`)
+- `id`: plugin id
+- `name`: display name for workspace creation page
+- `entry`: plugin entry path such as `<plugin-id>/index.ts`
 
-Then configure `<workspace>/.misuzu/platform.json` with matching `pluginId` and plugin config.
+Then users can select this plugin id in workspace creation/config pages and set `.misuzu/platform.json` accordingly.
 
 ### 9) Document caveats
 
@@ -165,6 +165,6 @@ In plugin README, explicitly document:
 - `vp check` passes
 - `vp test` passes
 - README includes example config and limitations
-- plugin is deployed into target `.misuzu/platform-plugin`
+- plugin is registered in `plugins/catalog.json`
 - `bindContest` supports `auto/id/title/url`
 - submit flow and update polling are both implemented and tested against real responses
