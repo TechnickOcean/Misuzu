@@ -26,6 +26,11 @@ export declare class GzctfPlugin implements CTFPlatformPlugin {
   refreshAuth(session: AuthSession): Promise<AuthSession>
   ensureAuthenticated(): Promise<AuthSession>
   getAuthSession(): AuthSession | null
+  getPersistedState(): {
+    authSession: AuthSession | null
+    contestId: number | undefined
+  }
+  restoreFromPersistedState(state: Record<string, unknown>): void
   listContests(): Promise<
     {
       id: number

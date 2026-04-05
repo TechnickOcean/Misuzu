@@ -90,6 +90,24 @@ function normalizeHint(hint: string | { content?: string; text?: string }) {
   return hint.content ?? hint.text ?? ""
 }
 
+function isAuthSession(value: unknown): value is AuthSession {
+  if (!value || typeof value !== "object") {
+    return false
+  }
+
+  const candidate = value as Partial<AuthSession>
+  if (
+    candidate.mode !== "manual" &&
+    candidate.mode !== "cookie" &&
+    candidate.mode !== "token" &&
+    candidate.mode !== "credentials"
+  ) {
+    return false
+  }
+
+  return typeof candidate.refreshable === "boolean"
+}
+
 function isContainerActive(detail: GzctfChallengeDetailResponse) {
   return Boolean(detail.context?.instanceEntry)
 }
@@ -130,9 +148,22 @@ export class GzctfPlugin implements CTFPlatformPlugin {
     this.config = config
     this.baseUrl = trimTrailingSlash(config.baseUrl)
 
-    this.authSession = await this.login(config.auth)
+    if (!this.authSession) {
+      this.authSession = await this.login(config.auth)
+    }
+
     await this.ensureAuthenticated()
-    await this.bindContest(config.contest)
+
+    if (typeof this.contestId === "number") {
+      const contests = await this.listContests()
+      if (!contests.some((contest) => contest.id === this.contestId)) {
+        this.contestId = undefined
+      }
+    }
+
+    if (!this.contestId) {
+      await this.bindContest(config.contest)
+    }
   }
 
   async login(auth: PluginAuthConfig = { mode: "manual" }): Promise<AuthSession> {
@@ -200,6 +231,23 @@ export class GzctfPlugin implements CTFPlatformPlugin {
 
   getAuthSession(): AuthSession | null {
     return this.authSession
+  }
+
+  getPersistedState() {
+    return {
+      authSession: this.authSession,
+      contestId: this.contestId,
+    }
+  }
+
+  restoreFromPersistedState(state: Record<string, unknown>) {
+    if (isAuthSession(state.authSession)) {
+      this.authSession = state.authSession
+    }
+
+    if (typeof state.contestId === "number" && Number.isInteger(state.contestId)) {
+      this.contestId = state.contestId
+    }
   }
 
   async listContests() {

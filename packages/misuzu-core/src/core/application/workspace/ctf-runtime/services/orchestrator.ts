@@ -16,6 +16,10 @@ export interface RuntimeInitOptions {
   pluginConfig: PluginConfig
   plugin?: CTFPlatformPlugin
   cron?: RuntimeCronOptions
+  restore?: {
+    pluginState?: Record<string, unknown>
+    noticeCursor?: string
+  }
 }
 
 export interface RuntimeScheduler {

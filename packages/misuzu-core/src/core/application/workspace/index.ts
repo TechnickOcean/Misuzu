@@ -21,6 +21,14 @@ export {
 } from "./ctf-runtime/workspace.ts"
 export {
   CTF_RUNTIME_STATE_VERSION,
+  type PersistedCTFRuntimeConfig,
+  type PersistedCTFRuntimeSnapshot,
+  type PersistedCTFRuntimeQueueState,
+  type PersistedCTFRuntimeQueueTask,
+  type PersistedCTFRuntimeInflightTask,
+  type PersistedCTFRuntimeSyncState,
+  type PersistedCTFRuntimeSolverHubState,
+  type PersistedCTFRuntimeManagedChallenge,
   type PersistedCTFRuntimeState,
   type PersistedCTFRuntimeWorkspaceState,
 } from "./ctf-runtime/state.ts"

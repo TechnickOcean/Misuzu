@@ -1,3 +1,9 @@
+import type {
+  PersistedCTFRuntimeInflightTask,
+  PersistedCTFRuntimeQueueState,
+  PersistedCTFRuntimeQueueTask,
+} from "../state.ts"
+
 export interface SolverTask {
   taskId: string
   payload: unknown
@@ -20,12 +26,20 @@ interface PendingSolverTask {
   reject: (error: unknown) => void
 }
 
+type QueueStateChangeListener = () => void
+
 export class QueueService {
   private readonly solverRegistry = new Map<string, SolverRunner>()
   private readonly pendingTaskQueue: PendingSolverTask[] = []
   private readonly idleSolverQueue: string[] = []
   private readonly busySolverIds = new Set<string>()
+  private readonly inflightTasks = new Map<string, SolverTask>()
   private taskSequence = 0
+  private onStateChanged: QueueStateChangeListener = () => {}
+
+  setStateChangeListener(listener: QueueStateChangeListener) {
+    this.onStateChanged = listener
+  }
 
   registerSolver(solver: SolverRunner) {
     if (this.solverRegistry.has(solver.solverId)) {
@@ -34,6 +48,7 @@ export class QueueService {
 
     this.solverRegistry.set(solver.solverId, solver)
     this.idleSolverQueue.push(solver.solverId)
+    this.notifyStateChanged()
     this.scheduleDispatch()
   }
 
@@ -44,6 +59,9 @@ export class QueueService {
     if (solverIndex >= 0) {
       this.idleSolverQueue.splice(solverIndex, 1)
     }
+
+    this.inflightTasks.delete(solverId)
+    this.notifyStateChanged()
   }
 
   enqueueTask(payload: unknown, taskId = this.nextTaskId()) {
@@ -51,8 +69,58 @@ export class QueueService {
 
     return new Promise<SolverTaskResult>((resolve, reject) => {
       this.pendingTaskQueue.push({ task, resolve, reject })
+      this.notifyStateChanged()
       this.scheduleDispatch()
     })
+  }
+
+  restoreState(state: PersistedCTFRuntimeQueueState | undefined) {
+    if (!state) {
+      return
+    }
+
+    this.taskSequence = Number.isFinite(state.taskSequence)
+      ? Math.max(0, Math.floor(state.taskSequence))
+      : 0
+
+    this.pendingTaskQueue.length = 0
+    this.inflightTasks.clear()
+    const seenTaskIds = new Set<string>()
+    for (const task of state.inflightTasks) {
+      if (seenTaskIds.has(task.taskId)) {
+        continue
+      }
+
+      seenTaskIds.add(task.taskId)
+      this.enqueueRestoredTask({ taskId: task.taskId, payload: task.payload })
+    }
+
+    for (const task of state.pendingTasks) {
+      if (seenTaskIds.has(task.taskId)) {
+        continue
+      }
+
+      seenTaskIds.add(task.taskId)
+      this.enqueueRestoredTask(task)
+    }
+
+    this.notifyStateChanged()
+    this.scheduleDispatch()
+  }
+
+  snapshotState(): PersistedCTFRuntimeQueueState {
+    return {
+      taskSequence: this.taskSequence,
+      pendingTasks: this.pendingTaskQueue.map((pendingTask) => ({
+        taskId: pendingTask.task.taskId,
+        payload: pendingTask.task.payload,
+      })),
+      inflightTasks: [...this.inflightTasks.entries()].map(([solverId, task]) => ({
+        solverId,
+        taskId: task.taskId,
+        payload: task.payload,
+      })),
+    }
   }
 
   getState() {
@@ -84,6 +152,8 @@ export class QueueService {
       }
 
       this.busySolverIds.add(solverId)
+      this.inflightTasks.set(solverId, pendingTask.task)
+      this.notifyStateChanged()
 
       void Promise.resolve(solver.solve(pendingTask.task))
         .then((output) => {
@@ -98,13 +168,32 @@ export class QueueService {
         })
         .finally(() => {
           this.busySolverIds.delete(solverId)
+          this.inflightTasks.delete(solverId)
 
           if (this.solverRegistry.has(solverId)) {
             this.idleSolverQueue.push(solverId)
           }
 
+          this.notifyStateChanged()
           this.scheduleDispatch()
         })
     }
+  }
+
+  private enqueueRestoredTask(
+    task: PersistedCTFRuntimeQueueTask | PersistedCTFRuntimeInflightTask,
+  ) {
+    this.pendingTaskQueue.push({
+      task: {
+        taskId: task.taskId,
+        payload: task.payload,
+      },
+      resolve: () => {},
+      reject: () => {},
+    })
+  }
+
+  private notifyStateChanged() {
+    this.onStateChanged()
   }
 }

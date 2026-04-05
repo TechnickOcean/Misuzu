@@ -96,6 +96,8 @@ export interface CTFPlatformPlugin {
   refreshAuth(session: AuthSession): Promise<AuthSession>
   ensureAuthenticated(): Promise<AuthSession>
   getAuthSession(): AuthSession | null
+  getPersistedState?(): Record<string, unknown>
+  restoreFromPersistedState?(state: Record<string, unknown>): Promise<void> | void
   listContests(): Promise<ContestSummary[]>
   bindContest(binding?: ContestBinding): Promise<ContestSummary>
   listChallenges(): Promise<ChallengeSummary[]>

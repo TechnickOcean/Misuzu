@@ -17,6 +17,7 @@ import {
 import type { RuntimeInitOptions } from "./orchestrator.ts"
 import { type SolverTask, type SolverTaskResult, QueueService } from "./queue.ts"
 import { SolverWorkspaceService } from "./solver-workspaces.ts"
+import type { PersistedCTFRuntimeSolverHubState, PersistedCTFRuntimeSyncState } from "../state.ts"
 
 export interface ChallengeSolverBinding {
   challenge: ChallengeSummary
@@ -40,11 +41,16 @@ export class SolverHub {
   private readonly logger: Logger
   private readonly queue: QueueService
   private readonly solverWorkspaces: SolverWorkspaceService
+  private onStateChanged: () => void = () => {}
 
   constructor(deps: SolverHubDeps) {
     this.logger = deps.logger
     this.queue = deps.queue
     this.solverWorkspaces = deps.solverWorkspaces
+  }
+
+  setStateChangeListener(listener: () => void) {
+    this.onStateChanged = listener
   }
 
   async initialize(options: RuntimeInitOptions) {
@@ -55,12 +61,17 @@ export class SolverHub {
     const plugin = options.plugin ?? (await this.resolvePluginOrThrow(options.pluginId))
     const pluginId = options.pluginId ?? plugin.meta.id
 
+    if (options.restore?.pluginState && plugin.restoreFromPersistedState) {
+      await plugin.restoreFromPersistedState(options.restore.pluginState)
+    }
+
     await plugin.setup(options.pluginConfig)
     await plugin.ensureAuthenticated()
 
     this.platformPlugin = plugin
     this.platformPluginId = pluginId
-    this.platformNoticeCursor = undefined
+    this.platformNoticeCursor = options.restore?.noticeCursor
+    this.notifyStateChanged()
   }
 
   getManagedChallengeIds() {
@@ -97,6 +108,33 @@ export class SolverHub {
 
   setNoticeCursor(cursor: string | undefined) {
     this.platformNoticeCursor = cursor
+    this.notifyStateChanged()
+  }
+
+  getPluginPersistedState() {
+    return this.platformPlugin?.getPersistedState?.()
+  }
+
+  restoreState(syncState: PersistedCTFRuntimeSyncState | undefined) {
+    if (!syncState) {
+      return
+    }
+
+    this.platformNoticeCursor = syncState.noticeCursor
+    this.notifyStateChanged()
+  }
+
+  snapshotState(): PersistedCTFRuntimeSolverHubState {
+    return {
+      managedChallenges: [...this.challengeSolvers.values()].map((binding) => ({
+        challengeId: binding.challenge.id,
+        solverId: binding.solverId,
+        title: binding.challenge.title,
+        category: binding.challenge.category,
+        score: binding.challenge.score,
+        solvedCount: binding.challenge.solvedCount,
+      })),
+    }
   }
 
   async ensureChallengeSolver(challenge: ChallengeSummary) {
@@ -133,6 +171,7 @@ export class SolverHub {
       solverId,
       solve: async (task) => this.solveWithBinding(binding, task),
     })
+    this.notifyStateChanged()
 
     this.logger.info("Challenge solver created", {
       challengeId: challenge.id,
@@ -169,6 +208,8 @@ export class SolverHub {
         "Re-check whether this changes exploit assumptions or expected flag path.",
       ].join("\n"),
     )
+
+    this.notifyStateChanged()
 
     return true
   }
@@ -268,6 +309,10 @@ export class SolverHub {
     }
 
     throw new Error("Plugin module has no supported factory export")
+  }
+
+  private notifyStateChanged() {
+    this.onStateChanged()
   }
 }
 

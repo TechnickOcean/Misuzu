@@ -4,6 +4,7 @@ import type { Logger } from "../../../infrastructure/logging/types.ts"
 import { resolveWorkspacePaths } from "../shared/paths.ts"
 import {
   CTF_RUNTIME_STATE_VERSION,
+  type PersistedCTFRuntimeSnapshot,
   type PersistedCTFRuntimeState,
   type PersistedCTFRuntimeWorkspaceState,
 } from "./state.ts"
@@ -42,17 +43,35 @@ export class CTFRuntimePersistence {
     return this.state
   }
 
-  async saveRuntimeState(runtimeState: PersistedCTFRuntimeState) {
+  async saveState(input: {
+    runtimeState?: PersistedCTFRuntimeState
+    runtime?: PersistedCTFRuntimeSnapshot
+  }) {
     this.ensureInitialized()
 
     const state: PersistedCTFRuntimeWorkspaceState = {
       version: CTF_RUNTIME_STATE_VERSION,
       lastModified: new Date().toISOString(),
-      runtimeState,
+      runtimeState: input.runtimeState,
+      runtime: input.runtime,
     }
 
     this.state = state
     await this.saveToDisk(state)
+  }
+
+  async saveRuntimeState(runtimeState: PersistedCTFRuntimeState) {
+    await this.saveState({
+      runtimeState,
+      runtime: this.state?.runtime,
+    })
+  }
+
+  async saveStructuredRuntimeState(runtime: PersistedCTFRuntimeSnapshot) {
+    await this.saveState({
+      runtime,
+      runtimeState: this.state?.runtimeState,
+    })
   }
 
   async clear() {

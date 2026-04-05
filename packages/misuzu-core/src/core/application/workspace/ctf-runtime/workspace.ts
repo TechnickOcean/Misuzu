@@ -37,7 +37,12 @@ import {
   type SolverTask,
   type SolverTaskResult,
 } from "./services/index.ts"
-import type { PersistedCTFRuntimeState } from "./state.ts"
+import {
+  CTF_RUNTIME_STATE_VERSION,
+  type PersistedCTFRuntimeConfig,
+  type PersistedCTFRuntimeSnapshot,
+  type PersistedCTFRuntimeState,
+} from "./state.ts"
 
 const runtimeWorkspaceRegistry = new Map<string, CTFRuntimeWorkspace>()
 
@@ -61,6 +66,10 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
 
   private readonly runtimePersistence: CTFRuntimePersistence
   private pendingRuntimeState?: PersistedCTFRuntimeState
+  private pendingRuntimeSnapshot?: PersistedCTFRuntimeSnapshot
+  private runtimeConfig?: PersistedCTFRuntimeConfig
+  private runtimeInitialized = false
+  private persistRuntimeTimer?: NodeJS.Timeout
   private readonly providerBootstrap: ProxyProviderBootstrap
 
   private readonly queue: QueueService
@@ -82,12 +91,20 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     this.solverHub = this.container.resolve(solverHubToken)
     this.orchestrator = this.container.resolve(orchestratorToken)
     this.solverWorkspaces = this.container.resolve(solverWorkspaceServiceToken)
+
+    this.queue.setStateChangeListener(() => {
+      this.scheduleRuntimeStatePersist()
+    })
+    this.solverHub.setStateChangeListener(() => {
+      this.scheduleRuntimeStatePersist()
+    })
   }
 
   override async initPersistence() {
     await this.runtimePersistence.initialize(this.rootDir)
     const state = this.runtimePersistence.getState()
     this.pendingRuntimeState = state?.runtimeState
+    this.pendingRuntimeSnapshot = state?.runtime
   }
 
   get providers(): ProviderRegistry {
@@ -172,11 +189,37 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
   }
 
   async initializeRuntime(options: RuntimeInitOptions) {
-    await this.orchestrator.initialize(options, {
-      registerCronJob: (name, intervalMs, handler) => {
-        this.registerCronJob(name, intervalMs, handler)
+    const restoreSnapshot = this.getMatchingPendingRuntimeSnapshot(options)
+    if (restoreSnapshot?.queue) {
+      this.queue.restoreState(restoreSnapshot.queue)
+    }
+
+    await this.orchestrator.initialize(
+      {
+        ...options,
+        restore: {
+          pluginState: restoreSnapshot?.pluginState,
+          noticeCursor: restoreSnapshot?.sync.noticeCursor,
+        },
       },
-    })
+      {
+        registerCronJob: (name, intervalMs, handler) => {
+          this.registerCronJob(name, intervalMs, handler)
+        },
+      },
+    )
+
+    this.runtimeConfig = {
+      pluginId: this.solverHub.getPluginId(),
+      pluginConfig: options.pluginConfig,
+      cron: options.cron,
+    }
+    this.runtimeInitialized = true
+    this.pendingRuntimeSnapshot = undefined
+
+    if (this.runtimePersistence.isInitialized) {
+      await this.persistRuntimeState()
+    }
   }
 
   async syncChallengesOnce() {
@@ -222,13 +265,21 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
       throw new Error("CTFRuntimeWorkspace persistence is not initialized")
     }
 
-    if (!this.runtime) {
-      throw new Error("CTFRuntimeWorkspace has no attached runtime")
+    const runtimeState = this.runtime
+      ? {
+          runtimeId: this.runtime.runtimeId,
+          payload: this.runtime.getPersistedState(),
+        }
+      : undefined
+
+    const runtimeSnapshot = this.runtimeInitialized ? this.getRuntimeSnapshot() : undefined
+    if (!runtimeState && !runtimeSnapshot) {
+      throw new Error("CTFRuntimeWorkspace has no runtime state to persist")
     }
 
-    await this.runtimePersistence.saveRuntimeState({
-      runtimeId: this.runtime.runtimeId,
-      payload: this.runtime.getPersistedState(),
+    await this.runtimePersistence.saveState({
+      runtimeState,
+      runtime: runtimeSnapshot,
     })
   }
 
@@ -237,12 +288,25 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
       throw new Error("CTFRuntimeWorkspace persistence is not initialized")
     }
 
+    if (this.persistRuntimeTimer) {
+      clearTimeout(this.persistRuntimeTimer)
+      this.persistRuntimeTimer = undefined
+    }
+
     await this.runtimePersistence.clear()
     this.pendingRuntimeState = undefined
+    this.pendingRuntimeSnapshot = undefined
+    this.runtimeConfig = undefined
+    this.runtimeInitialized = false
   }
 
   override async shutdown() {
-    if (this.runtime && this.runtimePersistence.isInitialized) {
+    if (this.persistRuntimeTimer) {
+      clearTimeout(this.persistRuntimeTimer)
+      this.persistRuntimeTimer = undefined
+    }
+
+    if ((this.runtime || this.runtimeInitialized) && this.runtimePersistence.isInitialized) {
       await this.persistRuntimeState()
     }
 
@@ -251,6 +315,71 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     await super.shutdown()
 
     this.logger.info("Workspace shutdown completed")
+  }
+
+  getPersistedRuntimeOptions() {
+    if (!this.pendingRuntimeSnapshot) {
+      return undefined
+    }
+
+    return {
+      pluginId: this.pendingRuntimeSnapshot.runtimeConfig.pluginId,
+      pluginConfig: this.pendingRuntimeSnapshot.runtimeConfig.pluginConfig,
+      cron: this.pendingRuntimeSnapshot.runtimeConfig.cron,
+    } satisfies RuntimeInitOptions
+  }
+
+  private getRuntimeSnapshot(): PersistedCTFRuntimeSnapshot {
+    if (!this.runtimeConfig) {
+      throw new Error(
+        `CTFRuntimeWorkspace snapshot is missing runtime config (version ${CTF_RUNTIME_STATE_VERSION})`,
+      )
+    }
+
+    return {
+      runtimeConfig: this.runtimeConfig,
+      pluginState: this.solverHub.getPluginPersistedState(),
+      sync: {
+        noticeCursor: this.solverHub.getNoticeCursor(),
+      },
+      queue: this.queue.snapshotState(),
+      solverHub: this.solverHub.snapshotState(),
+    }
+  }
+
+  private getMatchingPendingRuntimeSnapshot(options: RuntimeInitOptions) {
+    if (!this.pendingRuntimeSnapshot) {
+      return undefined
+    }
+
+    const expectedPluginId = options.pluginId ?? options.plugin?.meta.id
+    if (!expectedPluginId) {
+      return undefined
+    }
+
+    if (this.pendingRuntimeSnapshot.runtimeConfig.pluginId !== expectedPluginId) {
+      return undefined
+    }
+
+    return this.pendingRuntimeSnapshot
+  }
+
+  private scheduleRuntimeStatePersist() {
+    if (!this.runtimePersistence.isInitialized || !this.runtimeInitialized) {
+      return
+    }
+
+    if (this.persistRuntimeTimer) {
+      clearTimeout(this.persistRuntimeTimer)
+    }
+
+    this.persistRuntimeTimer = setTimeout(() => {
+      this.persistRuntimeTimer = undefined
+      this.persistRuntimeState().catch((error) => {
+        this.logger.warn("Failed to persist runtime state", error)
+      })
+    }, 600)
+    this.persistRuntimeTimer.unref?.()
   }
 }
 
@@ -316,8 +445,9 @@ export async function createCTFRuntimeWorkspace(options: CTFRuntimeWorkspaceOpti
   const workspace = createCTFRuntimeWorkspaceWithoutPersistence(options)
   await workspace.initPersistence()
 
-  if (options.runtime) {
-    await workspace.initializeRuntime(options.runtime)
+  const runtimeOptions = options.runtime ?? workspace.getPersistedRuntimeOptions()
+  if (runtimeOptions) {
+    await workspace.initializeRuntime(runtimeOptions)
   }
 
   return workspace

@@ -172,6 +172,10 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
 
   private updates: ContestUpdate[] = []
   private readonly detailById = new Map<number, ChallengeDetail>()
+  private pollCursor = 0
+  private readonly seenPollCursors: Array<string | undefined> = []
+  private persistedState: Record<string, unknown> = {}
+  private restoredState?: Record<string, unknown>
 
   constructor(private challenges: ChallengeSummary[]) {
     for (const challenge of challenges) {
@@ -208,6 +212,18 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
     this.updates.push(update)
   }
 
+  setPersistedState(state: Record<string, unknown>) {
+    this.persistedState = state
+  }
+
+  getRestoredState() {
+    return this.restoredState
+  }
+
+  getSeenPollCursors() {
+    return [...this.seenPollCursors]
+  }
+
   async setup(_config: PluginConfig) {}
 
   async login() {
@@ -238,6 +254,15 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
     }
   }
 
+  getPersistedState() {
+    return this.persistedState
+  }
+
+  async restoreFromPersistedState(state: Record<string, unknown>) {
+    this.restoredState = state
+    this.persistedState = state
+  }
+
   async listContests() {
     return [{ id: 1, title: "Mock Contest" }]
   }
@@ -266,11 +291,18 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
     }
   }
 
-  async pollUpdates() {
+  async pollUpdates(cursor?: string) {
+    this.seenPollCursors.push(cursor)
+
     const updates = [...this.updates]
     this.updates = []
+
+    const cursorValue = cursor ? Number(cursor) : this.pollCursor
+    const baseCursor = Number.isFinite(cursorValue) ? cursorValue : this.pollCursor
+    this.pollCursor = baseCursor + 1
+
     return {
-      cursor: String(Date.now()),
+      cursor: String(this.pollCursor),
       updates,
     }
   }
@@ -450,6 +482,68 @@ describe("ctf runtime platform integration", () => {
     expect(workspace.getManagedChallengeIds().sort((a, b) => a - b)).toEqual([101, 102])
 
     await workspace.shutdown()
+  })
+
+  test("restores plugin state, notice cursor and queue sequence from runtime snapshot", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const firstPlugin = new MockPlatformPlugin([
+      {
+        id: 151,
+        title: "persisted-runtime",
+        category: "web",
+        score: 150,
+        solvedCount: 3,
+      },
+    ])
+    firstPlugin.setPersistedState({ token: "persisted-token", phase: 1 })
+
+    const runtime = {
+      plugin: firstPlugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" as const },
+        auth: { mode: "cookie" as const, cookie: "sid=abc" },
+      },
+      cron: {
+        noticePollIntervalMs: 60_000,
+        challengeSyncIntervalMs: 60_000,
+      },
+    }
+
+    const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir, runtime })
+    const firstTask = await firstWorkspace.enqueueTask({ challenge: 151 })
+    expect(firstTask.taskId).toBe("task-1")
+
+    await firstWorkspace.syncNoticesOnce()
+    await firstWorkspace.shutdown()
+
+    const restoredPlugin = new MockPlatformPlugin([
+      {
+        id: 151,
+        title: "persisted-runtime",
+        category: "web",
+        score: 150,
+        solvedCount: 3,
+      },
+    ])
+
+    const restoredWorkspace = await createCTFRuntimeWorkspace({
+      rootDir,
+      runtime: {
+        ...runtime,
+        plugin: restoredPlugin,
+      },
+    })
+
+    expect(restoredPlugin.getRestoredState()).toEqual({ token: "persisted-token", phase: 1 })
+
+    await restoredWorkspace.syncNoticesOnce()
+    expect(restoredPlugin.getSeenPollCursors()).toContain("1")
+
+    const secondTask = await restoredWorkspace.enqueueTask({ challenge: 151 })
+    expect(secondTask.taskId).toBe("task-2")
+
+    await restoredWorkspace.shutdown()
   })
 
   test("supports platform initialization during workspace creation", async () => {
