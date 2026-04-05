@@ -1,16 +1,16 @@
 ---
 name: plugin-authoring
-description: Build a CTF platform plugin under plugins/ that matches Misuzu protocol, including contest binding, challenge APIs, flag submission flow, and runtime-only update polling.
+description: Build a CTF platform plugin in the built-in plugins workspace, then deploy it into .misuzu/platform-plugin for runtime use.
 allowed-tools: Read, Find, Grep, Edit, Write, Bash(curl:*), Bash(vp check), Bash(vp test)
 ---
 
 # Plugin Authoring Skill (Misuzu)
 
-Use this skill when adapting a CTF platform into a plugin under `plugins/`.
+Use this skill when adapting a CTF platform into a plugin under the built-in `packages/misuzu-core/plugins/` workspace.
 
 ## Goal
 
-Create a plugin that implements `plugins/protocol.ts` with minimal complexity and clear runtime boundaries:
+Create a plugin that implements protocol-compatible behavior with minimal complexity and clear runtime boundaries:
 
 - Plugin handles **platform API adaptation**.
 - Runtime handles **submission rate limits, dedupe, scheduling, and notification routing**.
@@ -22,7 +22,7 @@ At minimum, generate:
 
 1. `plugins/<plugin-id>/index.ts` (adapter implementation)
 2. `plugins/<plugin-id>/README.md` (config + endpoint notes + caveats)
-3. Optional exports update in `plugins/index.ts`
+3. `deploy_platform_plugin` result under target `.misuzu/platform-plugin`
 
 Do not move runtime policy into the plugin.
 
@@ -50,7 +50,7 @@ Optional methods:
 
 Prefer API over DOM scraping whenever possible.
 
-- If login/captcha is required, prefer importing `plugins/utils/open-headed-auth.ts` in plugin `login()` and return captured cookie auth.
+- If login/captcha is required, use plugin-local helpers (for example `./utils.ts`) in plugin `login()` and return captured cookie auth.
 - Store captured `cookieHeader` into auth session state for subsequent API probing.
 - Collect concrete examples for:
   - contest list response
@@ -132,7 +132,17 @@ Implement `openContainer` and `destroyContainer` with post-action verification:
 - read challenge detail again
 - validate resulting state (`instanceEntry` exists or cleared)
 
-### 8) Document caveats
+### 8) Deploy to workspace runtime plugin directory
+
+Use `deploy_platform_plugin` after implementation:
+
+- Source: built-in plugin workspace plugin directory
+- Target: `<workspace>/.misuzu/platform-plugin`
+- Ensure deployed `index.ts` imports local files (for example `./protocol.ts`, `./utils.ts`)
+
+Then configure `<workspace>/.misuzu/platform.json` with matching `pluginId` and plugin config.
+
+### 9) Document caveats
 
 In plugin README, explicitly document:
 
@@ -148,12 +158,13 @@ In plugin README, explicitly document:
 - Keep adapter code deterministic and typed.
 - Avoid hidden magic and platform-specific heuristics unless documented.
 - Fail fast with descriptive errors when required fields are missing.
-- Use the existing plugin implementations in `plugins/` as references.
+- Use existing implementations in `packages/misuzu-core/plugins/` as references.
 
 ## Done checklist
 
 - `vp check` passes
 - `vp test` passes
 - README includes example config and limitations
+- plugin is deployed into target `.misuzu/platform-plugin`
 - `bindContest` supports `auto/id/title/url`
 - submit flow and update polling are both implemented and tested against real responses

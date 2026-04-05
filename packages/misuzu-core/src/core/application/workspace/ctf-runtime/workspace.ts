@@ -1,29 +1,33 @@
-import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { EnvironmentAgent, type EnvironmentAgentOptions } from "../../../../agents/environment.ts"
+import {
+  EnvironmentAgent,
+  createDefaultEnvironmentAgent,
+  type EnvironmentAgentOptions,
+} from "../../../../agents/environment.ts"
 import { SolverAgent, type SolverAgentOptions } from "../../../../agents/solver.ts"
 import { resolveWorkspacePaths } from "../shared/paths.ts"
 import type { Container } from "../../../infrastructure/di/container.ts"
-import {
-  loggerToken,
-  persistenceStoreToken,
-  providerRegistryToken,
-} from "../../../infrastructure/di/tokens.ts"
-import { ProviderRegistry, type ProxyProviderOptions } from "../../providers/index.ts"
+import { loggerToken, providerRegistryToken } from "../../../infrastructure/di/tokens.ts"
+import { ProviderRegistry } from "../../providers/index.ts"
+import type { SolverWorkspace } from "../solver/workspace.ts"
 import {
   BaseWorkspace,
   type WorkspaceOptions,
   createWorkspaceContainer,
 } from "../base/workspace.ts"
+import { ProxyProviderBootstrap } from "../shared/proxy-provider-bootstrap.ts"
 import { CTFRuntimePersistence } from "./persistence.ts"
+import { resolveWorkspacePlatformPluginDir } from "../../../../plugins/paths.ts"
 import {
   RuntimeOrchestrator,
   SolverHub,
   SyncService,
   QueueService,
+  SolverWorkspaceService,
   orchestratorToken,
   queueToken,
   solverHubToken,
+  solverWorkspaceServiceToken,
   syncToken,
   type RuntimeCronOptions,
   type RuntimeInitOptions,
@@ -53,20 +57,28 @@ export type CTFSolver = SolverRunner
 export class CTFRuntimeWorkspace extends BaseWorkspace {
   runtime?: CTFRuntime
 
-  private proxyProvidersLoaded = false
   private readonly runtimePersistence: CTFRuntimePersistence
   private pendingRuntimeState?: PersistedCTFRuntimeState
+  private readonly providerBootstrap: ProxyProviderBootstrap
 
   private readonly queue: QueueService
   private readonly solverHub: SolverHub
   private readonly orchestrator: RuntimeOrchestrator
+  private readonly solverWorkspaces: SolverWorkspaceService
 
   constructor(rootDir: string, container: Container) {
     super(rootDir, container)
     this.runtimePersistence = new CTFRuntimePersistence(this.logger)
+    this.providerBootstrap = new ProxyProviderBootstrap({
+      logger: this.logger,
+      providers: this.providers,
+      providerConfigPath: this.providerConfigPath,
+      logPrefix: "[CTFRuntimeWorkspace]",
+    })
     this.queue = this.container.resolve(queueToken)
     this.solverHub = this.container.resolve(solverHubToken)
     this.orchestrator = this.container.resolve(orchestratorToken)
+    this.solverWorkspaces = this.container.resolve(solverWorkspaceServiceToken)
   }
 
   override async initPersistence() {
@@ -80,49 +92,15 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
   }
 
   loadProxyProviderOptions() {
-    try {
-      return JSON.parse(readFileSync(this.providerConfigPath, "utf-8")) as ProxyProviderOptions[]
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        this.logger.debug(
-          "[CTFRuntimeWorkspace] providers.json is missing, skip loading proxy providers",
-          {
-            providerConfigPath: this.providerConfigPath,
-          },
-        )
-        return []
-      }
-
-      this.logger.error(
-        "[CTFRuntimeWorkspace] Failed to load workspace provider config",
-        { providerConfigPath: this.providerConfigPath },
-        error,
-      )
-      throw error
-    }
+    return this.providerBootstrap.loadProxyProviderOptions()
   }
 
   bootstrapProviders() {
-    if (this.proxyProvidersLoaded) {
-      this.logger.debug(
-        "[CTFRuntimeWorkspace] provider bootstrap skipped because it is already loaded",
-      )
-      return []
-    }
-
-    const registeredModels = this.providers.registerProxyProviders(this.loadProxyProviderOptions())
-    this.proxyProvidersLoaded = true
-    this.logger.info("[CTFRuntimeWorkspace] Provider bootstrap completed", {
-      registeredModelCount: registeredModels.length,
-    })
-
-    return registeredModels
+    return this.providerBootstrap.bootstrap()
   }
 
   reloadProviderConfig() {
-    this.proxyProvidersLoaded = false
-    this.logger.info("[CTFRuntimeWorkspace] Provider config reload requested")
-    return this.bootstrapProviders()
+    return this.providerBootstrap.reload()
   }
 
   getModel(provider: string, modelId: string) {
@@ -141,8 +119,27 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     )
   }
 
+  async deriveSolverWorkspace(solverId: string): Promise<SolverWorkspace> {
+    return this.solverWorkspaces.getOrCreateWorkspace(solverId)
+  }
+
   createEnvironmentAgent(options: EnvironmentAgentOptions = {}) {
-    const workspaceBaseDir = options.workspaceBaseDir ?? join(this.rootDir, "plugins")
+    const { workspaceBaseDir, targetWorkspaceDir, ...agentOptions } = options
+
+    if (!workspaceBaseDir) {
+      return createDefaultEnvironmentAgent(
+        {
+          cwd: this.rootDir,
+          logger: this.logger.child({ component: "environment-agent" }),
+          providers: this.providers,
+          persistence: this.persistence,
+        },
+        {
+          ...agentOptions,
+          targetWorkspaceDir: targetWorkspaceDir ?? this.rootDir,
+        },
+      )
+    }
 
     return new EnvironmentAgent(
       {
@@ -152,14 +149,19 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
         persistence: this.persistence,
       },
       {
-        ...options,
+        ...agentOptions,
         workspaceBaseDir,
+        targetWorkspaceDir: targetWorkspaceDir ?? this.rootDir,
       },
     )
   }
 
   get platformConfigPath() {
     return join(this.markerDir, "platform.json")
+  }
+
+  get platformPluginDir() {
+    return resolveWorkspacePlatformPluginDir(this.rootDir)
   }
 
   getManagedChallengeIds() {
@@ -246,6 +248,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     }
 
     await this.runtime?.shutdown?.()
+    await this.solverWorkspaces.shutdown()
     await super.shutdown()
 
     this.logger.info("[CTFRuntimeWorkspace] Workspace shutdown completed")
@@ -253,15 +256,22 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
 }
 
 function registerCTFRuntimeServices(container: Container, rootDir: string) {
+  const platformPluginDir = resolveWorkspacePlatformPluginDir(rootDir)
+
   container.registerSingleton(queueToken, () => new QueueService())
+  container.registerSingleton(solverWorkspaceServiceToken, (currentContainer) => {
+    return new SolverWorkspaceService({
+      rootDir,
+      logger: currentContainer.resolve(loggerToken),
+    })
+  })
 
   container.registerSingleton(solverHubToken, (currentContainer) => {
     return new SolverHub({
-      rootDir,
+      platformPluginDir,
       logger: currentContainer.resolve(loggerToken),
-      providers: currentContainer.resolve(providerRegistryToken),
-      persistence: currentContainer.resolve(persistenceStoreToken),
       queue: currentContainer.resolve(queueToken),
+      solverWorkspaces: currentContainer.resolve(solverWorkspaceServiceToken),
     })
   })
 

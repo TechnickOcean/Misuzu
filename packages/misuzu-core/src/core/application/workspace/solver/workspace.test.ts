@@ -111,4 +111,56 @@ describe("workspace provider registry", () => {
 
     await expect(workspace.createMainAgent()).rejects.toThrow("Workspace already has a main agent")
   })
+
+  test("uses parent config root for providers and skills", async () => {
+    const sourceModel = getModels("openai")[0]
+    expect(sourceModel).toBeDefined()
+
+    const parentDir = await mkdtemp(join(tmpdir(), "misuzu-parent-workspace-"))
+    const solverDir = join(parentDir, "solvers", "solver-a")
+    tempDirs.push(parentDir)
+
+    await mkdir(join(parentDir, ".misuzu", "skills", "parent-skill"), { recursive: true })
+    await writeFile(
+      join(parentDir, ".misuzu", "skills", "parent-skill", "SKILL.md"),
+      [
+        "---",
+        "name: parent-skill",
+        "description: parent skill",
+        "---",
+        "",
+        "Parent skill body",
+      ].join("\n"),
+      "utf-8",
+    )
+
+    await writeFile(
+      join(parentDir, ".misuzu", "providers.json"),
+      JSON.stringify(
+        [
+          {
+            provider: "parent-provider",
+            baseProvider: "openai",
+            modelMappings: [sourceModel!.id],
+          },
+        ],
+        null,
+        2,
+      ),
+      "utf-8",
+    )
+
+    const workspace = createSolverWorkspaceWithoutPersistence({
+      rootDir: solverDir,
+      configRootDir: parentDir,
+    })
+
+    workspace.bootstrap()
+    expect(workspace.getModel("parent-provider", sourceModel!.id)).toBeDefined()
+
+    const solver = await workspace.createMainAgent()
+    expect(solver.state.systemPrompt).toContain("parent-skill")
+    expect(workspace.rootDir).toBe(solverDir)
+    expect(workspace.configRootDir).toBe(parentDir)
+  })
 })

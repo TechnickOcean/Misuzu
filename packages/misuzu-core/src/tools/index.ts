@@ -5,6 +5,7 @@ import { createWriteTool } from "./base/write.ts"
 import { createEditTool } from "./base/edit.ts"
 import { createFindTool } from "./base/find.ts"
 import { createGrepTool } from "./base/grep.ts"
+import { createPluginDeployTool } from "./misuzu/plugin-deploy.ts"
 import { createPluginScaffoldTool } from "./misuzu/plugin-scaffold.ts"
 
 export {
@@ -34,6 +35,7 @@ export {
   createFindTool,
 } from "./base/find.ts"
 export { type GrepToolDetails, type GrepToolInput, createGrepTool } from "./base/grep.ts"
+export { type PluginDeployToolInput, createPluginDeployTool } from "./misuzu/plugin-deploy.ts"
 export { type PluginScaffoldToolInput, createPluginScaffoldTool } from "./misuzu/plugin-scaffold.ts"
 
 export function createBaseTools(cwd: string): AgentTool<any>[] {
@@ -51,6 +53,17 @@ export function createReadOnlyTools(cwd: string): AgentTool<any>[] {
   return [createReadTool(cwd), createGrepTool(cwd), createFindTool(cwd)]
 }
 
-export function createEnvironmentTools(cwd: string): AgentTool<any>[] {
-  return [...createBaseTools(cwd), createPluginScaffoldTool(cwd)]
+export interface EnvironmentToolsOptions {
+  targetWorkspaceDir?: string
+}
+
+export function createEnvironmentTools(
+  cwd: string,
+  options: EnvironmentToolsOptions = {},
+): AgentTool<any>[] {
+  return [
+    ...createBaseTools(cwd),
+    createPluginScaffoldTool(cwd),
+    createPluginDeployTool(cwd, options.targetWorkspaceDir),
+  ]
 }

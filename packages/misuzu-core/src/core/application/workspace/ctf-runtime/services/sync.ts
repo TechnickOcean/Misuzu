@@ -1,4 +1,4 @@
-import type { ContestUpdate } from "../../../../../../../../plugins/index.ts"
+import type { ContestUpdate } from "../../../../../../plugins/index.ts"
 import type { Logger } from "../../../../infrastructure/logging/types.ts"
 import { SolverHub } from "./solver-hub.ts"
 

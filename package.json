@@ -33,8 +33,7 @@
   },
   "dependencies": {
     "@types/node": "catalog:",
-    "dotenv": "catalog:",
-    "playwright": "catalog:"
+    "dotenv": "catalog:"
   },
   "devDependencies": {
     "vite-plus": "catalog:"

@@ -9,7 +9,7 @@ import type {
   PluginConfig,
   PollResult,
 } from "../protocol.ts"
-import { openHeadedAuth } from "../utils/open-headed-auth.ts"
+import { openHeadedAuth } from "../utils.ts"
 
 interface GzctfContest {
   id: number
@@ -495,9 +495,9 @@ export class GzctfPlugin implements CTFPlatformPlugin {
   }
 
   private withAuthHeaders(
-    headers: HeadersInit | undefined,
+    headers: RequestInit["headers"],
     session?: AuthSession | null,
-  ): HeadersInit {
+  ): RequestInit["headers"] {
     const output = new Headers(headers)
 
     if (session?.cookie && !output.has("cookie")) {

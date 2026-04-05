@@ -1,6 +1,7 @@
 export { BaseWorkspace, type WorkspaceOptions, createWorkspaceContainer } from "./base/workspace.ts"
 export {
   SolverWorkspace,
+  type SolverWorkspaceOptions,
   createSolverWorkspace,
   createSolverWorkspaceWithoutPersistence,
   getSolverWorkspace,

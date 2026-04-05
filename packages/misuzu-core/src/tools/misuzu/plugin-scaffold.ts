@@ -2,6 +2,7 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { type Static, Type } from "@sinclair/typebox"
+import { resolveBuiltinPluginWorkspaceDir } from "../../plugins/paths.ts"
 
 const pluginScaffoldSchema = Type.Object({
   pluginId: Type.String({
@@ -18,23 +19,32 @@ export function createPluginScaffoldTool(cwd: string): AgentTool<typeof pluginSc
   return {
     name: "scaffold_plugin",
     label: "scaffold_plugin",
-    description: "Create a protocol-compliant plugin scaffold under current plugins workspace.",
+    description: "Create a protocol-compliant scaffold in built-in plugins workspace.",
     parameters: pluginScaffoldSchema,
     async execute(_toolCallId, params) {
-      const pluginDir = join(cwd, params.pluginId)
+      const pluginWorkspaceDir = await resolvePluginWorkspaceDir(cwd)
+      const pluginDir = join(pluginWorkspaceDir, params.pluginId)
       const overwrite = params.overwrite ?? false
 
+      await mkdir(pluginWorkspaceDir, { recursive: true })
       await mkdir(pluginDir, { recursive: true })
 
       const indexPath = join(pluginDir, "index.ts")
+      const protocolPath = join(pluginDir, "protocol.ts")
       const readmePath = join(pluginDir, "README.md")
+      const utilsPath = join(pluginDir, "utils.ts")
+
+      const sourceProtocolPath = join(pluginWorkspaceDir, "protocol.ts")
+      const sourceUtilsPath = join(pluginWorkspaceDir, "utils.ts")
 
       await writeIfAllowed(indexPath, buildIndexTemplate(params.pluginId), overwrite)
+      await copyIfAllowed(sourceProtocolPath, protocolPath, overwrite)
       await writeIfAllowed(
         readmePath,
         buildReadmeTemplate(params.pluginId, params.displayName),
         overwrite,
       )
+      await copyIfAllowed(sourceUtilsPath, utilsPath, overwrite)
 
       return {
         content: [
@@ -44,8 +54,9 @@ export function createPluginScaffoldTool(cwd: string): AgentTool<typeof pluginSc
           },
         ],
         details: {
+          pluginWorkspaceDir,
           pluginDir,
-          files: [indexPath, readmePath],
+          files: [indexPath, protocolPath, readmePath, utilsPath],
           overwrite,
         },
       }
@@ -64,6 +75,22 @@ async function writeIfAllowed(path: string, content: string, overwrite: boolean)
   await writeFile(path, content, "utf-8")
 }
 
+async function copyIfAllowed(sourcePath: string, targetPath: string, overwrite: boolean) {
+  if (!(await exists(sourcePath))) {
+    throw new Error(`Required plugin support file is missing: ${sourcePath}`)
+  }
+
+  if (!overwrite && (await exists(targetPath))) {
+    const current = await readFile(targetPath, "utf-8")
+    if (current.trim().length > 0) {
+      return
+    }
+  }
+
+  const content = await readFile(sourcePath, "utf-8")
+  await writeFile(targetPath, content, "utf-8")
+}
+
 async function exists(path: string) {
   try {
     await access(path)
@@ -71,6 +98,11 @@ async function exists(path: string) {
   } catch {
     return false
   }
+}
+
+async function resolvePluginWorkspaceDir(cwd: string) {
+  void cwd
+  return resolveBuiltinPluginWorkspaceDir()
 }
 
 function buildIndexTemplate(pluginId: string) {
@@ -90,8 +122,8 @@ function buildIndexTemplate(pluginId: string) {
   PluginConfig,
   PollResult,
   SubmitResult,
-} from "../protocol.ts"
-import { openHeadedAuth } from "../utils/open-headed-auth.ts"
+} from "./protocol.ts"
+import { openHeadedAuth } from "./utils.ts"
 
 export class ${className}Plugin implements CTFPlatformPlugin {
   readonly meta = {
@@ -185,7 +217,8 @@ Platform: ${displayName ?? pluginId}
 
 ## Notes
 
-- Implement protocol methods from \`plugins/protocol.ts\`.
+- Keep plugin imports deployable: use local imports like \`./protocol.ts\` and \`./utils.ts\`.
+- After implementation, deploy plugin files to target workspace \`.misuzu/platform-plugin\`.
 - Keep notice polling runtime-only and avoid exposing it directly to solver tools.
 `
 }

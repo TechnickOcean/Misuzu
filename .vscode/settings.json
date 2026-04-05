@@ -7,5 +7,14 @@
   "editor.formatOnSaveMode": "file",
   "editor.codeActionsOnSave": {
     "source.fixAll.oxc": "explicit"
+  },
+  "files.exclude": {
+    "**/.git": true,
+    "**/.svn": true,
+    "**/.hg": true,
+    "**/.DS_Store": true,
+    "**/.vite-hooks": true,
+    "**/Thumbs.db": true,
+    "**/node_modules": true
   }
 }

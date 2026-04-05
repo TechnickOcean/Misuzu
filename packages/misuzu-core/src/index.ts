@@ -3,7 +3,12 @@ export {
   type FeaturedAgentDependencies,
   type FeaturedAgentOptions,
 } from "./agents/featured.ts"
-export { EnvironmentAgent, type EnvironmentAgentOptions } from "./agents/environment.ts"
+export {
+  EnvironmentAgent,
+  createDefaultEnvironmentAgent,
+  resolveDefaultEnvironmentBaseDir,
+  type EnvironmentAgentOptions,
+} from "./agents/environment.ts"
 export { SolverAgent, type SolverAgentOptions } from "./agents/solver.ts"
 export {
   ProviderRegistry,
@@ -28,6 +33,7 @@ export {
   type CTFRuntimeWorkspaceOptions,
   type RuntimeCronOptions,
   type RuntimeInitOptions,
+  type SolverWorkspaceOptions,
   type PersistedCTFRuntimeState,
   type PersistedCTFRuntimeWorkspaceState,
   type WorkspaceOptions,
@@ -65,3 +71,7 @@ export {
   persistenceStoreToken,
   providerRegistryToken,
 } from "./core/infrastructure/di/tokens.ts"
+export {
+  resolveBuiltinPluginWorkspaceDir,
+  resolveWorkspacePlatformPluginDir,
+} from "./plugins/paths.ts"

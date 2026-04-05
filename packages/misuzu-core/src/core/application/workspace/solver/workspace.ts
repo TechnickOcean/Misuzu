@@ -1,11 +1,11 @@
-import { readFileSync } from "node:fs"
 import { AgentStateProxy } from "../../../../agents/features/agent-state-proxy.ts"
 import { loadAgentSkills } from "../../../../agents/features/skill.ts"
 import { SolverAgent, type SolverAgentOptions } from "../../../../agents/solver.ts"
 import type { Container } from "../../../infrastructure/di/container.ts"
 import { providerRegistryToken } from "../../../infrastructure/di/tokens.ts"
-import { ProviderRegistry, type ProxyProviderOptions } from "../../providers/index.ts"
+import { ProviderRegistry } from "../../providers/index.ts"
 import { resolveWorkspacePaths } from "../shared/paths.ts"
+import { ProxyProviderBootstrap } from "../shared/proxy-provider-bootstrap.ts"
 import {
   BaseWorkspace,
   type WorkspaceOptions,
@@ -14,14 +14,36 @@ import {
 
 const workspaceRegistry = new Map<string, SolverWorkspace>()
 
+export interface SolverWorkspaceOptions extends WorkspaceOptions {
+  configRootDir?: string
+}
+
 export class SolverWorkspace extends BaseWorkspace {
   mainAgent?: SolverAgent
-  private proxyProvidersLoaded = false
   private agentStateProxy?: AgentStateProxy
   private unsubscribeAgentTracking?: () => void
+  readonly configRootDir: string
 
-  constructor(rootDir: string, container: Container) {
+  private readonly providerBootstrap: ProxyProviderBootstrap
+
+  constructor(rootDir: string, container: Container, options: SolverWorkspaceOptions = {}) {
     super(rootDir, container)
+
+    const configPaths = resolveWorkspacePaths(options.configRootDir ?? rootDir)
+    this.configRootDir = configPaths.rootDir
+
+    this.providerBootstrap = new ProxyProviderBootstrap({
+      logger: this.logger,
+      providers: this.providers,
+      providerConfigPath: configPaths.providerConfigPath,
+      logPrefix: "[SolverWorkspace]",
+      onProvidersLoaded: () => {
+        const persistence = this.persistence
+        if (persistence) {
+          void this.safePersist(() => persistence.recordChange({ type: "providers-loaded" }))
+        }
+      },
+    })
   }
 
   async createMainAgent(options: SolverAgentOptions = {}) {
@@ -52,49 +74,15 @@ export class SolverWorkspace extends BaseWorkspace {
   }
 
   loadProxyProviderOptions() {
-    try {
-      return JSON.parse(readFileSync(this.providerConfigPath, "utf-8")) as ProxyProviderOptions[]
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        this.logger.debug("[Workspace] providers.json is missing, skip loading proxy providers", {
-          providerConfigPath: this.providerConfigPath,
-        })
-        return []
-      }
-
-      this.logger.error(
-        "[Workspace] Failed to load workspace provider config",
-        { providerConfigPath: this.providerConfigPath },
-        error,
-      )
-      throw error
-    }
+    return this.providerBootstrap.loadProxyProviderOptions()
   }
 
   bootstrap() {
-    if (this.proxyProvidersLoaded) {
-      this.logger.debug("[Workspace] bootstrap skipped because it is already loaded")
-      return []
-    }
-
-    const registeredModels = this.providers.registerProxyProviders(this.loadProxyProviderOptions())
-    this.proxyProvidersLoaded = true
-    this.logger.info("Workspace bootstrap completed", {
-      registeredModelCount: registeredModels.length,
-    })
-
-    const persistence = this.persistence
-    if (persistence) {
-      void this.safePersist(() => persistence.recordChange({ type: "providers-loaded" }))
-    }
-
-    return registeredModels
+    return this.providerBootstrap.bootstrap()
   }
 
   reloadConfig() {
-    this.proxyProvidersLoaded = false
-    this.logger.info("[Workspace] Config reload requested")
-    return this.bootstrap()
+    return this.providerBootstrap.reload()
   }
 
   getModel(provider: string, modelId: string) {
@@ -163,7 +151,7 @@ export class SolverWorkspace extends BaseWorkspace {
       ...options.initialState,
       systemPrompt: baseSystemPrompt,
     }
-    const skills = options.skills ?? loadAgentSkills({ launchDir: this.rootDir })
+    const skills = options.skills ?? loadAgentSkills({ launchDir: this.configRootDir })
 
     const agent = new SolverAgent(
       {
@@ -229,16 +217,17 @@ export class SolverWorkspace extends BaseWorkspace {
   }
 }
 
-export function createSolverWorkspaceWithoutPersistence(options: WorkspaceOptions = {}) {
+export function createSolverWorkspaceWithoutPersistence(options: SolverWorkspaceOptions = {}) {
   const rootDir = options.rootDir ?? process.cwd()
   const paths = resolveWorkspacePaths(rootDir)
   return new SolverWorkspace(
     paths.rootDir,
     createWorkspaceContainer(paths.rootDir, options.configureContainer),
+    options,
   )
 }
 
-export async function createSolverWorkspace(options: WorkspaceOptions = {}) {
+export async function createSolverWorkspace(options: SolverWorkspaceOptions = {}) {
   const workspace = createSolverWorkspaceWithoutPersistence(options)
   await workspace.initPersistence()
   return workspace

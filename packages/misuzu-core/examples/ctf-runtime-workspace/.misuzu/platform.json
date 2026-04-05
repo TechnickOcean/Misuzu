@@ -1,0 +1,17 @@
+{
+  "pluginId": "gzctf",
+  "pluginConfig": {
+    "baseUrl": "https://jnctf.jiangnan.edu.cn",
+    "contest": {
+      "mode": "id",
+      "value": 2
+    },
+    "auth": {
+      "mode": "manual"
+    }
+  },
+  "cron": {
+    "noticePollIntervalMs": 60000,
+    "challengeSyncIntervalMs": 120000
+  }
+}

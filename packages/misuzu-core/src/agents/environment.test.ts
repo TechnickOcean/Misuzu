@@ -1,11 +1,15 @@
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, normalize } from "node:path"
 import { afterEach, describe, expect, test } from "vite-plus/test"
 import type { PersistenceStore } from "../core/application/persistence/store.ts"
 import { ProviderRegistry } from "../core/application/providers/index.ts"
 import type { Logger } from "../core/infrastructure/logging/types.ts"
-import { EnvironmentAgent } from "./environment.ts"
+import {
+  EnvironmentAgent,
+  createDefaultEnvironmentAgent,
+  resolveDefaultEnvironmentBaseDir,
+} from "./environment.ts"
 
 const tempDirs: string[] = []
 
@@ -82,5 +86,31 @@ describe("environment agent", () => {
     expect(environmentAgent.state.systemPrompt).toContain("Environment agent")
     expect(environmentAgent.state.systemPrompt).toContain("custom-plugin-skill")
     expect(environmentAgent.state.tools.map((tool) => tool.name)).toContain("scaffold_plugin")
+    expect(environmentAgent.state.tools.map((tool) => tool.name)).toContain(
+      "deploy_platform_plugin",
+    )
+  })
+
+  test("default factory uses built-in plugins workspace and target deployment path", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "misuzu-env-target-"))
+    tempDirs.push(workspaceRoot)
+
+    const environmentAgent = createDefaultEnvironmentAgent({
+      cwd: workspaceRoot,
+      logger: noopLogger,
+      providers: new ProviderRegistry(),
+      persistence: noopPersistence,
+    })
+
+    expect(normalize(environmentAgent.workspaceBaseDir)).toBe(
+      normalize(resolveDefaultEnvironmentBaseDir()),
+    )
+    expect(environmentAgent.targetWorkspaceDir).toBe(workspaceRoot)
+    expect(environmentAgent.state.systemPrompt).toContain("Standard plugin workflow")
+    expect(environmentAgent.state.systemPrompt).toContain("deploy_platform_plugin")
+    expect(environmentAgent.state.systemPrompt).toContain("plugin-authoring skill")
+    expect(environmentAgent.state.systemPrompt).toContain(
+      normalize(join(workspaceRoot, ".misuzu", "platform-plugin")),
+    )
   })
 })

@@ -1,15 +1,18 @@
 import "dotenv/config"
 import { createInterface } from "node:readline"
-import { join, resolve } from "node:path"
-import { createSolverWorkspace } from "../packages/misuzu-core/src/core/application/workspace/index.ts"
-const workspaceRootDir = resolve(process.argv[2] ?? join(process.cwd(), "examples", "workspace"))
+import { dirname, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+import { createSolverWorkspace } from "@/core/application/workspace/index.ts"
+
+const defaultWorkspaceRootDir = dirname(fileURLToPath(import.meta.url))
+const workspaceRootDir = resolve(process.argv[2] ?? defaultWorkspaceRootDir)
 const workspace = await createSolverWorkspace({ rootDir: workspaceRootDir })
 workspace.bootstrap()
 const model = workspace.providers.getModel("rightcode", "gpt-5.2")
-let featuredAgent = workspace.mainAgent
+let mainAgent = workspace.mainAgent
 
-if (!featuredAgent)
-  featuredAgent = await workspace.createMainAgent({
+if (!mainAgent)
+  mainAgent = await workspace.createMainAgent({
     initialState: {
       model,
     },
@@ -17,7 +20,7 @@ if (!featuredAgent)
 
 let streamedText = true
 
-featuredAgent.subscribe((event) => {
+mainAgent.subscribe((event) => {
   if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
     streamedText = true
     process.stdout.write(event.assistantMessageEvent.delta)
@@ -60,7 +63,7 @@ readline.on("line", async (line) => {
   }
 
   if (input === "/compact") {
-    featuredAgent
+    mainAgent
       .compact()
       .then((_e) => readline.prompt())
       .catch(() => {})
@@ -73,7 +76,7 @@ readline.on("line", async (line) => {
   }
 
   try {
-    await featuredAgent.prompt(input)
+    await mainAgent.prompt(input)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     console.error(`Request failed: ${message}`)

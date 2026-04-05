@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, test } from "vite-plus/test"
@@ -10,7 +10,7 @@ import type {
   ChallengeSummary,
   ContestUpdate,
   PluginConfig,
-} from "../../../../../../../plugins/index.ts"
+} from "../../../../../plugins/index.ts"
 
 const tempDirs: string[] = []
 
@@ -18,6 +18,76 @@ async function createRuntimeWorkspaceDir() {
   const dir = await mkdtemp(join(tmpdir(), "misuzu-ctf-runtime-"))
   tempDirs.push(dir)
   return dir
+}
+
+async function writeDeployedPlatformPlugin(rootDir: string, pluginId: string) {
+  const platformPluginDir = join(rootDir, ".misuzu", "platform-plugin")
+  await mkdir(platformPluginDir, { recursive: true })
+
+  await writeFile(
+    join(platformPluginDir, "index.ts"),
+    [
+      "export function createPlugin() {",
+      "  return {",
+      `    meta: { id: ${JSON.stringify(pluginId)}, name: ${JSON.stringify(pluginId)}, match: () => true },`,
+      "    async setup() {},",
+      "    async login() { return { mode: 'cookie', cookie: 'sid=mock', refreshable: false } },",
+      "    async refreshAuth(session) { return session },",
+      "    async ensureAuthenticated() { return { mode: 'cookie', cookie: 'sid=mock', refreshable: false } },",
+      "    getAuthSession() { return { mode: 'cookie', cookie: 'sid=mock', refreshable: false } },",
+      "    async listContests() { return [{ id: 1, title: 'Mock Contest' }] },",
+      "    async bindContest() { return { id: 1, title: 'Mock Contest' } },",
+      "    async listChallenges() { return [] },",
+      "    async getChallenge() { throw new Error('not used in this test') },",
+      "    async submitFlagRaw() { return { status: 'WrongAnswer', accepted: false } },",
+      "    async pollUpdates() { return { updates: [] } },",
+      "  }",
+      "}",
+    ].join("\n"),
+    "utf-8",
+  )
+}
+
+async function writeChallengePlatformPlugin(rootDir: string, pluginId: string) {
+  const platformPluginDir = join(rootDir, ".misuzu", "platform-plugin")
+  await mkdir(platformPluginDir, { recursive: true })
+
+  await writeFile(
+    join(platformPluginDir, "index.ts"),
+    [
+      "export function createPlugin() {",
+      "  return {",
+      `    meta: { id: ${JSON.stringify(pluginId)}, name: ${JSON.stringify(pluginId)}, match: () => true },`,
+      "    async setup() {},",
+      "    async login() { return { mode: 'cookie', cookie: 'sid=mock', refreshable: false } },",
+      "    async refreshAuth(session) { return session },",
+      "    async ensureAuthenticated() { return { mode: 'cookie', cookie: 'sid=mock', refreshable: false } },",
+      "    getAuthSession() { return { mode: 'cookie', cookie: 'sid=mock', refreshable: false } },",
+      "    async listContests() { return [{ id: 1, title: 'Mock Contest' }] },",
+      "    async bindContest() { return { id: 1, title: 'Mock Contest' } },",
+      "    async listChallenges() {",
+      "      return [{ id: 301, title: 'derived-solver', category: 'misc', score: 100, solvedCount: 0 }]",
+      "    },",
+      "    async getChallenge(challengeId) {",
+      "      return {",
+      "        id: challengeId,",
+      "        title: 'derived-solver',",
+      "        category: 'misc',",
+      "        score: 100,",
+      "        content: 'test challenge',",
+      "        hints: [],",
+      "        requiresContainer: false,",
+      "        attempts: 0,",
+      "        attachments: [],",
+      "      }",
+      "    },",
+      "    async submitFlagRaw() { return { status: 'WrongAnswer', accepted: false } },",
+      "    async pollUpdates() { return { updates: [] } },",
+      "  }",
+      "}",
+    ].join("\n"),
+    "utf-8",
+  )
 }
 
 afterEach(async () => {
@@ -278,6 +348,90 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
 }
 
 describe("ctf runtime platform integration", () => {
+  test("loads deployed platform plugin from workspace marker directory", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    await writeDeployedPlatformPlugin(rootDir, "deployed-plugin")
+
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    await workspace.initializeRuntime({
+      pluginId: "deployed-plugin",
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "cookie", cookie: "sid=abc" },
+      },
+    })
+
+    expect(workspace.getManagedChallengeIds()).toEqual([])
+    await workspace.shutdown()
+  })
+
+  test("derives solver workspace under solvers and inherits parent config", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    await mkdir(join(rootDir, ".misuzu", "skills", "parent-skill"), { recursive: true })
+    await writeFile(
+      join(rootDir, ".misuzu", "skills", "parent-skill", "SKILL.md"),
+      [
+        "---",
+        "name: parent-skill",
+        "description: inherited skill from parent workspace",
+        "---",
+        "",
+        "Parent skill body",
+      ].join("\n"),
+      "utf-8",
+    )
+
+    const sourceModel = getModels("openai")[0]
+    await mkdir(join(rootDir, ".misuzu"), { recursive: true })
+    await writeFile(
+      join(rootDir, ".misuzu", "providers.json"),
+      JSON.stringify(
+        [
+          {
+            provider: "derived-parent-provider",
+            baseProvider: "openai",
+            modelMappings: [sourceModel!.id],
+          },
+        ],
+        null,
+        2,
+      ),
+      "utf-8",
+    )
+
+    await writeChallengePlatformPlugin(rootDir, "deployed-plugin")
+
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+    await workspace.initializeRuntime({
+      pluginId: "deployed-plugin",
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "cookie", cookie: "sid=abc" },
+      },
+    })
+
+    expect(workspace.getManagedChallengeIds()).toEqual([301])
+
+    const derivedWorkspace = await workspace.deriveSolverWorkspace("solver-301")
+    expect(derivedWorkspace.rootDir).toBe(join(rootDir, "solvers", "solver-301"))
+    expect(derivedWorkspace.configRootDir).toBe(rootDir)
+    expect(derivedWorkspace.providerConfigPath).toBe(
+      join(rootDir, "solvers", "solver-301", ".misuzu", "providers.json"),
+    )
+    expect(derivedWorkspace.getModel("derived-parent-provider", sourceModel!.id)).toBeDefined()
+
+    const solver = workspace.getChallengeSolver(301)
+    expect(solver).toBeDefined()
+    expect(solver!.state.systemPrompt).toContain("parent-skill")
+
+    await access(join(rootDir, "solvers", "solver-301", ".misuzu", "workspace-state.json"))
+
+    await workspace.shutdown()
+  })
+
   test("requires plugin to exist when plugin id is provided", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
@@ -291,7 +445,7 @@ describe("ctf runtime platform integration", () => {
           auth: { mode: "cookie", cookie: "sid=abc" },
         },
       }),
-    ).rejects.toThrow("Required plugin is missing")
+    ).rejects.toThrow("Platform plugin is missing")
   })
 
   test("initializes platform, creates challenge solvers, syncs notices and new challenges", async () => {

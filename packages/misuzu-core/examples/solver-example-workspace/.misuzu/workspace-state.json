@@ -1,0 +1,59 @@
+{
+  "version": "1.0.0",
+  "lastModified": "2026-04-05T07:55:19.531Z",
+  "proxyProvidersLoaded": false,
+  "mainAgent": {
+    "modelId": "rightcode/gpt-5.2",
+    "agentState": {
+      "thinkingLevel": "medium",
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "hi"
+            }
+          ],
+          "timestamp": 1775375715357
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "Hi — what are we working on?\n\nIf this is a CTF challenge, paste the prompt/description and attach any files (or tell me the target host/port), and I’ll start digging.",
+              "textSignature": "{\"v\":1,\"id\":\"msg_01bb0768bf200bfb0169d21565e2e0819aa4a553bc6cd37842\"}"
+            }
+          ],
+          "api": "openai-responses",
+          "provider": "rightcode",
+          "model": "gpt-5.2",
+          "usage": {
+            "input": 3504,
+            "output": 45,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 3549,
+            "cost": {
+              "input": 0.006132,
+              "output": 0.00063,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.006762000000000001
+            }
+          },
+          "stopReason": "stop",
+          "timestamp": 1775375715532,
+          "responseId": "resp_01bb0768bf200bfb0169d215654c48819a95b7da991aedebbd"
+        }
+      ]
+    },
+    "solverAgentOptions": {
+      "initialState": {
+        "thinkingLevel": "medium"
+      }
+    },
+    "lastModified": "2026-04-05T07:55:19.019Z"
+  }
+}

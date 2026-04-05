@@ -1,20 +1,19 @@
-import { readdir } from "node:fs/promises"
+import { access } from "node:fs/promises"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
-import { SolverAgent } from "../../../../../agents/solver.ts"
+import { type SolverAgent, type SolverAgentOptions } from "../../../../../agents/solver.ts"
 import { createBaseTools } from "../../../../../tools/index.ts"
-import type { PersistenceStore } from "../../../persistence/store.ts"
-import type { ProviderRegistry } from "../../../providers/index.ts"
 import type { Logger } from "../../../../infrastructure/logging/types.ts"
 import {
   transformPluginToTools,
   type CTFPlatformPlugin,
   type ChallengeDetail,
   type ChallengeSummary,
-} from "../../../../../../../../plugins/index.ts"
+} from "../../../../../../plugins/index.ts"
 import type { RuntimeInitOptions } from "./orchestrator.ts"
 import { type SolverTask, type SolverTaskResult, QueueService } from "./queue.ts"
+import { SolverWorkspaceService } from "./solver-workspaces.ts"
 
 export interface ChallengeSolverBinding {
   challenge: ChallengeSummary
@@ -24,11 +23,10 @@ export interface ChallengeSolverBinding {
 }
 
 export interface SolverHubDeps {
-  rootDir: string
+  platformPluginDir: string
   logger: Logger
-  providers: ProviderRegistry
-  persistence: PersistenceStore
   queue: QueueService
+  solverWorkspaces: SolverWorkspaceService
 }
 
 export class SolverHub {
@@ -37,18 +35,16 @@ export class SolverHub {
   private platformNoticeCursor?: string
   private readonly challengeSolvers = new Map<number, ChallengeSolverBinding>()
 
-  private readonly rootDir: string
+  private readonly platformPluginDir: string
   private readonly logger: Logger
-  private readonly providers: ProviderRegistry
-  private readonly persistence: PersistenceStore
   private readonly queue: QueueService
+  private readonly solverWorkspaces: SolverWorkspaceService
 
   constructor(deps: SolverHubDeps) {
-    this.rootDir = deps.rootDir
+    this.platformPluginDir = deps.platformPluginDir
     this.logger = deps.logger
-    this.providers = deps.providers
-    this.persistence = deps.persistence
     this.queue = deps.queue
+    this.solverWorkspaces = deps.solverWorkspaces
   }
 
   async initialize(options: RuntimeInitOptions) {
@@ -115,16 +111,17 @@ export class SolverHub {
     const detail = await plugin.getChallenge(challenge.id)
 
     const solverId = `solver-${challenge.id}`
-    const solver = this.createSolver({
+    const managedSolver = await this.createSolver(solverId, {
       initialState: {
         systemPrompt: buildChallengeSolverPrompt(challenge, detail, this.getPluginId()),
       },
     })
+    const solver = managedSolver.solver
 
     const platformTools = transformPluginToTools(plugin, {
       namespace: this.getPluginId(),
     }) as unknown as AgentTool<any>[]
-    solver.setTools([...createBaseTools(this.rootDir), ...platformTools])
+    solver.setTools([...createBaseTools(managedSolver.rootDir), ...platformTools])
 
     const binding: ChallengeSolverBinding = {
       challenge,
@@ -178,16 +175,8 @@ export class SolverHub {
     return true
   }
 
-  private createSolver(options: ConstructorParameters<typeof SolverAgent>[1]) {
-    return new SolverAgent(
-      {
-        cwd: this.rootDir,
-        logger: this.logger.child({ component: "solver-agent" }),
-        providers: this.providers,
-        persistence: this.persistence,
-      },
-      options,
-    )
+  private async createSolver(solverId: string, options: SolverAgentOptions) {
+    return this.solverWorkspaces.getOrCreateSolver(solverId, options)
   }
 
   private async solveWithBinding(binding: ChallengeSolverBinding, task: SolverTask) {
@@ -213,48 +202,44 @@ export class SolverHub {
   }
 
   private async resolvePluginOrThrow(pluginId: string | undefined, baseUrl: string) {
-    const pluginRootDir = join(this.rootDir, "plugins")
-    const entries = await readdir(pluginRootDir, { withFileTypes: true }).catch(() => [])
-    const pluginDirs = entries
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-      .map((entry) => entry.name)
-
-    if (pluginId) {
-      if (pluginDirs.length === 0) {
-        throw new Error(
-          `[CTFRuntimeWorkspace] Required plugin is missing: ${pluginId}. Available plugins: none`,
-        )
-      }
-
-      if (!pluginDirs.includes(pluginId)) {
-        throw new Error(
-          `[CTFRuntimeWorkspace] Required plugin is missing: ${pluginId}. Available plugins: ${pluginDirs.join(", ")}`,
-        )
-      }
-
-      return this.loadPluginById(pluginRootDir, pluginId)
-    }
-
-    if (pluginDirs.length === 0) {
+    const modulePath = join(this.platformPluginDir, "index.ts")
+    const hasModule = await this.hasPluginModule(modulePath)
+    if (!hasModule) {
       throw new Error(
-        `[CTFRuntimeWorkspace] No plugins found under ${pluginRootDir}. Please provide a platform plugin first.`,
+        [
+          `[CTFRuntimeWorkspace] Platform plugin is missing: ${modulePath}`,
+          "Deploy a plugin into workspace .misuzu/platform-plugin first.",
+        ].join(" "),
       )
     }
 
-    for (const candidateId of pluginDirs) {
-      const plugin = await this.loadPluginById(pluginRootDir, candidateId)
-      if (plugin.meta.match(baseUrl)) {
-        return plugin
-      }
+    const plugin = await this.loadPluginFromPath(modulePath)
+
+    if (pluginId && plugin.meta.id !== pluginId) {
+      throw new Error(
+        `[CTFRuntimeWorkspace] Platform plugin id mismatch: expected ${pluginId}, actual ${plugin.meta.id}`,
+      )
     }
 
-    throw new Error(
-      `[CTFRuntimeWorkspace] No plugin matched baseUrl: ${baseUrl}. Available plugins: ${pluginDirs.join(", ")}`,
-    )
+    if (!pluginId && !plugin.meta.match(baseUrl)) {
+      throw new Error(
+        `[CTFRuntimeWorkspace] Platform plugin ${plugin.meta.id} does not match baseUrl: ${baseUrl}`,
+      )
+    }
+
+    return plugin
   }
 
-  private async loadPluginById(pluginRootDir: string, pluginId: string) {
-    const modulePath = join(pluginRootDir, pluginId, "index.ts")
+  private async hasPluginModule(modulePath: string) {
+    try {
+      await access(modulePath)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private async loadPluginFromPath(modulePath: string) {
     const moduleUrl = pathToFileURL(modulePath).href
     const pluginModule = (await import(moduleUrl)) as Record<string, unknown>
 
@@ -264,7 +249,7 @@ export class SolverHub {
 
     if (!candidate || typeof candidate !== "object" || typeof candidate.setup !== "function") {
       throw new Error(
-        `[CTFRuntimeWorkspace] Invalid plugin module: ${pluginId}. Expected a plugin factory export from ${modulePath}.`,
+        `[CTFRuntimeWorkspace] Invalid platform plugin module. Expected a plugin factory export from ${modulePath}.`,
       )
     }
 

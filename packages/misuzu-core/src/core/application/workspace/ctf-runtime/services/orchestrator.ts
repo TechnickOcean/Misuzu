@@ -1,4 +1,4 @@
-import type { PluginConfig, CTFPlatformPlugin } from "../../../../../../../../plugins/index.ts"
+import type { PluginConfig, CTFPlatformPlugin } from "../../../../../../plugins/index.ts"
 import type { Logger } from "../../../../infrastructure/logging/types.ts"
 import { SolverHub } from "./solver-hub.ts"
 import { SyncService } from "./sync.ts"
