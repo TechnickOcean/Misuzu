@@ -45,6 +45,8 @@ Optional methods:
 
 - `openContainer`
 - `destroyContainer`
+- `getPersistedState`
+- `restoreFromPersistedState`
 
 ### 2) Discover API behavior
 
@@ -111,6 +113,20 @@ Rules:
 - On protected API `401/403`, attempt one refresh and retry once.
 - If still unauthorized, throw explicit re-auth required error so runtime can pause solver tasks.
 
+### 5.2) Persist plugin runtime state
+
+If plugin keeps runtime-facing state (for example auth session, bound contest id, or platform cursors),
+implement:
+
+1. `getPersistedState()`
+2. `restoreFromPersistedState(state)`
+
+Rules:
+
+- Persist only data needed for restart/resume.
+- Validate restored shape before using it.
+- Let `setup()` verify restored state is still valid and fallback to normal login/bind flow when stale.
+
 ### 6) Implement poll updates for runtime
 
 `pollUpdates(cursor)` should:
@@ -168,3 +184,4 @@ In plugin README, explicitly document:
 - plugin is registered in `plugins/catalog.json`
 - `bindContest` supports `auto/id/title/url`
 - submit flow and update polling are both implemented and tested against real responses
+- if plugin stores runtime state, persistence hooks are implemented and validated

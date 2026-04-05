@@ -185,6 +185,9 @@ export class ${className}Plugin implements CTFPlatformPlugin {
     name: "${className}",
   }
 
+  private authSession: AuthSession | null = null
+  private contestId?: number
+
   async setup(_config: PluginConfig) {
     throw new Error("Not implemented")
   }
@@ -216,7 +219,24 @@ export class ${className}Plugin implements CTFPlatformPlugin {
   }
 
   getAuthSession(): AuthSession | null {
-    return null
+    return this.authSession
+  }
+
+  getPersistedState(): Record<string, unknown> {
+    return {
+      authSession: this.authSession,
+      contestId: this.contestId,
+    }
+  }
+
+  async restoreFromPersistedState(state: Record<string, unknown>) {
+    if (state.authSession && typeof state.authSession === "object") {
+      this.authSession = state.authSession as AuthSession
+    }
+
+    if (typeof state.contestId === "number" && Number.isInteger(state.contestId)) {
+      this.contestId = state.contestId
+    }
   }
 
   async listContests(): Promise<ContestSummary[]> {
@@ -273,5 +293,6 @@ Platform: ${displayName ?? pluginId}
 - Keep plugin imports aligned with built-in workspace shared modules: use \`../protocol.ts\` and \`../utils.ts\`.
 - Register plugin metadata in \`plugins/catalog.json\` so workspace plugin list can discover it.
 - Keep notice polling runtime-only and avoid exposing it directly to solver tools.
+- If plugin keeps auth or contest state, implement \`getPersistedState\` and \`restoreFromPersistedState\`.
 `
 }
