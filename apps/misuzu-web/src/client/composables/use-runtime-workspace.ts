@@ -1,5 +1,5 @@
 import { computed } from "vue"
-import type { PromptMode, RuntimeInitRequest } from "../../shared/protocol.ts"
+import type { ModelPoolInput, PromptMode, RuntimeInitRequest } from "../../shared/protocol.ts"
 import { useAppServices } from "../di/app-services.ts"
 import { useRuntimeWorkspaceStore } from "../stores/runtime-workspace.ts"
 
@@ -36,6 +36,7 @@ export function useRuntimeWorkspace(workspaceId: string) {
     },
     pauseDispatch: () => store.pauseDispatch(workspaceId),
     startDispatch: (autoEnqueue = false) => store.startDispatch(workspaceId, autoEnqueue),
+    updateModelPool: (modelPool: ModelPoolInput[]) => store.updateModelPool(workspaceId, modelPool),
     syncChallenges: () => store.syncChallenges(workspaceId),
     syncNotices: () => store.syncNotices(workspaceId),
     ensureEnvironmentAgent: () => store.ensureEnvironmentAgent(workspaceId),

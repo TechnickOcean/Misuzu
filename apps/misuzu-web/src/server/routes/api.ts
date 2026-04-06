@@ -5,6 +5,7 @@ import type {
   RuntimeDispatchRequest,
   RuntimeEnqueueRequest,
   RuntimeInitRequest,
+  RuntimeModelPoolUpdateRequest,
   SolverCreateRequest,
 } from "../../shared/protocol.ts"
 import { WorkspaceManager } from "../services/workspace-manager.ts"
@@ -51,6 +52,15 @@ export function registerApiRoutes(app: Hono, manager: WorkspaceManager) {
 
   api.post("/workspaces/runtime/:workspaceId/dispatch/pause", async (c) => {
     const snapshot = await manager.setRuntimeDispatch(c.req.param("workspaceId"), true, false)
+    return c.json({ snapshot })
+  })
+
+  api.post("/workspaces/runtime/:workspaceId/model-pool", async (c) => {
+    const request = await c.req.json<RuntimeModelPoolUpdateRequest>()
+    const snapshot = await manager.updateRuntimeModelPool(
+      c.req.param("workspaceId"),
+      request.modelPool,
+    )
     return c.json({ snapshot })
   })
 

@@ -7,6 +7,7 @@ import type {
   RuntimeDispatchRequest,
   RuntimeEnqueueRequest,
   RuntimeInitRequest,
+  RuntimeModelPoolUpdateRequest,
   RuntimeWorkspaceSnapshot,
   SolverCreateRequest,
   SolverWorkspaceSnapshot,
@@ -84,6 +85,17 @@ export class WorkspaceApiClient {
       `/api/workspaces/runtime/${encodeURIComponent(workspaceId)}/dispatch/pause`,
       {
         method: "POST",
+      },
+    )
+    return response.snapshot
+  }
+
+  async updateRuntimeModelPool(workspaceId: string, request: RuntimeModelPoolUpdateRequest) {
+    const response = await this.request<{ snapshot: RuntimeWorkspaceSnapshot }>(
+      `/api/workspaces/runtime/${encodeURIComponent(workspaceId)}/model-pool`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
       },
     )
     return response.snapshot

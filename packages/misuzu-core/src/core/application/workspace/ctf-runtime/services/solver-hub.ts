@@ -21,6 +21,7 @@ import { PlatformContestManager } from "./contest-manager.ts"
 import { RuntimePluginLoader } from "./plugin-loader.ts"
 import { WorkspaceModelPool, isModelPoolError } from "./model-pool.ts"
 import type {
+  PersistedCTFRuntimeChallengeProgress,
   PersistedCTFRuntimePlatformState,
   PersistedCTFRuntimeSolverHubState,
 } from "../state.ts"
@@ -185,6 +186,37 @@ export class SolverHub {
     }
   }
 
+  restoreState(state: PersistedCTFRuntimeSolverHubState | undefined) {
+    this.challengeProgress.clear()
+
+    if (!state?.challengeProgress?.length) {
+      return
+    }
+
+    for (const progress of state.challengeProgress) {
+      if (!isPersistedProgressStatus(progress.status)) {
+        continue
+      }
+
+      if (!Number.isFinite(progress.challengeId) || !progress.solverId) {
+        continue
+      }
+
+      this.challengeProgress.set(progress.challengeId, {
+        challengeId: progress.challengeId,
+        solverId: progress.solverId,
+        status: progress.status,
+        flagAccepted: Boolean(progress.flagAccepted),
+        writeUpReady: Boolean(progress.writeUpReady),
+        blockedReason: progress.blockedReason,
+      })
+    }
+  }
+
+  isChallengeSolved(challengeId: number) {
+    return this.challengeProgress.get(challengeId)?.status === "solved"
+  }
+
   async listChallenges() {
     return this.withRuntimeContext(async (context) => this.requirePlugin().listChallenges(context))
   }
@@ -269,6 +301,14 @@ export class SolverHub {
         category: binding.challenge.category,
         score: binding.challenge.score,
         solvedCount: binding.challenge.solvedCount,
+      })),
+      challengeProgress: [...this.challengeProgress.values()].map((state) => ({
+        challengeId: state.challengeId,
+        solverId: state.solverId,
+        status: state.status,
+        flagAccepted: state.flagAccepted,
+        writeUpReady: state.writeUpReady,
+        blockedReason: state.blockedReason,
       })),
     }
   }
@@ -375,7 +415,11 @@ export class SolverHub {
         binding.solver.setModel(modelLease.model)
       }
 
-      await binding.solver.prompt(buildSolverTaskPrompt(binding.challenge, task.payload))
+      if (shouldContinueSolverTask(task.payload, binding.solver.state.messages.length > 0)) {
+        await binding.solver.continue()
+      } else {
+        await binding.solver.prompt(buildSolverTaskPrompt(binding.challenge, task.payload))
+      }
       await this.completeAcceptedChallenge(binding, progress)
 
       if (!progress.flagAccepted && progress.status !== "solved") {
@@ -703,4 +747,29 @@ function buildWriteUpPrompt(challenge: ChallengeSummary) {
     "The writeup must include a short exploit path, key evidence, and the final flag rationale.",
     "Once WriteUp.md is saved, continue with a short completion note.",
   ].join("\n")
+}
+
+function shouldContinueSolverTask(payload: unknown, hasMessageHistory: boolean) {
+  if (!hasMessageHistory || !payload || typeof payload !== "object") {
+    return false
+  }
+
+  const task = payload as { challenge?: unknown }
+  if (typeof task.challenge !== "number" || !Number.isFinite(task.challenge)) {
+    return false
+  }
+
+  const keys = Object.keys(payload)
+  return keys.length === 1 && keys[0] === "challenge"
+}
+
+function isPersistedProgressStatus(
+  status: PersistedCTFRuntimeChallengeProgress["status"],
+): status is ChallengeProgressStatus {
+  return (
+    status === "idle" ||
+    status === "writeup_required" ||
+    status === "solved" ||
+    status === "blocked"
+  )
 }

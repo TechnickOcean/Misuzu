@@ -1,9 +1,24 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from "vue"
 import { useRouter } from "vue-router"
+import { LayoutDashboardIcon, PlusIcon, RefreshCcwIcon, WorkflowIcon } from "lucide-vue-next"
+import ThemeToggle from "@/components/ThemeToggle.vue"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarSeparator,
+} from "@/components/ui/sidebar"
 import WorkspaceCard from "@/components/workspace/WorkspaceCard.vue"
 import { useAppServices } from "@/di/app-services.ts"
 import { useWorkspaceRegistryStore } from "@/stores/workspace-registry.ts"
@@ -57,103 +72,136 @@ async function openWorkspace(workspaceId: string, kind: "ctf-runtime" | "solver"
     },
   })
 }
+
+function openCreateWorkspace() {
+  void router.push({ name: "workspace-create" })
+}
 </script>
 
 <template>
-  <div class="space-y-6">
-    <section
-      class="grid gap-3 rounded-xl border border-border/60 bg-card p-4 sm:grid-cols-[1fr_auto] sm:items-center"
-    >
-      <div>
-        <p class="text-sm font-semibold">Dashboard</p>
-        <p class="text-xs text-muted-foreground">
-          Workspace registry is persisted on the backend. Open any entry to continue where you left
-          off.
+  <SidebarProvider class="min-h-screen">
+    <Sidebar variant="inset" collapsible="none" class="border-r border-sidebar-border/70">
+      <SidebarHeader>
+        <div class="px-2 py-1">
+          <p class="text-sm font-semibold tracking-[0.22em]">MISUZU</p>
+          <p class="text-[11px] text-sidebar-foreground/70">web console</p>
+        </div>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton :is-active="true">
+              <LayoutDashboardIcon />
+              <span>Workspace Dashboard</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
+
+      <SidebarSeparator />
+
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupLabel>Actions</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton @click="registryStore.loadEntries">
+                  <RefreshCcwIcon />
+                  <span>Refresh Registry</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton @click="openCreateWorkspace">
+                  <PlusIcon />
+                  <span>Create Workspace</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>Workspace Metrics</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <div class="grid grid-cols-2 gap-2 text-xs">
+              <div class="rounded-md border border-sidebar-border/70 bg-sidebar p-2">
+                <p class="text-sidebar-foreground/70">Total</p>
+                <p class="mt-1 text-sm font-semibold">{{ registryStore.entries.length }}</p>
+              </div>
+              <div class="rounded-md border border-sidebar-border/70 bg-sidebar p-2">
+                <p class="text-sidebar-foreground/70">Solver</p>
+                <p class="mt-1 text-sm font-semibold">{{ solverCount }}</p>
+              </div>
+              <div class="rounded-md border border-sidebar-border/70 bg-sidebar p-2">
+                <p class="text-sidebar-foreground/70">Runtime Up</p>
+                <p class="mt-1 text-sm font-semibold">{{ initializedRuntimeCount }}</p>
+              </div>
+              <div class="rounded-md border border-sidebar-border/70 bg-sidebar p-2">
+                <p class="text-sidebar-foreground/70">Runtime Pending</p>
+                <p class="mt-1 text-sm font-semibold">{{ pendingRuntimeCount }}</p>
+              </div>
+            </div>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>Latest Activity</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <div class="rounded-lg border border-sidebar-border/80 bg-sidebar-accent/30 p-3">
+              <div v-if="latestWorkspace" class="space-y-1 text-xs">
+                <p class="font-medium">{{ latestWorkspace.name }}</p>
+                <p class="text-sidebar-foreground/70">
+                  {{ new Date(latestWorkspace.updatedAt).toLocaleString() }}
+                </p>
+              </div>
+              <p v-else class="text-xs text-sidebar-foreground/70">No workspace activity yet.</p>
+            </div>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+
+      <SidebarFooter>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton>
+              <WorkflowIcon />
+              <span>{{ registryStore.entries.length }} Registry Entries</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <ThemeToggle sidebar />
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarFooter>
+    </Sidebar>
+
+    <SidebarInset>
+      <header class="flex items-center justify-between gap-2 border-b px-4 py-3">
+        <div>
+          <p class="text-sm font-semibold">Workspace Registry</p>
+          <p class="text-xs text-muted-foreground">
+            Persisted entries restored from backend storage.
+          </p>
+        </div>
+        <Badge variant="secondary">{{ registryStore.entries.length }} entries</Badge>
+      </header>
+
+      <section class="space-y-3 px-3 py-3 md:px-4">
+        <p v-if="registryStore.loading" class="text-sm text-muted-foreground">
+          Loading workspace registry...
         </p>
-      </div>
+        <p v-else-if="registryStore.entries.length === 0" class="text-sm text-muted-foreground">
+          No workspace found. Start by creating one.
+        </p>
 
-      <div class="flex flex-wrap items-center gap-2">
-        <Button variant="outline" @click="registryStore.loadEntries">Refresh</Button>
-        <Button @click="router.push({ name: 'workspace-create' })">Create Workspace</Button>
-      </div>
-    </section>
-
-    <section class="grid gap-3 md:grid-cols-3">
-      <Card>
-        <CardHeader class="pb-2">
-          <CardDescription>Total Workspaces</CardDescription>
-          <CardTitle class="text-3xl">{{ registryStore.entries.length }}</CardTitle>
-        </CardHeader>
-      </Card>
-      <Card>
-        <CardHeader class="pb-2">
-          <CardDescription>Runtime (Initialized / Pending)</CardDescription>
-          <CardTitle class="text-3xl"
-            >{{ initializedRuntimeCount }} / {{ pendingRuntimeCount }}</CardTitle
-          >
-        </CardHeader>
-      </Card>
-      <Card>
-        <CardHeader class="pb-2">
-          <CardDescription>Solver</CardDescription>
-          <CardTitle class="text-3xl">{{ solverCount }}</CardTitle>
-        </CardHeader>
-      </Card>
-    </section>
-
-    <section class="grid gap-3 lg:grid-cols-2">
-      <Card>
-        <CardHeader>
-          <CardTitle class="text-base">Latest Update</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p v-if="latestWorkspace" class="text-sm">
-            {{ latestWorkspace.name }} · {{ new Date(latestWorkspace.updatedAt).toLocaleString() }}
-          </p>
-          <p v-else class="text-sm text-muted-foreground">No workspace activity yet.</p>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle class="text-base">Runtime Health</CardTitle>
-        </CardHeader>
-        <CardContent class="flex flex-wrap gap-2">
-          <Badge variant="default">Initialized {{ initializedRuntimeCount }}</Badge>
-          <Badge variant="outline">Pending {{ pendingRuntimeCount }}</Badge>
-          <Badge variant="secondary">Solver Workspaces {{ solverCount }}</Badge>
-        </CardContent>
-      </Card>
-    </section>
-
-    <section>
-      <Card>
-        <CardHeader class="flex items-start justify-between gap-3 sm:flex-row sm:items-center">
-          <div>
-            <CardTitle>Workspace Registry</CardTitle>
-            <CardDescription>Persisted entries restored from backend storage.</CardDescription>
-          </div>
-          <Badge variant="secondary">{{ registryStore.entries.length }} entries</Badge>
-        </CardHeader>
-
-        <CardContent class="space-y-3">
-          <p v-if="registryStore.loading" class="text-sm text-muted-foreground">
-            Loading workspace registry...
-          </p>
-          <p v-else-if="registryStore.entries.length === 0" class="text-sm text-muted-foreground">
-            No workspace found. Start by creating one.
-          </p>
-
-          <div class="grid gap-3">
-            <WorkspaceCard
-              v-for="entry in registryStore.entries"
-              :key="entry.id"
-              :entry="entry"
-              @open="openWorkspace"
-            />
-          </div>
-        </CardContent>
-      </Card>
-    </section>
-  </div>
+        <div class="grid gap-3">
+          <WorkspaceCard
+            v-for="entry in registryStore.entries"
+            :key="entry.id"
+            :entry="entry"
+            @open="openWorkspace"
+          />
+        </div>
+      </section>
+    </SidebarInset>
+  </SidebarProvider>
 </template>

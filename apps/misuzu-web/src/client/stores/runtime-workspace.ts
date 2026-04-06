@@ -1,6 +1,7 @@
 import { defineStore } from "pinia"
 import type {
   AgentStateSnapshot,
+  ModelPoolInput,
   PromptMode,
   RuntimeInitRequest,
   RuntimeWorkspaceSnapshot,
@@ -70,6 +71,13 @@ export const useRuntimeWorkspaceStore = defineStore("runtime-workspace", {
         {
           autoEnqueue,
         },
+      )
+    },
+
+    async updateModelPool(workspaceId: string, modelPool: ModelPoolInput[]) {
+      this.snapshots[workspaceId] = await requireServices().apiClient.updateRuntimeModelPool(
+        workspaceId,
+        { modelPool },
       )
     },
 

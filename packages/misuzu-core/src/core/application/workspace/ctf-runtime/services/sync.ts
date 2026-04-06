@@ -46,6 +46,10 @@ export class SyncService {
 
       const existing = this.solverHub.getChallengeBinding(challenge.id)
       if (!existing) {
+        if (this.solverHub.isChallengeSolved(challenge.id)) {
+          continue
+        }
+
         try {
           await this.solverHub.ensureChallengeSolver(challenge)
         } catch (error) {

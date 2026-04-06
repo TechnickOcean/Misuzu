@@ -23,7 +23,7 @@ function isActiveRoute(routeName: string) {
 </script>
 
 <template>
-  <main class="mx-auto min-h-screen w-full max-w-6xl space-y-6 px-4 py-6 md:px-6">
+  <main class="mx-auto min-h-screen max-h-screen w-full max-w-6xl space-y-6 px-4 py-6 md:px-6">
     <header class="space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex items-center gap-3">

@@ -43,6 +43,7 @@ export {
   type PersistedCTFRuntimeSyncState,
   type PersistedCTFRuntimeSolverHubState,
   type PersistedCTFRuntimeManagedChallenge,
+  type PersistedCTFRuntimeChallengeProgress,
   type PersistedCTFRuntimeState,
   type PersistedCTFRuntimeWorkspaceState,
   type WorkspaceOptions,

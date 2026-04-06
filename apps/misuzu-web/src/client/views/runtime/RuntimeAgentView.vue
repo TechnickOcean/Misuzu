@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue"
 import type { PromptMode } from "@shared/protocol.ts"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import AgentChatPanel from "@/components/workspace/AgentChatPanel.vue"
 import { useRuntimeWorkspace } from "@/composables/use-runtime-workspace.ts"
 
@@ -41,17 +40,12 @@ async function sendPrompt(payload: { prompt: string; mode: PromptMode }) {
 </script>
 
 <template>
-  <Card class="h-full min-h-[calc(100vh-12.5rem)] border-border/60 bg-card/70">
-    <CardHeader class="pb-2">
-      <CardTitle>{{ activeAgentName }}</CardTitle>
-    </CardHeader>
-    <CardContent class="h-[calc(100%-4.25rem)] px-2 pb-4 md:px-3">
-      <AgentChatPanel
-        :title="activeAgentName"
-        :state="runtime.activeAgentState.value"
-        :loading="sendingPrompt"
-        @prompt="sendPrompt"
-      />
-    </CardContent>
-  </Card>
+  <div class="h-full min-h-0">
+    <AgentChatPanel
+      :title="activeAgentName"
+      :state="runtime.activeAgentState.value"
+      :loading="sendingPrompt"
+      @prompt="sendPrompt"
+    />
+  </div>
 </template>

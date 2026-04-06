@@ -22,6 +22,20 @@ export interface ModelPoolInput {
   maxConcurrency: number
 }
 
+export interface ModelPoolSnapshotItem extends ModelPoolInput {
+  inUse: number
+  available: number
+  modelResolved: boolean
+}
+
+export interface ModelPoolSnapshot {
+  items: ModelPoolSnapshotItem[]
+  totalCapacity: number
+  totalInUse: number
+  totalAvailable: number
+  hasAvailableModel: boolean
+}
+
 export interface RuntimeCreateRequest {
   id?: string
   name?: string
@@ -88,6 +102,7 @@ export interface RuntimeWorkspaceSnapshot {
     busySolverCount: number
     registeredSolverCount: number
   }
+  modelPool: ModelPoolSnapshot
   challenges: ChallengeSummaryView[]
   agents: Array<{
     id: string
@@ -159,6 +174,10 @@ export interface RuntimeInitRequest {
 
 export interface RuntimeDispatchRequest {
   autoEnqueue?: boolean
+}
+
+export interface RuntimeModelPoolUpdateRequest {
+  modelPool: ModelPoolInput[]
 }
 
 export interface RuntimeEnqueueRequest {

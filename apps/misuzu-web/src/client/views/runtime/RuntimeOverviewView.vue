@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from "vue"
 import { marked } from "marked"
 import { useRouter } from "vue-router"
-import type { PluginCatalogItem } from "@shared/protocol.ts"
+import type { ModelPoolInput, PluginCatalogItem } from "@shared/protocol.ts"
 import { CheckIcon, ChevronsUpDownIcon } from "lucide-vue-next"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -50,6 +50,9 @@ const pluginReadmeHtml = ref("")
 const pluginComboboxOpen = ref(false)
 const pluginDraft = reactive<PluginConfigDraft>(createDefaultPluginConfigDraft())
 const initError = ref("")
+const modelPoolDraft = ref<ModelPoolRow[]>([])
+const modelPoolSaving = ref(false)
+const modelPoolError = ref("")
 
 const snapshot = computed(() => runtime.snapshot.value)
 const activeChallenges = computed(() =>
@@ -78,9 +81,28 @@ const selectedPluginLabel = computed(() => {
   return `${plugin.name} (${plugin.id})`
 })
 
+interface ModelPoolRow {
+  id: string
+  provider: string
+  modelId: string
+  maxConcurrency: string
+}
+
 onMounted(async () => {
   await loadPlugins()
+  syncModelPoolDraftFromSnapshot()
 })
+
+watch(
+  () => snapshot.value?.modelPool.items,
+  () => {
+    if (modelPoolSaving.value || modelPoolDraft.value.length > 0) {
+      return
+    }
+
+    syncModelPoolDraftFromSnapshot()
+  },
+)
 
 watch(selectedPluginId, async (pluginId) => {
   if (!pluginId) {
@@ -154,6 +176,71 @@ function badgeVariantForStatus(status: "active" | "queued" | "solved" | "blocked
       return "outline"
     case "idle":
       return "outline"
+  }
+}
+
+function createModelPoolRow(input?: ModelPoolInput): ModelPoolRow {
+  return {
+    id: crypto.randomUUID(),
+    provider: input?.provider ?? "openai",
+    modelId: input?.modelId ?? "gpt-4.1",
+    maxConcurrency: String(input?.maxConcurrency ?? 1),
+  }
+}
+
+function syncModelPoolDraftFromSnapshot() {
+  const items = snapshot.value?.modelPool.items ?? []
+  modelPoolDraft.value = items.length
+    ? items.map((item) => createModelPoolRow(item))
+    : [createModelPoolRow()]
+}
+
+function addModelPoolRow() {
+  modelPoolDraft.value.push(createModelPoolRow())
+}
+
+function removeModelPoolRow(rowId: string) {
+  if (modelPoolDraft.value.length <= 1) {
+    return
+  }
+
+  modelPoolDraft.value = modelPoolDraft.value.filter((item) => item.id !== rowId)
+}
+
+async function applyModelPool() {
+  modelPoolError.value = ""
+  modelPoolSaving.value = true
+
+  try {
+    if (!snapshot.value?.paused) {
+      throw new Error("Pause flow before updating model pool")
+    }
+
+    const normalized = modelPoolDraft.value.map((item) => {
+      const provider = item.provider.trim()
+      const modelId = item.modelId.trim()
+      const maxConcurrency = Number(item.maxConcurrency)
+      if (!provider || !modelId) {
+        throw new Error("Model pool provider/model id cannot be empty")
+      }
+
+      if (!Number.isInteger(maxConcurrency) || maxConcurrency <= 0) {
+        throw new Error("Model pool maxConcurrency must be a positive integer")
+      }
+
+      return {
+        provider,
+        modelId,
+        maxConcurrency,
+      }
+    })
+
+    await runtime.updateModelPool(normalized)
+    syncModelPoolDraftFromSnapshot()
+  } catch (error) {
+    modelPoolError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    modelPoolSaving.value = false
   }
 }
 </script>
@@ -327,6 +414,51 @@ function badgeVariantForStatus(status: "active" | "queued" | "solved" | "blocked
           <Button @click="initializeRuntime">Initialize Runtime</Button>
           <p v-if="initError" class="text-sm text-destructive">{{ initError }}</p>
         </div>
+      </CardContent>
+    </Card>
+
+    <Card>
+      <CardHeader>
+        <CardTitle>Model Pool</CardTitle>
+        <CardDescription>
+          Update model allocation while runtime flow is paused, then resume dispatch.
+        </CardDescription>
+      </CardHeader>
+      <CardContent class="space-y-3">
+        <article
+          v-for="item in modelPoolDraft"
+          :key="item.id"
+          class="grid gap-3 rounded-md border p-3 md:grid-cols-[1fr_1fr_150px_auto]"
+        >
+          <Input v-model="item.provider" placeholder="provider" />
+          <Input v-model="item.modelId" placeholder="model id" />
+          <Input
+            v-model="item.maxConcurrency"
+            type="number"
+            min="1"
+            placeholder="max concurrency"
+          />
+          <Button variant="ghost" type="button" @click="removeModelPoolRow(item.id)">Remove</Button>
+        </article>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <Button variant="outline" type="button" @click="addModelPoolRow">Add model</Button>
+          <Button
+            type="button"
+            :disabled="!snapshot?.paused || modelPoolSaving"
+            @click="applyModelPool"
+          >
+            {{ modelPoolSaving ? "Updating..." : "Apply Model Pool" }}
+          </Button>
+          <Button variant="ghost" type="button" @click="syncModelPoolDraftFromSnapshot"
+            >Reset</Button
+          >
+        </div>
+
+        <p v-if="!snapshot?.paused" class="text-xs text-muted-foreground">
+          Pause flow first to update model pool safely.
+        </p>
+        <p v-if="modelPoolError" class="text-sm text-destructive">{{ modelPoolError }}</p>
       </CardContent>
     </Card>
 

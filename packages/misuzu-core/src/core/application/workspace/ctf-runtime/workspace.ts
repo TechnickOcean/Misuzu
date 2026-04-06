@@ -57,6 +57,7 @@ import {
   type PersistedEnvironmentAgentRuntimeState,
   type PersistedCTFRuntimeConfig,
   type PersistedCTFRuntimeManagedChallenge,
+  type PersistedCTFRuntimeQueueState,
   type PersistedCTFRuntimeSnapshot,
   type PersistedCTFRuntimeState,
 } from "./state.ts"
@@ -251,6 +252,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
 
   async initializeRuntime(options: RuntimeInitOptions) {
     const restoreSnapshot = this.getMatchingPendingRuntimeSnapshot(options)
+    this.restoreSolverHubFromSnapshot(restoreSnapshot)
     this.restoreQueueFromSnapshot(restoreSnapshot)
     this.applyRuntimeDispatchPreference(options.startPaused)
 
@@ -499,7 +501,28 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
       return
     }
 
-    this.queue.restoreState(snapshot.queue)
+    this.queue.restoreState(this.filterRestoredQueueState(snapshot.queue))
+  }
+
+  private restoreSolverHubFromSnapshot(snapshot: PersistedCTFRuntimeSnapshot | undefined) {
+    this.solverHub.restoreState(snapshot?.solverHub)
+  }
+
+  private filterRestoredQueueState(state: PersistedCTFRuntimeQueueState) {
+    const shouldKeepTask = (payload: unknown) => {
+      const challengeId = resolveChallengeIdFromTaskPayload(payload)
+      if (challengeId === undefined) {
+        return true
+      }
+
+      return !this.solverHub.isChallengeSolved(challengeId)
+    }
+
+    return {
+      ...state,
+      pendingTasks: state.pendingTasks.filter((task) => shouldKeepTask(task.payload)),
+      inflightTasks: state.inflightTasks.filter((task) => shouldKeepTask(task.payload)),
+    }
   }
 
   private buildRuntimeRestoreContext(
@@ -728,6 +751,15 @@ export type {
   ModelPoolItem,
   ModelPoolStateSnapshot,
   ModelPoolCatalogProvider,
+}
+
+function resolveChallengeIdFromTaskPayload(payload: unknown) {
+  if (!payload || typeof payload !== "object") {
+    return undefined
+  }
+
+  const challengeId = (payload as { challenge?: unknown }).challenge
+  return typeof challengeId === "number" && Number.isFinite(challengeId) ? challengeId : undefined
 }
 
 function resolveEnvPlaceholders(value: unknown): unknown {

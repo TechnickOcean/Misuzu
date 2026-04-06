@@ -52,6 +52,15 @@ export interface PersistedCTFRuntimeManagedChallenge {
   solvedCount: number
 }
 
+export interface PersistedCTFRuntimeChallengeProgress {
+  challengeId: number
+  solverId: string
+  status: "idle" | "writeup_required" | "solved" | "blocked"
+  flagAccepted: boolean
+  writeUpReady: boolean
+  blockedReason?: string
+}
+
 export interface PersistedCTFRuntimeSyncState {
   noticeCursor?: string
 }
@@ -63,6 +72,7 @@ export interface PersistedCTFRuntimePlatformState {
 
 export interface PersistedCTFRuntimeSolverHubState {
   managedChallenges: PersistedCTFRuntimeManagedChallenge[]
+  challengeProgress: PersistedCTFRuntimeChallengeProgress[]
 }
 
 export interface PersistedCTFRuntimeSnapshot {

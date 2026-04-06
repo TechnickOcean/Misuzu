@@ -1,11 +1,35 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, watch } from "vue"
 import { useRoute, useRouter } from "vue-router"
-import PageHeading from "@/components/layout/PageHeading.vue"
+import {
+  BotIcon,
+  HomeIcon,
+  ListChecksIcon,
+  PauseCircleIcon,
+  PlayCircleIcon,
+  PlusIcon,
+  RefreshCcwIcon,
+  ShieldCheckIcon,
+} from "lucide-vue-next"
+import type { RuntimeWorkspaceSnapshot } from "@shared/protocol.ts"
+import ThemeToggle from "@/components/ThemeToggle.vue"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarSeparator,
+} from "@/components/ui/sidebar"
 import { useRuntimeWorkspace } from "@/composables/use-runtime-workspace.ts"
 
 const route = useRoute()
@@ -14,7 +38,49 @@ const router = useRouter()
 const workspaceId = String(route.params.id)
 const runtime = useRuntimeWorkspace(workspaceId)
 
+type AgentSidebarStatus = "active" | "pause" | "pending" | "blocked" | "stopped" | "solved"
+type SidebarAgent = RuntimeWorkspaceSnapshot["agents"][number] & { status: AgentSidebarStatus }
+
 const summary = computed(() => runtime.snapshot.value)
+const isOverviewRoute = computed(() => route.name === "runtime-overview")
+const selectedAgentId = computed(() =>
+  typeof route.params.agentId === "string" ? route.params.agentId : undefined,
+)
+const defaultAgentId = computed(() => {
+  const agents = summary.value?.agents ?? []
+  return agents.find((agent) => agent.id === "environment")?.id ?? agents[0]?.id
+})
+const activeAgentName = computed(() => {
+  const agentId = selectedAgentId.value ?? defaultAgentId.value
+  if (!agentId) {
+    return workspaceId
+  }
+
+  return summary.value?.agents.find((agent) => agent.id === agentId)?.name ?? agentId
+})
+const contentClass = computed(() =>
+  isOverviewRoute.value ? "min-h-0 flex-1 overflow-y-auto" : "min-h-0 flex-1 overflow-hidden",
+)
+const sidebarAgents = computed<SidebarAgent[]>(() => {
+  const snapshot = summary.value
+  if (!snapshot) {
+    return []
+  }
+
+  const challengeById = new Map(
+    snapshot.challenges.map((challenge) => [challenge.challengeId, challenge]),
+  )
+  return snapshot.agents
+    .map((agent) => ({
+      ...agent,
+      status: resolveAgentStatus(snapshot, agent, challengeById.get(agent.challengeId ?? -1)),
+    }))
+    .sort(
+      (left, right) =>
+        agentStatusWeight(left.status) - agentStatusWeight(right.status) ||
+        left.name.localeCompare(right.name),
+    )
+})
 
 onMounted(async () => {
   await runtime.open()
@@ -24,23 +90,12 @@ onMounted(async () => {
     await runtime.ensureEnvironmentAgent()
   }
 
-  const selectedAgentId =
-    typeof route.params.agentId === "string" ? route.params.agentId : undefined
-  if (selectedAgentId) {
-    await runtime.setActiveAgent(selectedAgentId)
+  if (selectedAgentId.value) {
+    await runtime.setActiveAgent(selectedAgentId.value)
     return
   }
 
-  const snapshot = runtime.snapshot.value
-  if (snapshot && !snapshot.initialized && snapshot.environmentAgentReady) {
-    await router.replace({
-      name: "runtime-agent",
-      params: {
-        id: workspaceId,
-        agentId: "environment",
-      },
-    })
-  }
+  await openDefaultAgent()
 })
 
 onUnmounted(() => {
@@ -58,15 +113,18 @@ watch(
   },
 )
 
-function openOverview() {
-  void router.push({
-    name: "runtime-overview",
-    params: { id: workspaceId },
-  })
-}
+async function openDefaultAgent() {
+  const agentId = defaultAgentId.value
+  if (!agentId) {
+    await openOverview()
+    return
+  }
 
-function openAgent(agentId: string) {
-  void router.push({
+  if (route.name === "runtime-agent" && selectedAgentId.value === agentId) {
+    return
+  }
+
+  await router.replace({
     name: "runtime-agent",
     params: {
       id: workspaceId,
@@ -74,72 +132,293 @@ function openAgent(agentId: string) {
     },
   })
 }
+
+async function openOverview() {
+  if (isOverviewRoute.value) {
+    return
+  }
+
+  await router.push({
+    name: "runtime-overview",
+    params: { id: workspaceId },
+  })
+}
+
+async function openAgent(agentId: string) {
+  if (route.name === "runtime-agent" && selectedAgentId.value === agentId) {
+    return
+  }
+
+  await router.push({
+    name: "runtime-agent",
+    params: {
+      id: workspaceId,
+      agentId,
+    },
+  })
+}
+
+function openHome() {
+  void router.push({ name: "home" })
+}
+
+function openCreateWorkspace() {
+  void router.push({ name: "workspace-create" })
+}
+
+function resolveAgentStatus(
+  snapshot: RuntimeWorkspaceSnapshot,
+  agent: RuntimeWorkspaceSnapshot["agents"][number],
+  challenge?: RuntimeWorkspaceSnapshot["challenges"][number],
+): AgentSidebarStatus {
+  if (agent.role === "environment") {
+    if (!snapshot.initialized) {
+      return "pending"
+    }
+
+    return snapshot.paused ? "pause" : "active"
+  }
+
+  if (!challenge) {
+    return snapshot.paused ? "pause" : "stopped"
+  }
+
+  if (snapshot.paused && challenge.status !== "blocked" && challenge.status !== "solved") {
+    return "pause"
+  }
+
+  switch (challenge.status) {
+    case "active":
+      return "active"
+    case "queued":
+      return "pending"
+    case "blocked":
+      return "blocked"
+    case "solved":
+      return "solved"
+    case "idle":
+      return "stopped"
+  }
+}
+
+function agentStatusWeight(status: AgentSidebarStatus) {
+  switch (status) {
+    case "active":
+      return 0
+    case "pause":
+      return 1
+    case "pending":
+      return 2
+    case "blocked":
+      return 3
+    case "stopped":
+      return 4
+    case "solved":
+      return 5
+  }
+}
+
+function statusLabel(status: AgentSidebarStatus) {
+  switch (status) {
+    case "active":
+      return "Active"
+    case "pause":
+      return "Pause"
+    case "pending":
+      return "Pending"
+    case "blocked":
+      return "Blocked"
+    case "stopped":
+      return "Stopped"
+    case "solved":
+      return "Solved"
+  }
+}
+
+function statusBadgeVariant(status: AgentSidebarStatus) {
+  switch (status) {
+    case "active":
+      return "default"
+    case "pause":
+      return "secondary"
+    case "pending":
+      return "outline"
+    case "blocked":
+      return "destructive"
+    case "stopped":
+      return "outline"
+    case "solved":
+      return "secondary"
+  }
+}
 </script>
 
 <template>
-  <div class="space-y-4">
-    <PageHeading title="Runtime Workspace" :description="summary?.rootDir ?? workspaceId">
-      <template #actions>
-        <Badge :variant="summary?.paused ? 'destructive' : 'default'">
-          {{ summary?.paused ? "Paused" : "Running" }}
-        </Badge>
-      </template>
-    </PageHeading>
+  <SidebarProvider class="min-h-screen">
+    <Sidebar variant="inset" collapsible="none" class="border-r border-sidebar-border/70">
+      <SidebarHeader>
+        <div class="px-2 py-1">
+          <p class="text-sm font-semibold tracking-[0.22em]">MISUZU</p>
+          <p class="text-[11px] text-sidebar-foreground/70">web console</p>
+        </div>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton :is-active="!isOverviewRoute" @click="openDefaultAgent">
+              <BotIcon />
+              <span>Chat</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton :is-active="isOverviewRoute" @click="openOverview">
+              <ListChecksIcon />
+              <span>Queue & Setup</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
 
-    <section class="flex flex-wrap gap-2 rounded-lg border border-border/60 bg-card p-3">
-      <Button variant="outline" @click="runtime.syncChallenges">Sync Challenges</Button>
-      <Button variant="outline" @click="runtime.syncNotices">Sync Notices</Button>
-      <Button
-        v-if="!summary?.initialized && !summary?.environmentAgentReady"
-        variant="outline"
-        @click="runtime.ensureEnvironmentAgent"
-      >
-        Add Environment Agent
-      </Button>
-      <Button @click="runtime.startDispatch(true)">Start Flow</Button>
-      <Button variant="destructive" @click="runtime.pauseDispatch">Pause Flow</Button>
-      <Button variant="secondary" @click="openOverview">Overview</Button>
-    </section>
+      <SidebarSeparator />
 
-    <section class="grid gap-4 xl:grid-cols-[292px_minmax(0,1fr)]">
-      <Card class="bg-card/80">
-        <CardHeader>
-          <CardTitle class="text-sm uppercase tracking-wide text-muted-foreground"
-            >Agents</CardTitle
-          >
-        </CardHeader>
-        <CardContent class="space-y-3 px-3 pb-3">
-          <ScrollArea class="h-[260px] rounded-md border">
-            <div class="grid gap-2 p-2 pr-3">
-              <Button
-                v-for="agent in summary?.agents ?? []"
-                :key="agent.id"
-                :variant="route.params.agentId === agent.id ? 'secondary' : 'ghost'"
-                class="w-full min-w-0 justify-between border border-transparent px-2 text-foreground hover:text-foreground"
-                :class="
-                  route.params.agentId === agent.id
-                    ? 'border-border bg-accent text-accent-foreground'
-                    : 'text-muted-foreground'
-                "
-                @click="openAgent(agent.id)"
-              >
-                <span class="min-w-0 flex-1 truncate text-left">{{ agent.name }}</span>
-                <Badge :variant="agent.role === 'environment' ? 'secondary' : 'outline'">
-                  {{ agent.role }}
-                </Badge>
-              </Button>
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupLabel>Agents</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <ScrollArea class="h-[260px]">
+              <SidebarMenu>
+                <SidebarMenuItem v-for="agent in sidebarAgents" :key="agent.id">
+                  <SidebarMenuButton
+                    :is-active="selectedAgentId === agent.id && !isOverviewRoute"
+                    @click="openAgent(agent.id)"
+                  >
+                    <ShieldCheckIcon v-if="agent.role === 'environment'" />
+                    <BotIcon v-else />
+                    <span>{{ agent.name }}</span>
+                    <Badge class="ml-auto" :variant="statusBadgeVariant(agent.status)">
+                      {{ statusLabel(agent.status) }}
+                    </Badge>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </ScrollArea>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>Runtime Controls</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton @click="runtime.syncChallenges">
+                  <RefreshCcwIcon />
+                  <span>Sync Challenges</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton @click="runtime.syncNotices">
+                  <RefreshCcwIcon />
+                  <span>Sync Notices</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem v-if="summary?.paused">
+                <SidebarMenuButton @click="runtime.startDispatch(true)">
+                  <PlayCircleIcon />
+                  <span>Start Flow</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem v-else>
+                <SidebarMenuButton @click="runtime.pauseDispatch">
+                  <PauseCircleIcon />
+                  <span>Pause Flow</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem v-if="!summary?.initialized && !summary?.environmentAgentReady">
+                <SidebarMenuButton @click="runtime.ensureEnvironmentAgent">
+                  <ShieldCheckIcon />
+                  <span>Add Environment Agent</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>Workspace</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <div class="rounded-lg border border-sidebar-border/80 bg-sidebar-accent/30 p-3">
+              <p class="truncate text-[11px] text-sidebar-foreground/70">
+                {{ summary?.rootDir ?? workspaceId }}
+              </p>
+              <div class="mt-3 grid grid-cols-2 gap-2 text-xs">
+                <div class="rounded-md border border-sidebar-border/70 bg-sidebar p-2">
+                  <p class="text-sidebar-foreground/70">Challenges</p>
+                  <p class="mt-1 text-sm font-semibold">{{ summary?.challenges.length ?? 0 }}</p>
+                </div>
+                <div class="rounded-md border border-sidebar-border/70 bg-sidebar p-2">
+                  <p class="text-sidebar-foreground/70">Pending</p>
+                  <p class="mt-1 text-sm font-semibold">
+                    {{ summary?.queue.pendingTaskCount ?? 0 }}
+                  </p>
+                </div>
+                <div class="rounded-md border border-sidebar-border/70 bg-sidebar p-2">
+                  <p class="text-sidebar-foreground/70">Busy</p>
+                  <p class="mt-1 text-sm font-semibold">
+                    {{ summary?.queue.busySolverCount ?? 0 }}
+                  </p>
+                </div>
+                <div class="rounded-md border border-sidebar-border/70 bg-sidebar p-2">
+                  <p class="text-sidebar-foreground/70">State</p>
+                  <p class="mt-1 text-sm font-semibold">
+                    {{ summary?.paused ? "Paused" : "Running" }}
+                  </p>
+                </div>
+              </div>
             </div>
-          </ScrollArea>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
 
-          <div class="space-y-2 rounded-md border p-3 text-xs text-muted-foreground">
-            <p>Managed challenges: {{ summary?.challenges.length ?? 0 }}</p>
-            <p>Pending tasks: {{ summary?.queue.pendingTaskCount ?? 0 }}</p>
-            <p>Active solvers: {{ summary?.queue.busySolverCount ?? 0 }}</p>
-          </div>
-        </CardContent>
-      </Card>
+      <SidebarFooter>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton @click="openHome">
+              <HomeIcon />
+              <span>Home</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton @click="openCreateWorkspace">
+              <PlusIcon />
+              <span>New Workspace</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <ThemeToggle sidebar />
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarFooter>
+    </Sidebar>
 
-      <RouterView />
-    </section>
-  </div>
+    <SidebarInset>
+      <header class="flex items-center justify-between gap-2 border-b px-4 py-3">
+        <div class="flex min-w-0 items-center gap-2">
+          <p class="truncate text-sm font-semibold">
+            {{ isOverviewRoute ? "Queue & Setup" : activeAgentName }}
+          </p>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <Badge :variant="summary?.paused ? 'destructive' : 'default'">
+            {{ summary?.paused ? "Paused" : "Running" }}
+          </Badge>
+          <Badge variant="outline" class="hidden sm:inline-flex">
+            Pending {{ summary?.queue.pendingTaskCount ?? 0 }}
+          </Badge>
+        </div>
+      </header>
+
+      <section class="px-3 py-3 md:px-4" :class="contentClass">
+        <RouterView />
+      </section>
+    </SidebarInset>
+  </SidebarProvider>
 </template>

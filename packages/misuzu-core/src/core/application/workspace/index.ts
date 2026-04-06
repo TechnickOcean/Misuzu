@@ -34,6 +34,7 @@ export {
   type PersistedCTFRuntimeSyncState,
   type PersistedCTFRuntimeSolverHubState,
   type PersistedCTFRuntimeManagedChallenge,
+  type PersistedCTFRuntimeChallengeProgress,
   type PersistedCTFRuntimeState,
   type PersistedCTFRuntimeWorkspaceState,
 } from "./ctf-runtime/state.ts"

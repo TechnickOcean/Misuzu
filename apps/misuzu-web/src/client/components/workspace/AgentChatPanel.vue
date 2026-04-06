@@ -2,7 +2,6 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue"
 import { SendHorizontalIcon } from "lucide-vue-next"
 import type { AgentMessagePart, AgentStateSnapshot, PromptMode } from "../../../shared/protocol.ts"
-import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   InputGroup,
@@ -322,6 +321,20 @@ function scrollToBottom() {
   viewport.scrollTop = viewport.scrollHeight
 }
 
+function waitForAnimationFrame() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve())
+  })
+}
+
+async function scrollToBottomSoon(retries = 3) {
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    await nextTick()
+    await waitForAnimationFrame()
+    scrollToBottom()
+  }
+}
+
 async function loadOlderMessagesFromTop(viewport: HTMLElement) {
   if (loadingOlderMessages.value || hiddenMessageCount.value <= 0) {
     return
@@ -365,7 +378,7 @@ function bindViewportListener() {
 onMounted(async () => {
   await nextTick()
   bindViewportListener()
-  scrollToBottom()
+  await scrollToBottomSoon()
 })
 
 onUnmounted(() => {
@@ -375,12 +388,17 @@ onUnmounted(() => {
 watch(scrollContainer, async () => {
   await nextTick()
   bindViewportListener()
+  await scrollToBottomSoon(2)
 })
 
 watch(
   () => props.state,
   async (nextState, previousState) => {
-    if (!nextState || nextState === previousState) {
+    if (!nextState) {
+      return
+    }
+
+    if (previousState && nextState === previousState) {
       return
     }
 
@@ -388,8 +406,9 @@ watch(
     stickToBottom.value = true
     await nextTick()
     bindViewportListener()
-    scrollToBottom()
+    await scrollToBottomSoon()
   },
+  { immediate: true },
 )
 
 watch(
@@ -408,29 +427,23 @@ watch(
       return
     }
 
-    await nextTick()
-    scrollToBottom()
+    await scrollToBottomSoon(2)
   },
 )
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col">
-    <header class="flex flex-wrap items-center justify-between gap-2 px-1">
-      <h3 class="text-base font-semibold">{{ title }}</h3>
-      <Badge :variant="state?.isRunning ? 'destructive' : 'secondary'">
-        {{ state?.isRunning ? "Running" : "Idle" }}
-      </Badge>
-    </header>
-
-    <div class="mt-1 flex items-center justify-between px-1 text-xs text-muted-foreground">
+  <div class="flex min-h-0 max-h-[calc(100dvh-4rem)] flex-col gap-2 overflow-scroll">
+    <div
+      class="mx-auto flex w-full items-center justify-between px-1 text-xs text-muted-foreground xl:max-w-[50vw]"
+    >
       <span>Model: {{ state?.modelId ?? "Not selected" }}</span>
       <span>Messages: {{ state?.messages.length ?? 0 }}</span>
     </div>
 
-    <div ref="scrollContainer" class="mt-3 min-h-0 flex-1">
-      <ScrollArea class="h-full rounded-xl border bg-card/80 px-3 py-2">
-        <div class="mx-auto grid w-full max-w-[72rem] gap-3 pb-6 pt-2">
+    <div ref="scrollContainer" class="min-h-0 flex-1">
+      <ScrollArea class="h-full rounded-xl bg-card/80 px-3 py-2 pb-30">
+        <div class="mx-auto grid w-full gap-3 pb-5 pt-2 text-left xl:max-w-[50vw]">
           <div v-if="loadingOlderMessages" class="text-center text-xs text-muted-foreground">
             Loading older messages...
           </div>
@@ -452,11 +465,10 @@ watch(
           <article
             v-for="(message, index) in visibleMessages"
             :key="`${message.timestamp ?? `${message.role}-${index}`}`"
-            class="grid"
-            :class="isUserRole(message.role) ? 'justify-items-end' : 'justify-items-start'"
+            class="grid justify-items-start"
           >
             <div
-              class="max-w-[96%] rounded-2xl border px-3 py-2 md:max-w-[88%]"
+              class="w-full max-w-full rounded-2xl border px-3 py-2"
               :class="isUserRole(message.role) ? 'bg-primary/10' : 'bg-background/90'"
             >
               <header
@@ -556,59 +568,58 @@ watch(
               </div>
             </div>
           </article>
+          <form
+            class="shrink-0 fixed bottom-0 pb-2 pt-1 xl:max-w-[50vw] bg-background w-full"
+            @submit.prevent="submitPrompt"
+          >
+            <div class="mx-auto w-full">
+              <InputGroup class="h-auto rounded-2xl">
+                <InputGroupTextarea
+                  v-model="promptInput"
+                  :rows="compact ? 1 : 2"
+                  class="max-h-44 min-h-14 border-0 text-sm"
+                  :placeholder="composerPlaceholder"
+                  :disabled="loading"
+                  @keydown="handleComposerKeydown"
+                />
+
+                <InputGroupAddon align="block-end" class="border-t">
+                  <div class="flex w-full flex-wrap items-center justify-between gap-2">
+                    <div class="flex items-center gap-1">
+                      <InputGroupButton
+                        type="button"
+                        size="sm"
+                        :variant="promptMode === 'followup' ? 'secondary' : 'ghost'"
+                        @click="promptMode = 'followup'"
+                      >
+                        Followup
+                      </InputGroupButton>
+                      <InputGroupButton
+                        type="button"
+                        size="sm"
+                        :variant="promptMode === 'steer' ? 'secondary' : 'ghost'"
+                        @click="promptMode = 'steer'"
+                      >
+                        Steer
+                      </InputGroupButton>
+                    </div>
+
+                    <InputGroupButton
+                      type="submit"
+                      size="sm"
+                      variant="default"
+                      :disabled="loading || !promptInput.trim()"
+                    >
+                      <SendHorizontalIcon class="size-4" />
+                      {{ loading ? "Sending..." : promptMode === "steer" ? "Steer" : "Send" }}
+                    </InputGroupButton>
+                  </div>
+                </InputGroupAddon>
+              </InputGroup>
+            </div>
+          </form>
         </div>
       </ScrollArea>
     </div>
-
-    <form
-      class="sticky bottom-0 z-20 mt-3 border-t border-border/60 bg-background/95 pb-2 pt-3 backdrop-blur supports-[backdrop-filter]:bg-background/70"
-      @submit.prevent="submitPrompt"
-    >
-      <div class="mx-auto w-full max-w-[72rem] px-1">
-        <InputGroup class="h-auto rounded-2xl">
-          <InputGroupTextarea
-            v-model="promptInput"
-            :rows="compact ? 2 : 4"
-            class="max-h-64 min-h-24 border-0 text-sm"
-            :placeholder="composerPlaceholder"
-            :disabled="loading"
-            @keydown="handleComposerKeydown"
-          />
-
-          <InputGroupAddon align="block-end" class="border-t">
-            <div class="flex w-full flex-wrap items-center justify-between gap-2">
-              <div class="flex items-center gap-1">
-                <InputGroupButton
-                  type="button"
-                  size="sm"
-                  :variant="promptMode === 'followup' ? 'secondary' : 'ghost'"
-                  @click="promptMode = 'followup'"
-                >
-                  Followup
-                </InputGroupButton>
-                <InputGroupButton
-                  type="button"
-                  size="sm"
-                  :variant="promptMode === 'steer' ? 'secondary' : 'ghost'"
-                  @click="promptMode = 'steer'"
-                >
-                  Steer
-                </InputGroupButton>
-              </div>
-
-              <InputGroupButton
-                type="submit"
-                size="sm"
-                variant="default"
-                :disabled="loading || !promptInput.trim()"
-              >
-                <SendHorizontalIcon class="size-4" />
-                {{ loading ? "Sending..." : promptMode === "steer" ? "Steer" : "Send" }}
-              </InputGroupButton>
-            </div>
-          </InputGroupAddon>
-        </InputGroup>
-      </div>
-    </form>
   </div>
 </template>

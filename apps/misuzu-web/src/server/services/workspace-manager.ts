@@ -185,6 +185,17 @@ export class WorkspaceManager {
     return this.toRuntimeSnapshot(session)
   }
 
+  async updateRuntimeModelPool(workspaceId: string, pool: RuntimeCreateRequest["modelPool"]) {
+    const session = await this.requireRuntimeSession(workspaceId)
+    if (!session.workspace.isTaskDispatchPaused()) {
+      throw new Error("Pause runtime dispatch before updating model pool")
+    }
+
+    await this.applyModelPool(session.workspace, pool)
+    this.publishRuntimeSnapshot(session)
+    return this.toRuntimeSnapshot(session)
+  }
+
   async syncRuntimeChallenges(workspaceId: string) {
     const session = await this.requireRuntimeSession(workspaceId)
     this.ensureRuntimeInitialized(session)
@@ -360,6 +371,7 @@ export class WorkspaceManager {
 
     this.runtimeSessions.set(entry.id, session)
     this.bindRuntimeSolverAgents(session)
+    this.seedAutoQueuedChallenges(session)
 
     if (session.autoOrchestrate && session.runtimeInitialized) {
       this.enqueueManagedChallenges(session)
@@ -433,6 +445,7 @@ export class WorkspaceManager {
       },
     }
     this.bindRuntimeSolverAgents(session)
+    this.seedAutoQueuedChallenges(session)
 
     if (session.autoOrchestrate) {
       this.enqueueManagedChallenges(session)
@@ -624,6 +637,10 @@ export class WorkspaceManager {
     }
 
     for (const challenge of challenges) {
+      if (!session.workspace.getSolverById(challenge.solverId)) {
+        continue
+      }
+
       agents.push({
         id: challenge.solverId,
         name: challenge.title,
@@ -642,6 +659,7 @@ export class WorkspaceManager {
         : session.entry.runtime?.pluginId,
       paused: session.workspace.isTaskDispatchPaused(),
       queue: session.workspace.getSchedulerState(),
+      modelPool: session.workspace.getModelPoolState(),
       challenges,
       agents,
       environmentAgentReady: Boolean(session.environmentAgent),
@@ -687,15 +705,78 @@ export class WorkspaceManager {
       .sort((left, right) => left - right)
 
     for (const challengeId of challengeIds) {
-      if (session.autoQueuedChallenges.has(challengeId)) {
+      this.enqueueAutoChallenge(session, challengeId)
+    }
+  }
+
+  private seedAutoQueuedChallenges(session: RuntimeWorkspaceSession) {
+    session.autoQueuedChallenges.clear()
+
+    for (const task of session.workspace.listPendingSchedulerTasks()) {
+      const challengeId = resolveChallengeIdFromPayload(task.payload)
+      if (challengeId === undefined) {
         continue
       }
 
       session.autoQueuedChallenges.add(challengeId)
-      void session.workspace.enqueueTask({ challenge: challengeId }).catch(() => {
-        session.autoQueuedChallenges.delete(challengeId)
-      })
     }
+
+    for (const inflight of session.workspace.listInflightSchedulerTasks()) {
+      const challengeId = resolveChallengeIdFromPayload(inflight.task.payload)
+      if (challengeId === undefined) {
+        continue
+      }
+
+      session.autoQueuedChallenges.add(challengeId)
+    }
+  }
+
+  private enqueueAutoChallenge(session: RuntimeWorkspaceSession, challengeId: number) {
+    if (session.autoQueuedChallenges.has(challengeId)) {
+      return
+    }
+
+    if (!this.isAutoQueueEligible(session, challengeId)) {
+      return
+    }
+
+    session.autoQueuedChallenges.add(challengeId)
+
+    void session.workspace
+      .enqueueTask({ challenge: challengeId })
+      .then(() => {
+        this.handleAutoChallengeTaskSettled(session, challengeId)
+      })
+      .catch(() => {
+        this.handleAutoChallengeTaskSettled(session, challengeId)
+      })
+  }
+
+  private handleAutoChallengeTaskSettled(session: RuntimeWorkspaceSession, challengeId: number) {
+    session.autoQueuedChallenges.delete(challengeId)
+
+    if (!this.runtimeSessions.has(session.id) || !session.autoOrchestrate) {
+      return
+    }
+
+    if (session.workspace.isTaskDispatchPaused()) {
+      return
+    }
+
+    this.enqueueManagedChallenges(session)
+    this.publishRuntimeSnapshot(session)
+  }
+
+  private isAutoQueueEligible(session: RuntimeWorkspaceSession, challengeId: number) {
+    if (!session.workspace.getChallengeSolver(challengeId)) {
+      return false
+    }
+
+    const progress = session.workspace
+      .listSolverProgressStates()
+      .find((state) => state.challengeId === challengeId)
+
+    return progress?.status !== "solved" && progress?.status !== "blocked"
   }
 
   private async applyModelPool(

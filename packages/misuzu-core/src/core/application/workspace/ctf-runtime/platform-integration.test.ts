@@ -842,6 +842,140 @@ describe("ctf runtime platform integration", () => {
     await restoredWorkspace.shutdown()
   })
 
+  test("restores solved progress and skips solver recreation for solved challenges", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const challengeId = 181
+
+    const runtime = {
+      plugin: new MockPlatformPlugin([
+        {
+          id: challengeId,
+          title: "restore-solved",
+          category: "misc",
+          score: 120,
+          solvedCount: 2,
+        },
+      ]),
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" as const },
+        auth: { mode: "cookie" as const, cookie: "sid=abc" },
+      },
+    }
+
+    const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir, runtime })
+    await firstWorkspace.setModelPoolItems([resolveDefaultPoolItem()])
+
+    const solver = firstWorkspace.getChallengeSolver(challengeId)
+    expect(solver).toBeDefined()
+
+    const solverHub = Reflect.get(firstWorkspace as object, "solverHub") as {
+      submitFlag: (targetChallengeId: number, flag: string) => Promise<{ accepted: boolean }>
+    }
+
+    const solverWorkspace = await firstWorkspace.deriveSolverWorkspace(
+      `solver-${String(challengeId)}`,
+    )
+
+    solver!.prompt = async () => {
+      await writeFile(
+        join(solverWorkspace.rootDir, "WriteUp.md"),
+        "# Writeup\n\n- restored solved challenge\n",
+        "utf-8",
+      )
+      await solverHub.submitFlag(challengeId, "flag{accepted}")
+    }
+
+    await firstWorkspace.enqueueTask({ challenge: challengeId })
+
+    const firstProgress = firstWorkspace
+      .listSolverProgressStates()
+      .find((state) => state.challengeId === challengeId)
+    expect(firstProgress?.status).toBe("solved")
+
+    await firstWorkspace.shutdown()
+
+    const restoredWorkspace = await createCTFRuntimeWorkspace({
+      rootDir,
+      runtime: {
+        ...runtime,
+        plugin: new MockPlatformPlugin([
+          {
+            id: challengeId,
+            title: "restore-solved",
+            category: "misc",
+            score: 120,
+            solvedCount: 2,
+          },
+        ]),
+      },
+    })
+
+    await restoredWorkspace.setModelPoolItems([resolveDefaultPoolItem()])
+
+    const restoredProgress = restoredWorkspace
+      .listSolverProgressStates()
+      .find((state) => state.challengeId === challengeId)
+    expect(restoredProgress?.status).toBe("solved")
+    expect(restoredWorkspace.getChallengeSolver(challengeId)).toBeUndefined()
+
+    await restoredWorkspace.shutdown()
+  })
+
+  test("uses continue loop for resumed solver with existing history", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const challengeId = 182
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    const plugin = new MockPlatformPlugin([
+      {
+        id: challengeId,
+        title: "resume-continue",
+        category: "misc",
+        score: 90,
+        solvedCount: 0,
+      },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "cookie", cookie: "sid=abc" },
+      },
+    })
+
+    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
+
+    const solver = workspace.getChallengeSolver(challengeId)
+    expect(solver).toBeDefined()
+
+    solver!.replaceMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "restored-history" }],
+        timestamp: Date.now(),
+      } as any,
+    ])
+
+    let promptCalls = 0
+    let continueCalls = 0
+    solver!.prompt = async () => {
+      promptCalls += 1
+    }
+    solver!.continue = async () => {
+      continueCalls += 1
+    }
+
+    await workspace.enqueueTask({ challenge: challengeId })
+
+    expect(promptCalls).toBe(0)
+    expect(continueCalls).toBe(1)
+
+    await workspace.shutdown()
+  })
+
   test("supports platform initialization during workspace creation", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
     const plugin = new MockPlatformPlugin([
