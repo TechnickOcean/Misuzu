@@ -20,6 +20,7 @@ export interface RuntimeInitOptions {
   pluginConfig: PluginConfig
   plugin?: CTFPlatformPlugin
   cron?: RuntimeCronOptions
+  startPaused?: boolean
   restore?: {
     authSession?: AuthSession
     contestId?: number

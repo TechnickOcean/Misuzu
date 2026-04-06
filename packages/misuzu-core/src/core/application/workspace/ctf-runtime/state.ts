@@ -38,6 +38,7 @@ export interface PersistedCTFRuntimeInflightTask {
 
 export interface PersistedCTFRuntimeQueueState {
   taskSequence: number
+  paused: boolean
   pendingTasks: PersistedCTFRuntimeQueueTask[]
   inflightTasks: PersistedCTFRuntimeInflightTask[]
 }

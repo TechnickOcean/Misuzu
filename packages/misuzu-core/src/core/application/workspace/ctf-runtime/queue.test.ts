@@ -64,4 +64,31 @@ describe("ctf runtime fifo scheduler", () => {
     expect(observedTaskIds).toEqual(["task-1", "task-2"])
     expect(results.map((result) => result.taskId)).toEqual(["task-1", "task-2"])
   })
+
+  test("pauses and resumes task dispatch without dropping queued tasks", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    const observedTaskIds: string[] = []
+    workspace.pauseTaskDispatch()
+    workspace.registerSolver({
+      solverId: "solver-paused",
+      solve: async (task) => {
+        observedTaskIds.push(task.taskId)
+        return task.payload
+      },
+    })
+
+    const firstTask = workspace.enqueueTask({ challenge: "paused" }, "task-paused")
+
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(observedTaskIds).toEqual([])
+    expect(workspace.getSchedulerState().paused).toBe(true)
+
+    workspace.resumeTaskDispatch()
+    await firstTask
+
+    expect(observedTaskIds).toEqual(["task-paused"])
+    expect(workspace.getSchedulerState().paused).toBe(false)
+  })
 })

@@ -55,6 +55,7 @@ import {
   CTF_RUNTIME_STATE_VERSION,
   type PersistedEnvironmentAgentRuntimeState,
   type PersistedCTFRuntimeConfig,
+  type PersistedCTFRuntimeManagedChallenge,
   type PersistedCTFRuntimeSnapshot,
   type PersistedCTFRuntimeState,
 } from "./state.ts"
@@ -221,8 +222,17 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     return this.solverHub.getManagedChallengeIds()
   }
 
+  listManagedChallenges(): PersistedCTFRuntimeManagedChallenge[] {
+    return this.solverHub.snapshotState().managedChallenges
+  }
+
   getChallengeSolver(challengeId: number) {
     return this.solverHub.getChallengeSolver(challengeId)
+  }
+
+  getSolverById(solverId: string) {
+    return this.solverHub.getChallengeBindings().find((binding) => binding.solverId === solverId)
+      ?.solver
   }
 
   getSolverActivationState(challengeId: number): CTFSolverActivationState | undefined {
@@ -236,6 +246,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
   async initializeRuntime(options: RuntimeInitOptions) {
     const restoreSnapshot = this.getMatchingPendingRuntimeSnapshot(options)
     this.restoreQueueFromSnapshot(restoreSnapshot)
+    this.applyRuntimeDispatchPreference(options.startPaused)
 
     await this.orchestrator.initialize(
       {
@@ -274,6 +285,18 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
 
   getSchedulerState() {
     return this.queue.getState()
+  }
+
+  pauseTaskDispatch() {
+    this.queue.pause()
+  }
+
+  resumeTaskDispatch() {
+    this.queue.resume()
+  }
+
+  isTaskDispatchPaused() {
+    return this.queue.isPaused()
   }
 
   async attachRuntime(runtime: CTFRuntime) {
@@ -490,6 +513,17 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
       registerCronJob: (name: string, intervalMs: number, handler: () => Promise<void>) => {
         this.registerCronJob(name, intervalMs, handler)
       },
+    }
+  }
+
+  private applyRuntimeDispatchPreference(startPaused: boolean | undefined) {
+    if (startPaused === true) {
+      this.queue.pause()
+      return
+    }
+
+    if (startPaused === false) {
+      this.queue.resume()
     }
   }
 

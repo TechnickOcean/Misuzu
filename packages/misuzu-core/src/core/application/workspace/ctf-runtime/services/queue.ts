@@ -36,6 +36,7 @@ export class QueueService {
   private readonly busySolverIds = new Set<string>()
   private readonly inflightTasks = new Map<string, SolverTask>()
   private taskSequence = 0
+  private paused = false
   private onStateChanged: QueueStateChangeListener = () => {}
 
   setStateChangeListener(listener: QueueStateChangeListener) {
@@ -75,6 +76,29 @@ export class QueueService {
     })
   }
 
+  pause() {
+    if (this.paused) {
+      return
+    }
+
+    this.paused = true
+    this.notifyStateChanged()
+  }
+
+  resume() {
+    if (!this.paused) {
+      return
+    }
+
+    this.paused = false
+    this.notifyStateChanged()
+    this.scheduleDispatch()
+  }
+
+  isPaused() {
+    return this.paused
+  }
+
   restoreState(state: PersistedCTFRuntimeQueueState | undefined) {
     if (!state) {
       return
@@ -83,6 +107,7 @@ export class QueueService {
     this.taskSequence = Number.isFinite(state.taskSequence)
       ? Math.max(0, Math.floor(state.taskSequence))
       : 0
+    this.paused = typeof state.paused === "boolean" ? state.paused : false
 
     this.pendingTaskQueue.length = 0
     this.inflightTasks.clear()
@@ -95,6 +120,7 @@ export class QueueService {
   snapshotState(): PersistedCTFRuntimeQueueState {
     return {
       taskSequence: this.taskSequence,
+      paused: this.paused,
       pendingTasks: this.pendingTaskQueue.map((pendingTask) => ({
         taskId: pendingTask.task.taskId,
         payload: pendingTask.task.payload,
@@ -109,6 +135,7 @@ export class QueueService {
 
   getState() {
     return {
+      paused: this.paused,
       pendingTaskCount: this.pendingTaskQueue.length,
       idleSolverCount: this.idleSolverQueue.length,
       busySolverCount: this.busySolverIds.size,
@@ -141,6 +168,10 @@ export class QueueService {
   }
 
   private dispatchNextTask() {
+    if (this.paused) {
+      return false
+    }
+
     const pendingTask = this.pendingTaskQueue.shift()
     if (!pendingTask) {
       return false

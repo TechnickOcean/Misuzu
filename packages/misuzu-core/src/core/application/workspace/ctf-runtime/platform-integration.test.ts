@@ -513,6 +513,60 @@ describe("ctf runtime platform integration", () => {
     await workspace.shutdown()
   })
 
+  test("keeps queue paused when runtime initializes with startPaused", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    const plugin = new MockPlatformPlugin([
+      {
+        id: 121,
+        title: "paused-runtime",
+        category: "misc",
+        score: 100,
+        solvedCount: 0,
+      },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "cookie", cookie: "sid=abc" },
+      },
+      startPaused: true,
+    })
+
+    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
+    const solver = workspace.getChallengeSolver(121)
+    expect(solver).toBeDefined()
+
+    let started = false
+    let finishPrompt: (() => void) | undefined
+    solver!.prompt = async () => {
+      started = true
+      await new Promise<void>((resolve) => {
+        finishPrompt = resolve
+      })
+    }
+
+    const pendingTask = workspace.enqueueTask({ challenge: 121 }, "task-paused-runtime")
+
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(started).toBe(false)
+    expect(workspace.isTaskDispatchPaused()).toBe(true)
+
+    workspace.resumeTaskDispatch()
+
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(started).toBe(true)
+
+    finishPrompt?.()
+    await pendingTask
+
+    await workspace.shutdown()
+  })
+
   test("creates solver bindings without model pool but blocks execution", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
