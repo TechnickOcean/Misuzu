@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue"
+import { computed, onMounted, reactive, ref } from "vue"
 import { marked } from "marked"
 import { useRouter } from "vue-router"
-import type { PluginCatalogItem, RuntimeInitRequest } from "@shared/protocol.ts"
+import type { PluginCatalogItem } from "@shared/protocol.ts"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -15,8 +15,14 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
-import { Textarea } from "@/components/ui/textarea"
 import { useRuntimeWorkspace } from "@/composables/use-runtime-workspace.ts"
+import {
+  createDefaultPluginConfigDraft,
+  toPluginConfig,
+  type AuthMode,
+  type ContestMode,
+  type PluginConfigDraft,
+} from "@/composables/plugin-config-form.ts"
 import { useAppServices } from "@/di/app-services.ts"
 
 const props = defineProps<{
@@ -31,9 +37,7 @@ const plugins = ref<PluginCatalogItem[]>([])
 const pluginQuery = ref("")
 const selectedPluginId = ref("")
 const pluginReadmeHtml = ref("")
-const pluginConfigJson = ref(
-  '{\n  "baseUrl": "https://example.com",\n  "contest": { "mode": "auto" },\n  "auth": { "mode": "cookie", "cookie": "sid=..." }\n}',
-)
+const pluginDraft = reactive<PluginConfigDraft>(createDefaultPluginConfigDraft())
 const initError = ref("")
 
 const snapshot = computed(() => runtime.snapshot.value)
@@ -62,8 +66,11 @@ async function initializeRuntime() {
   initError.value = ""
 
   try {
-    const pluginConfig = JSON.parse(pluginConfigJson.value) as RuntimeInitRequest["pluginConfig"]
-    await runtime.initializeRuntime(selectedPluginId.value, pluginConfig)
+    if (!selectedPluginId.value) {
+      throw new Error("Please select a plugin")
+    }
+
+    await runtime.initializeRuntime(selectedPluginId.value, toPluginConfig(pluginDraft))
     await runtime.syncChallenges()
   } catch (error) {
     initError.value = error instanceof Error ? error.message : String(error)
@@ -78,6 +85,14 @@ function openSolverAgent(agentId: string) {
       agentId,
     },
   })
+}
+
+function setContestMode(value: string) {
+  pluginDraft.contestMode = value as ContestMode
+}
+
+function setAuthMode(value: string) {
+  pluginDraft.authMode = value as AuthMode
 }
 </script>
 
@@ -114,48 +129,116 @@ function openSolverAgent(agentId: string) {
       <CardHeader>
         <CardTitle>Initialize Runtime Plugin</CardTitle>
         <CardDescription>
-          You are in no-plugin mode. Keep EnvironmentAgent active, then initialize runtime here
-          after adapter setup is ready.
+          Runtime is in no-plugin mode. Configure adapter credentials below and bootstrap platform
+          sync.
         </CardDescription>
       </CardHeader>
       <CardContent class="grid gap-4">
-        <div class="grid gap-2">
-          <label class="text-sm font-medium">Search plugin</label>
-          <div class="flex gap-2">
-            <Input v-model="pluginQuery" placeholder="plugin id / name" />
-            <Button variant="outline" @click="loadPlugins">Search</Button>
-          </div>
+        <div class="flex gap-2">
+          <Input v-model="pluginQuery" placeholder="search plugin by id/name" />
+          <Button variant="outline" @click="loadPlugins">Search</Button>
         </div>
 
-        <div class="grid gap-2">
-          <label class="text-sm font-medium">Plugin</label>
-          <Select v-model="selectedPluginId">
-            <SelectTrigger class="w-full">
-              <SelectValue placeholder="Select plugin" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="plugin in plugins" :key="plugin.id" :value="plugin.id">
-                {{ plugin.name }} ({{ plugin.id }})
-              </SelectItem>
-            </SelectContent>
-          </Select>
-          <Button
-            v-if="selectedPluginId"
-            variant="secondary"
-            class="w-fit"
-            @click="loadPluginReadme(selectedPluginId)"
-          >
-            Refresh README
-          </Button>
-        </div>
+        <Select v-model="selectedPluginId">
+          <SelectTrigger class="w-full">
+            <SelectValue placeholder="Select plugin" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem v-for="plugin in plugins" :key="plugin.id" :value="plugin.id">
+              {{ plugin.name }} ({{ plugin.id }})
+            </SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Button
+          v-if="selectedPluginId"
+          variant="secondary"
+          class="w-fit"
+          @click="loadPluginReadme(selectedPluginId)"
+        >
+          Refresh README
+        </Button>
 
         <article class="rounded-md border bg-muted/30 p-3">
           <div class="markdown-content text-sm" v-html="pluginReadmeHtml" />
         </article>
 
-        <div class="grid gap-2">
-          <label class="text-sm font-medium">Plugin config JSON</label>
-          <Textarea v-model="pluginConfigJson" :rows="8" class="font-mono text-xs" />
+        <div class="grid gap-4 md:grid-cols-2">
+          <div class="grid gap-2 md:col-span-2">
+            <label class="text-sm font-medium">Base URL</label>
+            <Input v-model="pluginDraft.baseUrl" placeholder="https://ctf.example.com" />
+          </div>
+
+          <div class="grid gap-2">
+            <label class="text-sm font-medium">Contest Mode</label>
+            <Select :model-value="pluginDraft.contestMode" @update:model-value="setContestMode">
+              <SelectTrigger class="w-full">
+                <SelectValue placeholder="Select contest mode" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">auto</SelectItem>
+                <SelectItem value="id">id</SelectItem>
+                <SelectItem value="title">title</SelectItem>
+                <SelectItem value="url">url</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div v-if="pluginDraft.contestMode !== 'auto'" class="grid gap-2">
+            <label class="text-sm font-medium">Contest Value</label>
+            <Input
+              v-model="pluginDraft.contestValue"
+              :placeholder="pluginDraft.contestMode === 'id' ? '12345' : 'contest value'"
+            />
+          </div>
+
+          <div class="grid gap-2 md:col-span-2">
+            <label class="text-sm font-medium">Auth Mode</label>
+            <Select :model-value="pluginDraft.authMode" @update:model-value="setAuthMode">
+              <SelectTrigger class="w-full">
+                <SelectValue placeholder="Select auth mode" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="manual">manual</SelectItem>
+                <SelectItem value="cookie">cookie</SelectItem>
+                <SelectItem value="token">token</SelectItem>
+                <SelectItem value="credentials">credentials</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div v-if="pluginDraft.authMode === 'cookie'" class="grid gap-2 md:col-span-2">
+            <label class="text-sm font-medium">Cookie</label>
+            <Input v-model="pluginDraft.cookie" placeholder="sid=..." />
+          </div>
+
+          <div v-if="pluginDraft.authMode === 'token'" class="grid gap-2 md:col-span-2">
+            <label class="text-sm font-medium">Bearer Token</label>
+            <Input v-model="pluginDraft.bearerToken" placeholder="eyJ..." />
+          </div>
+
+          <template v-if="pluginDraft.authMode === 'credentials'">
+            <div class="grid gap-2">
+              <label class="text-sm font-medium">Username</label>
+              <Input v-model="pluginDraft.username" placeholder="username" />
+            </div>
+            <div class="grid gap-2">
+              <label class="text-sm font-medium">Password</label>
+              <Input v-model="pluginDraft.password" type="password" placeholder="password" />
+            </div>
+            <div class="grid gap-2">
+              <label class="text-sm font-medium">Login URL</label>
+              <Input v-model="pluginDraft.loginUrl" placeholder="https://.../login" />
+            </div>
+            <div class="grid gap-2">
+              <label class="text-sm font-medium">Auth Check URL</label>
+              <Input v-model="pluginDraft.authCheckUrl" placeholder="https://.../api/me" />
+            </div>
+            <div class="grid gap-2">
+              <label class="text-sm font-medium">Timeout (sec)</label>
+              <Input v-model="pluginDraft.timeoutSec" type="number" min="1" placeholder="120" />
+            </div>
+          </template>
         </div>
 
         <div class="flex items-center gap-2">

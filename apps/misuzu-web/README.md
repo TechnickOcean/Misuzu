@@ -10,17 +10,19 @@ Implemented in `src/client/views/HomeView.vue`.
 
 - Reads persisted workspace registry from backend (`GET /api/workspaces`)
 - Displays existing `CTFRuntimeWorkspace` and `SolverWorkspace`
-- Provides creation flows for both workspace types
+- Uses a Vercel-inspired minimal monochrome layout
+- Provides dark/light mode toggle
+- Workspace creation now redirects to dedicated guided flow route
 
 ### 2) Create CTFRuntimeWorkspace
 
-Implemented by frontend creation form + backend workspace manager.
+Implemented in `src/client/views/CreateWorkspaceView.vue` with step-by-step wizard.
 
 - Plugin path:
   - Search plugins (`GET /api/plugins?query=...`)
   - Read plugin README (`GET /api/plugins/:pluginId/readme`)
-  - Configure plugin JSON and runtime options
-  - Configure model pool
+  - Configure plugin options via structured form (no raw JSON)
+  - Configure model pool via row-based form editor
   - Initialize runtime and sync first challenge set
   - Optional auto orchestration (FIFO enqueue behavior)
 - No-plugin path:
@@ -108,6 +110,7 @@ apps/misuzu-web/
         use-solver-workspace.ts
       views/
         HomeView.vue
+        CreateWorkspaceView.vue
         SolverWorkspaceView.vue
         runtime/
           RuntimeWorkspaceLayout.vue
@@ -185,6 +188,7 @@ Server emits typed messages:
 Router is in `src/client/router.ts` with routes:
 
 - `/` -> `HomeView`
+- `/workspaces/new` -> `CreateWorkspaceView`
 - `/runtime/:id/overview` -> runtime summary page
 - `/runtime/:id/agent/:agentId` -> runtime agent chat page
 - `/solver/:id` -> `SolverWorkspaceView`
@@ -204,6 +208,14 @@ Used in pages/components:
 
 - `button`, `card`, `input`, `textarea`, `badge`
 - `select`, `tabs`, `scroll-area`, `separator`, `switch`
+
+### Theme Mode
+
+Theme mode is controlled via Vue composable and persisted in localStorage.
+
+- composable: `src/client/composables/use-theme-mode.ts`
+- toggle component: `src/client/components/ThemeToggle.vue`
+- palette: pure monochrome (black/white + gray scale), no gradient background
 
 ### State Management (Pinia + composables)
 

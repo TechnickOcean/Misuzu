@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, watch } from "vue"
 import { useRoute, useRouter } from "vue-router"
+import ThemeToggle from "@/components/ThemeToggle.vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -82,18 +83,19 @@ function openAgent(agentId: string) {
     >
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="space-y-1">
-          <Button variant="ghost" class="-ml-2 w-fit" @click="router.push({ name: 'home' })">
-            ← Home
-          </Button>
           <h1 class="text-2xl font-semibold tracking-tight">Runtime Workspace</h1>
           <p class="break-all text-xs text-muted-foreground">
             {{ summary?.rootDir ?? workspaceId }}
           </p>
         </div>
 
-        <Badge :variant="summary?.paused ? 'destructive' : 'default'">
-          {{ summary?.paused ? "Paused" : "Running" }}
-        </Badge>
+        <div class="flex items-center gap-2">
+          <ThemeToggle />
+          <Button variant="ghost" class="w-fit" @click="router.push({ name: 'home' })">Home</Button>
+          <Badge :variant="summary?.paused ? 'destructive' : 'default'">
+            {{ summary?.paused ? "Paused" : "Running" }}
+          </Badge>
+        </div>
       </div>
 
       <div class="flex flex-wrap gap-2">

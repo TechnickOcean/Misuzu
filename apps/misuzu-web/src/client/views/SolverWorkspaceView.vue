@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue"
 import { useRoute, useRouter } from "vue-router"
+import ThemeToggle from "@/components/ThemeToggle.vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -39,16 +40,17 @@ async function sendPrompt(prompt: string) {
       class="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card/75 p-4"
     >
       <div class="space-y-1">
-        <Button variant="ghost" class="-ml-2 w-fit" @click="router.push({ name: 'home' })">
-          ← Home
-        </Button>
         <h1 class="text-2xl font-semibold tracking-tight">Solver Workspace</h1>
         <p class="break-all text-xs text-muted-foreground">
           {{ solver.snapshot.value?.rootDir ?? workspaceId }}
         </p>
       </div>
 
-      <Badge variant="secondary">{{ solver.snapshot.value?.modelId ?? "No model" }}</Badge>
+      <div class="flex items-center gap-2">
+        <ThemeToggle />
+        <Button variant="ghost" class="w-fit" @click="router.push({ name: 'home' })">Home</Button>
+        <Badge variant="secondary">{{ solver.snapshot.value?.modelId ?? "No model" }}</Badge>
+      </div>
     </header>
 
     <Card class="min-h-[620px]">

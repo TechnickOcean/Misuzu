@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router"
+import CreateWorkspaceView from "./views/CreateWorkspaceView.vue"
 import HomeView from "./views/HomeView.vue"
 import RuntimeAgentView from "./views/runtime/RuntimeAgentView.vue"
 import RuntimeOverviewView from "./views/runtime/RuntimeOverviewView.vue"
@@ -12,6 +13,11 @@ export const router = createRouter({
       path: "/",
       name: "home",
       component: HomeView,
+    },
+    {
+      path: "/workspaces/new",
+      name: "workspace-create",
+      component: CreateWorkspaceView,
     },
     {
       path: "/runtime/:id",
