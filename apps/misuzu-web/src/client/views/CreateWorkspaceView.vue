@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref } from "vue"
 import { useRouter } from "vue-router"
 import { marked } from "marked"
 import type { ModelPoolInput, PluginCatalogItem, WorkspaceKind } from "@shared/protocol.ts"
-import ThemeToggle from "@/components/ThemeToggle.vue"
+import PageHeading from "@/components/layout/PageHeading.vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -247,18 +247,15 @@ function setAuthMode(value: string) {
 </script>
 
 <template>
-  <main class="mx-auto min-h-screen w-full max-w-5xl space-y-8 px-4 py-8 md:px-6">
-    <header class="flex flex-wrap items-center justify-between gap-3">
-      <div class="space-y-1">
-        <p class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Misuzu</p>
-        <h1 class="text-3xl font-semibold tracking-tight">Create Workspace</h1>
-      </div>
-
-      <div class="flex items-center gap-2">
-        <ThemeToggle />
+  <div class="mx-auto w-full max-w-5xl space-y-8">
+    <PageHeading
+      title="Create Workspace"
+      description="Follow the guided flow to configure runtime or solver workspace with validated form inputs."
+    >
+      <template #actions>
         <Button variant="outline" @click="router.push({ name: 'home' })">Back Home</Button>
-      </div>
-    </header>
+      </template>
+    </PageHeading>
 
     <section class="grid gap-3 sm:grid-cols-3">
       <div
@@ -574,5 +571,5 @@ function setAuthMode(value: string) {
         </div>
       </CardContent>
     </Card>
-  </main>
+  </div>
 </template>

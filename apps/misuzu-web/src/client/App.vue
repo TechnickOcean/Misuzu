@@ -1,3 +1,9 @@
+<script setup lang="ts">
+import AppChrome from "@/components/layout/AppChrome.vue"
+</script>
+
 <template>
-  <router-view />
+  <AppChrome>
+    <router-view />
+  </AppChrome>
 </template>

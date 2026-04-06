@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue"
 import { useRoute, useRouter } from "vue-router"
-import ThemeToggle from "@/components/ThemeToggle.vue"
+import PageHeading from "@/components/layout/PageHeading.vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -35,23 +35,16 @@ async function sendPrompt(prompt: string) {
 </script>
 
 <template>
-  <main class="min-h-screen space-y-4 p-4 md:p-6">
-    <header
-      class="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card/75 p-4"
+  <div class="space-y-4">
+    <PageHeading
+      title="Solver Workspace"
+      :description="solver.snapshot.value?.rootDir ?? workspaceId"
     >
-      <div class="space-y-1">
-        <h1 class="text-2xl font-semibold tracking-tight">Solver Workspace</h1>
-        <p class="break-all text-xs text-muted-foreground">
-          {{ solver.snapshot.value?.rootDir ?? workspaceId }}
-        </p>
-      </div>
-
-      <div class="flex items-center gap-2">
-        <ThemeToggle />
-        <Button variant="ghost" class="w-fit" @click="router.push({ name: 'home' })">Home</Button>
+      <template #actions>
         <Badge variant="secondary">{{ solver.snapshot.value?.modelId ?? "No model" }}</Badge>
-      </div>
-    </header>
+        <Button variant="outline" @click="router.push({ name: 'workspace-create' })">New</Button>
+      </template>
+    </PageHeading>
 
     <Card class="min-h-[620px]">
       <CardHeader>
@@ -66,5 +59,5 @@ async function sendPrompt(prompt: string) {
         />
       </CardContent>
     </Card>
-  </main>
+  </div>
 </template>

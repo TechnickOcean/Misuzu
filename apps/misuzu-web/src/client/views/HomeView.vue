@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from "vue"
 import { useRouter } from "vue-router"
-import ThemeToggle from "@/components/ThemeToggle.vue"
+import PageHeading from "@/components/layout/PageHeading.vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -52,33 +52,21 @@ async function openWorkspace(workspaceId: string, kind: "ctf-runtime" | "solver"
 </script>
 
 <template>
-  <main class="mx-auto min-h-screen w-full max-w-6xl space-y-10 px-4 py-8 md:px-6">
-    <header class="flex items-center justify-between">
-      <p class="text-sm font-semibold tracking-[0.22em]">MISUZU</p>
-
-      <div class="flex items-center gap-2">
-        <ThemeToggle />
-        <Button @click="router.push({ name: 'workspace-create' })">New Workspace</Button>
-      </div>
-    </header>
+  <div class="space-y-10">
+    <PageHeading
+      title="The command center for CTF runtime orchestration."
+      description="Launch runtime or solver workspaces, track persistent state, and control every agent stream from one monochrome console."
+    >
+      <template #actions>
+        <Button @click="router.push({ name: 'workspace-create' })">Create Workspace</Button>
+        <Button variant="outline" @click="registryStore.loadEntries">Refresh Registry</Button>
+      </template>
+    </PageHeading>
 
     <section class="space-y-6">
-      <h1 class="max-w-4xl text-4xl font-semibold leading-tight tracking-tight md:text-6xl">
-        The command center for CTF runtime orchestration.
-      </h1>
-      <p class="max-w-2xl text-base text-muted-foreground md:text-lg">
-        Launch runtime or solver workspaces, track persistent state, and control every agent stream
-        from one monochrome console.
+      <p class="max-w-2xl text-sm text-muted-foreground">
+        Existing workspaces stay persisted in the backend registry and can be reopened anytime.
       </p>
-
-      <div class="flex flex-wrap gap-3">
-        <Button size="lg" @click="router.push({ name: 'workspace-create' })"
-          >Create Workspace</Button
-        >
-        <Button variant="outline" size="lg" @click="registryStore.loadEntries"
-          >Refresh Registry</Button
-        >
-      </div>
     </section>
 
     <section class="grid gap-3 md:grid-cols-3">
@@ -131,5 +119,5 @@ async function openWorkspace(workspaceId: string, kind: "ctf-runtime" | "solver"
         </CardContent>
       </Card>
     </section>
-  </main>
+  </div>
 </template>

@@ -13,15 +13,24 @@ export const router = createRouter({
       path: "/",
       name: "home",
       component: HomeView,
+      meta: {
+        breadcrumb: "Home",
+      },
     },
     {
       path: "/workspaces/new",
       name: "workspace-create",
       component: CreateWorkspaceView,
+      meta: {
+        breadcrumb: "Create",
+      },
     },
     {
       path: "/runtime/:id",
       component: RuntimeWorkspaceLayout,
+      meta: {
+        breadcrumb: "Runtime",
+      },
       children: [
         {
           path: "",
@@ -36,6 +45,9 @@ export const router = createRouter({
           path: "overview",
           name: "runtime-overview",
           component: RuntimeOverviewView,
+          meta: {
+            breadcrumb: "Overview",
+          },
           props: (route) => ({
             workspaceId: String(route.params.id),
           }),
@@ -44,6 +56,9 @@ export const router = createRouter({
           path: "agent/:agentId",
           name: "runtime-agent",
           component: RuntimeAgentView,
+          meta: {
+            breadcrumb: "Agent",
+          },
           props: (route) => ({
             workspaceId: String(route.params.id),
             agentId: String(route.params.agentId),
@@ -55,6 +70,9 @@ export const router = createRouter({
       path: "/solver/:id",
       name: "solver",
       component: SolverWorkspaceView,
+      meta: {
+        breadcrumb: "Solver",
+      },
     },
   ],
 })
