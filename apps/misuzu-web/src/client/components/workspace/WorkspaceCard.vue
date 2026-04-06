@@ -1,8 +1,15 @@
 <script setup lang="ts">
 import type { WorkspaceRegistryEntry } from "../../../shared/protocol.ts"
-import Badge from "../ui/Badge.vue"
-import Card from "../ui/Card.vue"
-import Button from "../ui/Button.vue"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 
 const props = defineProps<{
   entry: WorkspaceRegistryEntry
@@ -18,25 +25,29 @@ function openWorkspace() {
 </script>
 
 <template>
-  <Card class="workspace-card">
-    <header class="workspace-card__header">
+  <Card class="border-border/70 bg-card/80">
+    <CardHeader class="flex items-start justify-between gap-2 sm:flex-row">
       <div>
-        <h3>{{ entry.name }}</h3>
-        <p>{{ entry.rootDir }}</p>
+        <CardTitle class="text-base">{{ entry.name }}</CardTitle>
+        <CardDescription class="mt-1 break-all text-xs">{{ entry.rootDir }}</CardDescription>
       </div>
-      <Badge :tone="entry.kind === 'ctf-runtime' ? 'success' : 'neutral'">
+      <Badge :variant="entry.kind === 'ctf-runtime' ? 'default' : 'secondary'">
         {{ entry.kind }}
       </Badge>
-    </header>
+    </CardHeader>
 
-    <p v-if="entry.kind === 'ctf-runtime'" class="workspace-card__meta">
-      Runtime: {{ entry.runtime?.initialized ? "Initialized" : "Pending" }} · Plugin:
-      {{ entry.runtime?.pluginId ?? "N/A" }}
-    </p>
+    <CardContent class="pt-0">
+      <p v-if="entry.kind === 'ctf-runtime'" class="text-xs text-muted-foreground">
+        Runtime: {{ entry.runtime?.initialized ? "Initialized" : "Pending" }} · Plugin:
+        {{ entry.runtime?.pluginId ?? "N/A" }}
+      </p>
+    </CardContent>
 
-    <footer class="workspace-card__footer">
-      <small>Updated: {{ new Date(entry.updatedAt).toLocaleString() }}</small>
+    <CardFooter class="flex items-center justify-between">
+      <small class="text-xs text-muted-foreground">
+        Updated: {{ new Date(entry.updatedAt).toLocaleString() }}
+      </small>
       <Button variant="outline" @click="openWorkspace">Open</Button>
-    </footer>
+    </CardFooter>
   </Card>
 </template>

@@ -1,8 +1,10 @@
 import { computed } from "vue"
+import { useAppServices } from "../di/app-services.ts"
 import { useSolverWorkspaceStore } from "../stores/solver-workspace.ts"
 
 export function useSolverWorkspace(workspaceId: string) {
   const store = useSolverWorkspaceStore()
+  store.bindServices(useAppServices())
 
   return {
     snapshot: computed(() => store.snapshots[workspaceId]),

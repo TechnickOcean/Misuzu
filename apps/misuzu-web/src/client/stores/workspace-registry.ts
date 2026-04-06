@@ -4,9 +4,18 @@ import type {
   SolverCreateRequest,
   WorkspaceRegistryEntry,
 } from "../../shared/protocol.ts"
-import { useClientContainer } from "../di/container.ts"
+import type { AppServices } from "../di/app-services.ts"
 
 const registryUnsubscribers = new Set<() => void>()
+let services: AppServices | undefined
+
+function requireServices() {
+  if (!services) {
+    throw new Error("WorkspaceRegistryStore is not initialized with AppServices")
+  }
+
+  return services
+}
 
 export const useWorkspaceRegistryStore = defineStore("workspace-registry", {
   state: () => ({
@@ -15,13 +24,16 @@ export const useWorkspaceRegistryStore = defineStore("workspace-registry", {
     error: "" as string | null,
   }),
   actions: {
+    bindServices(appServices: AppServices) {
+      services = appServices
+    },
+
     async loadEntries() {
       this.loading = true
       this.error = null
 
       try {
-        const api = useClientContainer().getApiClient()
-        this.entries = await api.listWorkspaces()
+        this.entries = await requireServices().apiClient.listWorkspaces()
       } catch (error) {
         this.error = error instanceof Error ? error.message : String(error)
       } finally {
@@ -30,15 +42,13 @@ export const useWorkspaceRegistryStore = defineStore("workspace-registry", {
     },
 
     async createRuntimeWorkspace(request: RuntimeCreateRequest) {
-      const api = useClientContainer().getApiClient()
-      const snapshot = await api.createRuntimeWorkspace(request)
+      const snapshot = await requireServices().apiClient.createRuntimeWorkspace(request)
       await this.loadEntries()
       return snapshot
     },
 
     async createSolverWorkspace(request: SolverCreateRequest) {
-      const api = useClientContainer().getApiClient()
-      const snapshot = await api.createSolverWorkspace(request)
+      const snapshot = await requireServices().apiClient.createSolverWorkspace(request)
       await this.loadEntries()
       return snapshot
     },
@@ -48,8 +58,7 @@ export const useWorkspaceRegistryStore = defineStore("workspace-registry", {
         return
       }
 
-      const realtime = useClientContainer().getRealtimeClient()
-      const unsubscribe = realtime.connect("registry", (message) => {
+      const unsubscribe = requireServices().realtimeClient.connect("registry", (message) => {
         if (message.type !== "registry.updated") {
           return
         }

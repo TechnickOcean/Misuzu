@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref } from "vue"
 import type { AgentStateSnapshot } from "../../../shared/protocol.ts"
-import Button from "../ui/Button.vue"
-import Textarea from "../ui/Textarea.vue"
-import Badge from "../ui/Badge.vue"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Textarea } from "@/components/ui/textarea"
 
 const props = withDefaults(
   defineProps<{
@@ -37,40 +38,55 @@ function submitPrompt() {
 </script>
 
 <template>
-  <div class="agent-chat" :class="{ 'agent-chat--compact': compact }">
-    <header class="agent-chat__header">
-      <h3>{{ title }}</h3>
-      <Badge :tone="state?.isRunning ? 'warning' : 'neutral'">
+  <div
+    class="grid h-full grid-rows-[auto_auto_1fr_auto] gap-3"
+    :class="{ 'min-h-[320px]': compact }"
+  >
+    <header class="flex items-center justify-between gap-2">
+      <h3 class="text-base font-semibold">{{ title }}</h3>
+      <Badge :variant="state?.isRunning ? 'destructive' : 'secondary'">
         {{ state?.isRunning ? "Running" : "Idle" }}
       </Badge>
     </header>
 
-    <div class="agent-chat__meta">
+    <div class="flex items-center justify-between text-xs text-muted-foreground">
       <span>Model: {{ state?.modelId ?? "Not selected" }}</span>
       <span>Messages: {{ state?.messages.length ?? 0 }}</span>
     </div>
 
-    <div class="agent-chat__messages">
-      <p v-if="!state">Select an agent to inspect history.</p>
-      <p v-else-if="state.messages.length === 0">No messages yet.</p>
+    <ScrollArea class="rounded-md border bg-card/80 p-3">
+      <div class="grid gap-2">
+        <p v-if="!state" class="text-sm text-muted-foreground">
+          Select an agent to inspect history.
+        </p>
+        <p v-else-if="state.messages.length === 0" class="text-sm text-muted-foreground">
+          No messages yet.
+        </p>
 
-      <article
-        v-for="(message, index) in state?.messages ?? []"
-        :key="`${message.timestamp ?? index}`"
-      >
-        <header>{{ message.role }}</header>
-        <pre>{{ message.text || "(empty)" }}</pre>
-      </article>
-    </div>
+        <article
+          v-for="(message, index) in state?.messages ?? []"
+          :key="`${message.timestamp ?? index}`"
+          class="rounded-md border bg-background/90 p-2"
+        >
+          <header
+            class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            {{ message.role }}
+          </header>
+          <pre class="text-xs">{{ message.text || "(empty)" }}</pre>
+        </article>
+      </div>
+    </ScrollArea>
 
-    <form class="agent-chat__composer" @submit.prevent="submitPrompt">
+    <form class="grid gap-2" @submit.prevent="submitPrompt">
       <Textarea
         v-model="promptInput"
-        :rows="compact ? 3 : 4"
+        :rows="compact ? 2 : 4"
+        class="min-h-20"
         placeholder="Send instructions to this agent..."
         :disabled="loading"
       />
-      <Button type="submit" :disabled="loading || !promptInput.trim()">
+      <Button type="submit" :disabled="loading || !promptInput.trim()" class="w-fit">
         {{ loading ? "Sending..." : "Send" }}
       </Button>
     </form>

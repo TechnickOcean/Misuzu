@@ -1,8 +1,17 @@
 import { defineStore } from "pinia"
 import type { AgentStateSnapshot, SolverWorkspaceSnapshot } from "../../shared/protocol.ts"
-import { useClientContainer } from "../di/container.ts"
+import type { AppServices } from "../di/app-services.ts"
 
 const solverUnsubscribers = new Map<string, () => void>()
+let services: AppServices | undefined
+
+function requireServices() {
+  if (!services) {
+    throw new Error("SolverWorkspaceStore is not initialized with AppServices")
+  }
+
+  return services
+}
 
 export const useSolverWorkspaceStore = defineStore("solver-workspace", {
   state: () => ({
@@ -12,14 +21,19 @@ export const useSolverWorkspaceStore = defineStore("solver-workspace", {
     error: "" as string | null,
   }),
   actions: {
+    bindServices(appServices: AppServices) {
+      services = appServices
+    },
+
     async openWorkspace(workspaceId: string) {
       this.loading = true
       this.error = null
 
       try {
-        const api = useClientContainer().getApiClient()
-        this.snapshots[workspaceId] = await api.getSolverWorkspace(workspaceId)
-        this.agentStates[workspaceId] = await api.getSolverAgentState(workspaceId)
+        this.snapshots[workspaceId] =
+          await requireServices().apiClient.getSolverWorkspace(workspaceId)
+        this.agentStates[workspaceId] =
+          await requireServices().apiClient.getSolverAgentState(workspaceId)
         this.connectWorkspaceFeed(workspaceId)
       } catch (error) {
         this.error = error instanceof Error ? error.message : String(error)
@@ -29,9 +43,12 @@ export const useSolverWorkspaceStore = defineStore("solver-workspace", {
     },
 
     async prompt(workspaceId: string, prompt: string) {
-      const api = useClientContainer().getApiClient()
-      this.agentStates[workspaceId] = await api.promptSolver(workspaceId, prompt)
-      this.snapshots[workspaceId] = await api.getSolverWorkspace(workspaceId)
+      this.agentStates[workspaceId] = await requireServices().apiClient.promptSolver(
+        workspaceId,
+        prompt,
+      )
+      this.snapshots[workspaceId] =
+        await requireServices().apiClient.getSolverWorkspace(workspaceId)
       return this.agentStates[workspaceId]
     },
 
@@ -40,24 +57,26 @@ export const useSolverWorkspaceStore = defineStore("solver-workspace", {
         return
       }
 
-      const realtime = useClientContainer().getRealtimeClient()
-      const unsubscribe = realtime.connect(`solver:${workspaceId}`, (message) => {
-        if (message.type === "solver.snapshot" && message.payload.workspaceId === workspaceId) {
-          this.snapshots[workspaceId] = message.payload.snapshot
-          return
-        }
+      const unsubscribe = requireServices().realtimeClient.connect(
+        `solver:${workspaceId}`,
+        (message) => {
+          if (message.type === "solver.snapshot" && message.payload.workspaceId === workspaceId) {
+            this.snapshots[workspaceId] = message.payload.snapshot
+            return
+          }
 
-        if (message.type === "agent.event" && message.payload.workspaceId === workspaceId) {
-          void this.refreshAgentState(workspaceId)
-        }
-      })
+          if (message.type === "agent.event" && message.payload.workspaceId === workspaceId) {
+            void this.refreshAgentState(workspaceId)
+          }
+        },
+      )
 
       solverUnsubscribers.set(workspaceId, unsubscribe)
     },
 
     async refreshAgentState(workspaceId: string) {
-      const api = useClientContainer().getApiClient()
-      this.agentStates[workspaceId] = await api.getSolverAgentState(workspaceId)
+      this.agentStates[workspaceId] =
+        await requireServices().apiClient.getSolverAgentState(workspaceId)
       return this.agentStates[workspaceId]
     },
 

@@ -11,7 +11,11 @@
     "isolatedModules": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "paths": {
+      "@/*": ["./src/client/*"],
+      "@shared/*": ["./src/shared/*"]
+    }
   },
   "include": ["src/client/**/*.ts", "src/client/**/*.vue", "src/shared/**/*.ts"]
 }

@@ -1,9 +1,11 @@
 import { computed } from "vue"
 import type { RuntimeInitRequest } from "../../shared/protocol.ts"
+import { useAppServices } from "../di/app-services.ts"
 import { useRuntimeWorkspaceStore } from "../stores/runtime-workspace.ts"
 
 export function useRuntimeWorkspace(workspaceId: string) {
   const store = useRuntimeWorkspaceStore()
+  store.bindServices(useAppServices())
 
   const snapshot = computed(() => store.snapshots[workspaceId])
   const activeAgentId = computed(() => store.activeAgentIds[workspaceId])

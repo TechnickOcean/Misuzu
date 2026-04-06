@@ -4,10 +4,19 @@ import type {
   RuntimeInitRequest,
   RuntimeWorkspaceSnapshot,
 } from "../../shared/protocol.ts"
-import { useClientContainer } from "../di/container.ts"
+import type { AppServices } from "../di/app-services.ts"
 
 const runtimeUnsubscribers = new Map<string, () => void>()
 const agentRefreshTimers = new Map<string, number>()
+let services: AppServices | undefined
+
+function requireServices() {
+  if (!services) {
+    throw new Error("RuntimeWorkspaceStore is not initialized with AppServices")
+  }
+
+  return services
+}
 
 export const useRuntimeWorkspaceStore = defineStore("runtime-workspace", {
   state: () => ({
@@ -18,13 +27,16 @@ export const useRuntimeWorkspaceStore = defineStore("runtime-workspace", {
     error: "" as string | null,
   }),
   actions: {
+    bindServices(appServices: AppServices) {
+      services = appServices
+    },
+
     async openWorkspace(workspaceId: string) {
       this.loading = true
       this.error = null
 
       try {
-        const api = useClientContainer().getApiClient()
-        const snapshot = await api.getRuntimeWorkspace(workspaceId)
+        const snapshot = await requireServices().apiClient.getRuntimeWorkspace(workspaceId)
         this.snapshots[workspaceId] = snapshot
         this.connectWorkspaceFeed(workspaceId)
       } catch (error) {
@@ -35,47 +47,52 @@ export const useRuntimeWorkspaceStore = defineStore("runtime-workspace", {
     },
 
     async initializeRuntime(workspaceId: string, request: RuntimeInitRequest) {
-      const api = useClientContainer().getApiClient()
-      const snapshot = await api.initializeRuntime(workspaceId, request)
+      const snapshot = await requireServices().apiClient.initializeRuntime(workspaceId, request)
       this.snapshots[workspaceId] = snapshot
       return snapshot
     },
 
     async ensureEnvironmentAgent(workspaceId: string) {
-      const api = useClientContainer().getApiClient()
-      const snapshot = await api.ensureRuntimeEnvironmentAgent(workspaceId)
+      const snapshot = await requireServices().apiClient.ensureRuntimeEnvironmentAgent(workspaceId)
       this.snapshots[workspaceId] = snapshot
       return snapshot
     },
 
     async pauseDispatch(workspaceId: string) {
-      const api = useClientContainer().getApiClient()
-      this.snapshots[workspaceId] = await api.pauseRuntimeDispatch(workspaceId)
+      this.snapshots[workspaceId] =
+        await requireServices().apiClient.pauseRuntimeDispatch(workspaceId)
     },
 
     async startDispatch(workspaceId: string, autoEnqueue = false) {
-      const api = useClientContainer().getApiClient()
-      this.snapshots[workspaceId] = await api.startRuntimeDispatch(workspaceId, { autoEnqueue })
+      this.snapshots[workspaceId] = await requireServices().apiClient.startRuntimeDispatch(
+        workspaceId,
+        {
+          autoEnqueue,
+        },
+      )
     },
 
     async syncChallenges(workspaceId: string) {
-      const api = useClientContainer().getApiClient()
-      this.snapshots[workspaceId] = await api.syncRuntimeChallenges(workspaceId)
+      this.snapshots[workspaceId] =
+        await requireServices().apiClient.syncRuntimeChallenges(workspaceId)
     },
 
     async syncNotices(workspaceId: string) {
-      const api = useClientContainer().getApiClient()
-      this.snapshots[workspaceId] = await api.syncRuntimeNotices(workspaceId)
+      this.snapshots[workspaceId] =
+        await requireServices().apiClient.syncRuntimeNotices(workspaceId)
     },
 
     async enqueueChallenge(workspaceId: string, challengeId: number) {
-      const api = useClientContainer().getApiClient()
-      this.snapshots[workspaceId] = await api.enqueueRuntimeChallenge(workspaceId, { challengeId })
+      this.snapshots[workspaceId] = await requireServices().apiClient.enqueueRuntimeChallenge(
+        workspaceId,
+        {
+          challengeId,
+        },
+      )
     },
 
     async loadAgentState(workspaceId: string, agentId: string) {
-      const api = useClientContainer().getApiClient()
-      const state = await api.getRuntimeAgentState(workspaceId, agentId)
+      const state = await requireServices().apiClient.getRuntimeAgentState(workspaceId, agentId)
 
       if (!this.agentStates[workspaceId]) {
         this.agentStates[workspaceId] = {}
@@ -85,8 +102,11 @@ export const useRuntimeWorkspaceStore = defineStore("runtime-workspace", {
     },
 
     async promptAgent(workspaceId: string, agentId: string, prompt: string) {
-      const api = useClientContainer().getApiClient()
-      const state = await api.promptRuntimeAgent(workspaceId, agentId, prompt)
+      const state = await requireServices().apiClient.promptRuntimeAgent(
+        workspaceId,
+        agentId,
+        prompt,
+      )
 
       if (!this.agentStates[workspaceId]) {
         this.agentStates[workspaceId] = {}
@@ -105,28 +125,30 @@ export const useRuntimeWorkspaceStore = defineStore("runtime-workspace", {
         return
       }
 
-      const realtime = useClientContainer().getRealtimeClient()
-      const unsubscribe = realtime.connect(`runtime:${workspaceId}`, (message) => {
-        if (message.type === "runtime.snapshot" && message.payload.workspaceId === workspaceId) {
-          this.snapshots[workspaceId] = message.payload.snapshot
-          return
-        }
-
-        if (message.type !== "agent.event" || message.payload.workspaceId !== workspaceId) {
-          return
-        }
-
-        const refreshKey = `${workspaceId}:${message.payload.agentId}`
-        window.clearTimeout(agentRefreshTimers.get(refreshKey))
-
-        const timerId = window.setTimeout(() => {
-          if (this.activeAgentIds[workspaceId] === message.payload.agentId) {
-            void this.loadAgentState(workspaceId, message.payload.agentId)
+      const unsubscribe = requireServices().realtimeClient.connect(
+        `runtime:${workspaceId}`,
+        (message) => {
+          if (message.type === "runtime.snapshot" && message.payload.workspaceId === workspaceId) {
+            this.snapshots[workspaceId] = message.payload.snapshot
+            return
           }
-        }, 220)
 
-        agentRefreshTimers.set(refreshKey, timerId)
-      })
+          if (message.type !== "agent.event" || message.payload.workspaceId !== workspaceId) {
+            return
+          }
+
+          const refreshKey = `${workspaceId}:${message.payload.agentId}`
+          window.clearTimeout(agentRefreshTimers.get(refreshKey))
+
+          const timerId = window.setTimeout(() => {
+            if (this.activeAgentIds[workspaceId] === message.payload.agentId) {
+              void this.loadAgentState(workspaceId, message.payload.agentId)
+            }
+          }, 220)
+
+          agentRefreshTimers.set(refreshKey, timerId)
+        },
+      )
 
       runtimeUnsubscribers.set(workspaceId, unsubscribe)
     },
