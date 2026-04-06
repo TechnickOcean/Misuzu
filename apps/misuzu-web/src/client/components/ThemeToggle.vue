@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Moon, Sun } from "lucide-vue-next"
 import { Button } from "@/components/ui/button"
+import { SidebarMenuButton } from "@/components/ui/sidebar"
 import { useThemeMode } from "@/composables/use-theme-mode.ts"
 
 withDefaults(
@@ -18,10 +19,17 @@ const { isDark, toggleTheme } = useThemeMode()
 </script>
 
 <template>
+  <SidebarMenuButton v-if="sidebar" @click="toggleTheme">
+    <Sun v-if="isDark" />
+    <Moon v-else />
+    <span>{{ isDark ? "Light Mode" : "Dark Mode" }}</span>
+  </SidebarMenuButton>
+
   <Button
-    :variant="iconOnly || sidebar ? 'ghost' : 'outline'"
-    :size="iconOnly ? 'icon' : sidebar ? 'default' : 'sm'"
-    :class="iconOnly ? '' : sidebar ? 'w-full justify-start gap-2' : 'gap-2'"
+    v-else
+    :variant="iconOnly ? 'ghost' : 'outline'"
+    :size="iconOnly ? 'icon' : 'sm'"
+    :class="iconOnly ? '' : 'gap-2'"
     @click="toggleTheme"
   >
     <Sun v-if="isDark" class="size-4" />
