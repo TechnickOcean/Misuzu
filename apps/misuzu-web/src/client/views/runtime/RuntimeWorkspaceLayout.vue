@@ -18,10 +18,27 @@ const summary = computed(() => runtime.snapshot.value)
 onMounted(async () => {
   await runtime.open()
 
+  const currentSnapshot = runtime.snapshot.value
+  if (currentSnapshot && !currentSnapshot.initialized && !currentSnapshot.environmentAgentReady) {
+    await runtime.ensureEnvironmentAgent()
+  }
+
   const selectedAgentId =
     typeof route.params.agentId === "string" ? route.params.agentId : undefined
   if (selectedAgentId) {
     await runtime.setActiveAgent(selectedAgentId)
+    return
+  }
+
+  const snapshot = runtime.snapshot.value
+  if (snapshot && !snapshot.initialized && snapshot.environmentAgentReady) {
+    await router.replace({
+      name: "runtime-agent",
+      params: {
+        id: workspaceId,
+        agentId: "environment",
+      },
+    })
   }
 })
 

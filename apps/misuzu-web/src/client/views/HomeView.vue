@@ -115,6 +115,17 @@ async function createRuntimeWorkspace() {
       createEnvironmentAgent: !runtimeWithPlugin.value,
     })
 
+    if (!runtimeWithPlugin.value) {
+      await router.push({
+        name: "runtime-agent",
+        params: {
+          id: snapshot.id,
+          agentId: "environment",
+        },
+      })
+      return
+    }
+
     await router.push({
       name: "runtime-overview",
       params: {
