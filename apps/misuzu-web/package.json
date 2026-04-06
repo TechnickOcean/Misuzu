@@ -1,0 +1,32 @@
+{
+  "name": "misuzu-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp run dev:client",
+    "dev:client": "vp dev --config vite.config.ts",
+    "dev:server": "tsx watch src/server/main.ts",
+    "build": "vp run build:client",
+    "build:client": "vp build --config vite.config.ts",
+    "build:server": "tsc -p tsconfig.server.json --noEmit",
+    "check": "vp check"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.4",
+    "@hono/node-ws": "^1.2.0",
+    "hono": "^4.8.2",
+    "marked": "^16.4.1",
+    "misuzu-core": "workspace:*",
+    "pinia": "^3.0.3",
+    "vue": "^3.5.13",
+    "vue-router": "^4.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
