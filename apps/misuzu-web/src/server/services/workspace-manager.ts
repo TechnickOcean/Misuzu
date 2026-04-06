@@ -15,6 +15,7 @@ import {
   type SolverWorkspace,
 } from "misuzu-core"
 import type {
+  AgentMessagePart,
   AgentStateSnapshot,
   ChallengeSummaryView,
   PluginCatalogItem,
@@ -554,14 +555,38 @@ export class WorkspaceManager {
         category: "unknown",
         score: 0,
         solvedCount: 0,
-        status: activation.status,
+        status: activation.status === "active" ? "active" : "idle",
         activeTaskId: activation.activeTaskId,
         modelId: activation.modelId,
       })
     }
 
+    const progressByChallengeId = new Map(
+      session.workspace
+        .listSolverProgressStates()
+        .map((state) => [state.challengeId, state] as const),
+    )
+    const queuedTaskByChallengeId = new Map<number, string>()
+    for (const pendingTask of session.workspace.listPendingSchedulerTasks()) {
+      const challengeId = resolveChallengeIdFromPayload(pendingTask.payload)
+      if (challengeId === undefined || queuedTaskByChallengeId.has(challengeId)) {
+        continue
+      }
+
+      queuedTaskByChallengeId.set(challengeId, pendingTask.taskId)
+    }
+
     for (const challenge of session.workspace.listManagedChallenges()) {
       const existing = activationByChallengeId.get(challenge.challengeId)
+      const progress = progressByChallengeId.get(challenge.challengeId)
+      const queuedTaskId = queuedTaskByChallengeId.get(challenge.challengeId)
+
+      const status = resolveChallengeStatus({
+        activationStatus: existing?.status,
+        progressStatus: progress?.status,
+        queuedTaskId,
+      })
+
       activationByChallengeId.set(challenge.challengeId, {
         challengeId: challenge.challengeId,
         solverId: challenge.solverId,
@@ -569,14 +594,18 @@ export class WorkspaceManager {
         category: challenge.category,
         score: challenge.score,
         solvedCount: challenge.solvedCount,
-        status: existing?.status ?? "inactive",
+        status,
         activeTaskId: existing?.activeTaskId,
+        queuedTaskId,
+        statusReason: status === "blocked" ? progress?.blockedReason : undefined,
         modelId: existing?.modelId,
       })
     }
 
     const challenges = [...activationByChallengeId.values()].sort(
-      (left, right) => left.challengeId - right.challengeId,
+      (left, right) =>
+        challengeStatusWeight(left.status) - challengeStatusWeight(right.status) ||
+        left.challengeId - right.challengeId,
     )
 
     const agents: RuntimeWorkspaceSnapshot["agents"] = []
@@ -633,11 +662,15 @@ export class WorkspaceManager {
       modelId: model ? `${model.provider}/${model.id}` : undefined,
       thinkingLevel: agent.state.thinkingLevel,
       isRunning: Boolean((agent.state as { isRunning?: boolean }).isRunning),
-      messages: agent.state.messages.map((message) => ({
-        role: message.role,
-        text: extractMessageText(message.content),
-        timestamp: message.timestamp,
-      })),
+      messages: agent.state.messages.map((message) => {
+        const parts = extractMessageParts(message.content)
+        return {
+          role: message.role,
+          text: renderMessagePartsAsText(parts),
+          parts: parts.length > 0 ? parts : undefined,
+          timestamp: message.timestamp,
+        }
+      }),
     }
   }
 
@@ -737,28 +770,166 @@ export class WorkspaceManager {
   }
 }
 
-function extractMessageText(content: unknown) {
+function challengeStatusWeight(status: ChallengeSummaryView["status"]) {
+  switch (status) {
+    case "active":
+      return 0
+    case "queued":
+      return 1
+    case "solved":
+      return 2
+    case "blocked":
+      return 3
+    case "idle":
+      return 4
+  }
+}
+
+function resolveChallengeStatus(input: {
+  activationStatus?: ChallengeSummaryView["status"]
+  progressStatus?: "idle" | "writeup_required" | "solved" | "blocked"
+  queuedTaskId?: string
+}): ChallengeSummaryView["status"] {
+  if (input.activationStatus === "active") {
+    return "active"
+  }
+
+  if (input.queuedTaskId) {
+    return "queued"
+  }
+
+  if (input.progressStatus === "solved") {
+    return "solved"
+  }
+
+  if (input.progressStatus === "writeup_required" || input.progressStatus === "blocked") {
+    return "blocked"
+  }
+
+  return "idle"
+}
+
+function resolveChallengeIdFromPayload(payload: unknown) {
+  if (!payload || typeof payload !== "object") {
+    return undefined
+  }
+
+  const challengeId = (payload as { challenge?: unknown }).challenge
+  return typeof challengeId === "number" && Number.isFinite(challengeId) ? challengeId : undefined
+}
+
+function extractMessageParts(content: unknown): AgentMessagePart[] {
   if (typeof content === "string") {
-    return content
+    return [{ kind: "text", text: content }]
   }
 
   if (!Array.isArray(content)) {
-    return ""
+    return []
   }
 
-  return content
+  const parts: AgentMessagePart[] = []
+  for (const item of content) {
+    const normalized = normalizeMessagePart(item)
+    if (normalized) {
+      parts.push(normalized)
+    }
+  }
+
+  return parts
+}
+
+function normalizeMessagePart(part: unknown): AgentMessagePart | undefined {
+  if (!part || typeof part !== "object") {
+    return undefined
+  }
+
+  const typedPart = part as Record<string, unknown>
+  const partType = typeof typedPart.type === "string" ? typedPart.type : undefined
+  if (partType === "text" && typeof typedPart.text === "string") {
+    return {
+      kind: "text",
+      text: typedPart.text,
+    }
+  }
+
+  if (typeof typedPart.text === "string" && typedPart.text.trim().length > 0) {
+    return {
+      kind: "text",
+      text: typedPart.text,
+    }
+  }
+
+  const name = readFirstStringField(typedPart, ["toolName", "name", "tool", "label"])
+  const args = readFirstDefinedField(typedPart, ["args", "input", "arguments"])
+  const result = readFirstDefinedField(typedPart, ["result", "output", "details", "content"])
+
+  if (partType?.includes("tool") || name || args !== undefined || result !== undefined) {
+    return {
+      kind: "tool",
+      toolType: partType ?? "tool",
+      name,
+      argsText: args === undefined ? undefined : serializeForMessageText(args),
+      resultText: result === undefined ? undefined : serializeForMessageText(result),
+    }
+  }
+
+  return undefined
+}
+
+function renderMessagePartsAsText(parts: AgentMessagePart[]) {
+  return parts
     .map((part) => {
-      if (!part || typeof part !== "object") {
-        return ""
+      if (part.kind === "text") {
+        return part.text
       }
 
-      const typedPart = part as { type?: string; text?: string }
-      if (typedPart.type === "text" && typeof typedPart.text === "string") {
-        return typedPart.text
+      const lines: string[] = []
+      lines.push(part.name ? `[${part.toolType}] ${part.name}` : `[${part.toolType}]`)
+
+      if (part.argsText !== undefined) {
+        lines.push(`args: ${part.argsText}`)
       }
 
-      return ""
+      if (part.resultText !== undefined) {
+        lines.push(`result: ${part.resultText}`)
+      }
+
+      return lines.join("\n")
     })
     .filter((text) => text.trim().length > 0)
-    .join("\n")
+    .join("\n\n")
+}
+
+function readFirstStringField(part: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = part[key]
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value
+    }
+  }
+
+  return undefined
+}
+
+function readFirstDefinedField(part: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = part[key]
+    if (value !== undefined) {
+      return value
+    }
+  }
+
+  return undefined
+}
+
+function serializeForMessageText(value: unknown) {
+  if (typeof value === "string") {
+    return value
+  }
+
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
 }

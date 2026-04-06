@@ -40,11 +40,11 @@ async function sendPrompt(prompt: string) {
 </script>
 
 <template>
-  <Card class="h-full min-h-[560px]">
-    <CardHeader>
+  <Card class="h-full min-h-[calc(100vh-13rem)] border-border/60 bg-card/70">
+    <CardHeader class="pb-2">
       <CardTitle>{{ activeAgentName }}</CardTitle>
     </CardHeader>
-    <CardContent class="h-[calc(100%-4rem)]">
+    <CardContent class="h-[calc(100%-4.25rem)] px-2 pb-4 md:px-3">
       <AgentChatPanel
         :title="activeAgentName"
         :state="runtime.activeAgentState.value"

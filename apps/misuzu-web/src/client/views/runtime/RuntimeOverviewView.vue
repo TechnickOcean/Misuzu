@@ -1,12 +1,23 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue"
+import { computed, onMounted, reactive, ref, watch } from "vue"
 import { marked } from "marked"
 import { useRouter } from "vue-router"
 import type { PluginCatalogItem } from "@shared/protocol.ts"
+import { CheckIcon, ChevronsUpDownIcon } from "lucide-vue-next"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
+import {
+  Combobox,
+  ComboboxAnchor,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxItemIndicator,
+  ComboboxList,
+  ComboboxViewport,
+} from "@/components/ui/combobox"
 import {
   Select,
   SelectContent,
@@ -34,26 +45,62 @@ const runtime = useRuntimeWorkspace(props.workspaceId)
 const { apiClient } = useAppServices()
 
 const plugins = ref<PluginCatalogItem[]>([])
-const pluginQuery = ref("")
 const selectedPluginId = ref("")
 const pluginReadmeHtml = ref("")
+const pluginComboboxOpen = ref(false)
 const pluginDraft = reactive<PluginConfigDraft>(createDefaultPluginConfigDraft())
 const initError = ref("")
 
 const snapshot = computed(() => runtime.snapshot.value)
+const activeChallenges = computed(() =>
+  (snapshot.value?.challenges ?? []).filter((challenge) => challenge.status === "active"),
+)
+const queuedChallenges = computed(() =>
+  (snapshot.value?.challenges ?? []).filter((challenge) => challenge.status === "queued"),
+)
+const historyChallenges = computed(() =>
+  (snapshot.value?.challenges ?? []).filter(
+    (challenge) =>
+      challenge.status === "solved" ||
+      challenge.status === "blocked" ||
+      challenge.status === "idle",
+  ),
+)
+const selectedPlugin = computed(() =>
+  plugins.value.find((plugin) => plugin.id === selectedPluginId.value),
+)
+const selectedPluginLabel = computed(() => {
+  const plugin = selectedPlugin.value
+  if (!plugin) {
+    return "Select plugin"
+  }
+
+  return `${plugin.name} (${plugin.id})`
+})
 
 onMounted(async () => {
   await loadPlugins()
 })
 
-async function loadPlugins() {
-  plugins.value = await apiClient.listPlugins(pluginQuery.value)
-  if (!selectedPluginId.value && plugins.value.length > 0) {
-    selectedPluginId.value = plugins.value[0].id
+watch(selectedPluginId, async (pluginId) => {
+  if (!pluginId) {
+    pluginReadmeHtml.value = ""
+    return
   }
 
-  if (selectedPluginId.value) {
-    await loadPluginReadme(selectedPluginId.value)
+  await loadPluginReadme(pluginId)
+  pluginComboboxOpen.value = false
+})
+
+async function loadPlugins() {
+  plugins.value = await apiClient.listPlugins()
+  if (!selectedPluginId.value && plugins.value.length > 0) {
+    selectedPluginId.value = plugins.value[0].id
+    return
+  }
+
+  if (!plugins.value.some((plugin) => plugin.id === selectedPluginId.value)) {
+    selectedPluginId.value = plugins.value[0]?.id ?? ""
   }
 }
 
@@ -93,6 +140,21 @@ function setContestMode(value: string) {
 
 function setAuthMode(value: string) {
   pluginDraft.authMode = value as AuthMode
+}
+
+function badgeVariantForStatus(status: "active" | "queued" | "solved" | "blocked" | "idle") {
+  switch (status) {
+    case "active":
+      return "destructive"
+    case "queued":
+      return "secondary"
+    case "solved":
+      return "default"
+    case "blocked":
+      return "outline"
+    case "idle":
+      return "outline"
+  }
 }
 </script>
 
@@ -134,21 +196,41 @@ function setAuthMode(value: string) {
         </CardDescription>
       </CardHeader>
       <CardContent class="grid gap-4">
-        <div class="flex gap-2">
-          <Input v-model="pluginQuery" placeholder="search plugin by id/name" />
-          <Button variant="outline" @click="loadPlugins">Search</Button>
-        </div>
+        <Combobox
+          v-model="selectedPluginId"
+          :open="pluginComboboxOpen"
+          @update:open="(value) => (pluginComboboxOpen = Boolean(value))"
+        >
+          <ComboboxAnchor class="w-full">
+            <Button variant="outline" class="w-full justify-between font-normal" type="button">
+              <span class="truncate">{{ selectedPluginLabel }}</span>
+              <ChevronsUpDownIcon class="size-4 shrink-0 opacity-50" />
+            </Button>
+          </ComboboxAnchor>
 
-        <Select v-model="selectedPluginId">
-          <SelectTrigger class="w-full">
-            <SelectValue placeholder="Select plugin" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem v-for="plugin in plugins" :key="plugin.id" :value="plugin.id">
-              {{ plugin.name }} ({{ plugin.id }})
-            </SelectItem>
-          </SelectContent>
-        </Select>
+          <ComboboxList class="w-[var(--reka-popper-anchor-width)] p-0">
+            <ComboboxInput placeholder="Search plugin by name or id..." />
+            <ComboboxEmpty>No plugin found.</ComboboxEmpty>
+
+            <ComboboxViewport>
+              <ComboboxGroup>
+                <ComboboxItem
+                  v-for="plugin in plugins"
+                  :key="plugin.id"
+                  :value="plugin.id"
+                  class="justify-between"
+                >
+                  <span class="truncate">{{ plugin.name }} ({{ plugin.id }})</span>
+                  <ComboboxItemIndicator>
+                    <CheckIcon class="size-4" />
+                  </ComboboxItemIndicator>
+                </ComboboxItem>
+              </ComboboxGroup>
+            </ComboboxViewport>
+          </ComboboxList>
+        </Combobox>
+
+        <Button variant="outline" class="w-fit" @click="loadPlugins">Refresh Plugins</Button>
 
         <Button
           v-if="selectedPluginId"
@@ -251,39 +333,124 @@ function setAuthMode(value: string) {
     <Card>
       <CardHeader>
         <CardTitle>Challenge Queue</CardTitle>
-        <CardDescription>Current managed challenges and manual enqueue controls.</CardDescription>
+        <CardDescription>
+          Ordered as active first, queued (collapsed), then solved/blocked history.
+        </CardDescription>
       </CardHeader>
       <CardContent>
-        <div class="grid gap-2">
-          <article
-            v-for="challenge in snapshot?.challenges ?? []"
-            :key="challenge.challengeId"
-            class="rounded-md border p-3"
-          >
-            <div class="flex flex-wrap items-start justify-between gap-2">
-              <div>
-                <h4 class="font-medium">#{{ challenge.challengeId }} {{ challenge.title }}</h4>
-                <p class="text-xs text-muted-foreground">
-                  {{ challenge.category }} · {{ challenge.score }} pts · solved
-                  {{ challenge.solvedCount }}
-                </p>
+        <div class="space-y-4">
+          <section v-if="activeChallenges.length" class="space-y-2">
+            <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Active
+            </p>
+            <article
+              v-for="challenge in activeChallenges"
+              :key="challenge.challengeId"
+              class="rounded-md border p-3"
+            >
+              <div class="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h4 class="font-medium">#{{ challenge.challengeId }} {{ challenge.title }}</h4>
+                  <p class="text-xs text-muted-foreground">
+                    {{ challenge.category }} · {{ challenge.score }} pts · solved
+                    {{ challenge.solvedCount }}
+                  </p>
+                </div>
+                <Badge :variant="badgeVariantForStatus(challenge.status)">
+                  {{ challenge.status }}
+                </Badge>
               </div>
-              <Badge :variant="challenge.status === 'active' ? 'destructive' : 'outline'">
-                {{ challenge.status }}
-              </Badge>
-            </div>
 
-            <Separator class="my-3" />
+              <Separator class="my-3" />
 
-            <div class="flex flex-wrap items-center gap-2">
-              <Button variant="outline" @click="runtime.enqueueChallenge(challenge.challengeId)">
-                Enqueue
-              </Button>
-              <Button variant="secondary" @click="openSolverAgent(challenge.solverId)">
-                Open {{ challenge.solverId }}
-              </Button>
+              <div class="flex flex-wrap items-center gap-2">
+                <Button variant="outline" @click="runtime.enqueueChallenge(challenge.challengeId)">
+                  Enqueue
+                </Button>
+                <Button variant="secondary" @click="openSolverAgent(challenge.solverId)">
+                  Open {{ challenge.solverId }}
+                </Button>
+              </div>
+            </article>
+          </section>
+
+          <details v-if="queuedChallenges.length" class="rounded-md border p-3">
+            <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wide">
+              Queued ({{ queuedChallenges.length }})
+            </summary>
+            <div class="mt-3 grid gap-2">
+              <article
+                v-for="challenge in queuedChallenges"
+                :key="challenge.challengeId"
+                class="rounded-md border p-3"
+              >
+                <div class="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <h4 class="font-medium">#{{ challenge.challengeId }} {{ challenge.title }}</h4>
+                    <p class="text-xs text-muted-foreground">
+                      {{ challenge.category }} · {{ challenge.score }} pts · solved
+                      {{ challenge.solvedCount }}
+                    </p>
+                  </div>
+                  <Badge :variant="badgeVariantForStatus(challenge.status)">
+                    {{ challenge.status }}
+                  </Badge>
+                </div>
+
+                <Separator class="my-3" />
+
+                <div class="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="outline"
+                    @click="runtime.enqueueChallenge(challenge.challengeId)"
+                  >
+                    Enqueue
+                  </Button>
+                  <Button variant="secondary" @click="openSolverAgent(challenge.solverId)">
+                    Open {{ challenge.solverId }}
+                  </Button>
+                </div>
+              </article>
             </div>
-          </article>
+          </details>
+
+          <section v-if="historyChallenges.length" class="space-y-2">
+            <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Solved / Blocked
+            </p>
+            <article
+              v-for="challenge in historyChallenges"
+              :key="challenge.challengeId"
+              class="rounded-md border p-3"
+            >
+              <div class="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h4 class="font-medium">#{{ challenge.challengeId }} {{ challenge.title }}</h4>
+                  <p class="text-xs text-muted-foreground">
+                    {{ challenge.category }} · {{ challenge.score }} pts · solved
+                    {{ challenge.solvedCount }}
+                  </p>
+                  <p v-if="challenge.statusReason" class="text-xs text-muted-foreground">
+                    {{ challenge.statusReason }}
+                  </p>
+                </div>
+                <Badge :variant="badgeVariantForStatus(challenge.status)">
+                  {{ challenge.status }}
+                </Badge>
+              </div>
+
+              <Separator class="my-3" />
+
+              <div class="flex flex-wrap items-center gap-2">
+                <Button variant="outline" @click="runtime.enqueueChallenge(challenge.challengeId)">
+                  Enqueue
+                </Button>
+                <Button variant="secondary" @click="openSolverAgent(challenge.solverId)">
+                  Open {{ challenge.solverId }}
+                </Button>
+              </div>
+            </article>
+          </section>
 
           <p v-if="(snapshot?.challenges.length ?? 0) === 0" class="text-sm text-muted-foreground">
             No challenges loaded yet. Run challenge sync first.

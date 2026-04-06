@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from "vue"
 import { useRouter } from "vue-router"
-import PageHeading from "@/components/layout/PageHeading.vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -21,6 +20,15 @@ const runtimeCount = computed(
 const solverCount = computed(
   () => registryStore.entries.filter((entry) => entry.kind === "solver").length,
 )
+const initializedRuntimeCount = computed(
+  () =>
+    registryStore.entries.filter(
+      (entry) => entry.kind === "ctf-runtime" && entry.runtime?.initialized,
+    ).length,
+)
+const pendingRuntimeCount = computed(() => runtimeCount.value - initializedRuntimeCount.value)
+
+const latestWorkspace = computed(() => registryStore.entries[0])
 
 onMounted(async () => {
   await registryStore.loadEntries()
@@ -52,21 +60,22 @@ async function openWorkspace(workspaceId: string, kind: "ctf-runtime" | "solver"
 </script>
 
 <template>
-  <div class="space-y-10">
-    <PageHeading
-      title="The command center for CTF runtime orchestration."
-      description="Launch runtime or solver workspaces, track persistent state, and control every agent stream from one monochrome console."
+  <div class="space-y-6">
+    <section
+      class="grid gap-3 rounded-xl border border-border/60 bg-card p-4 sm:grid-cols-[1fr_auto] sm:items-center"
     >
-      <template #actions>
-        <Button @click="router.push({ name: 'workspace-create' })">Create Workspace</Button>
-        <Button variant="outline" @click="registryStore.loadEntries">Refresh Registry</Button>
-      </template>
-    </PageHeading>
+      <div>
+        <p class="text-sm font-semibold">Dashboard</p>
+        <p class="text-xs text-muted-foreground">
+          Workspace registry is persisted on the backend. Open any entry to continue where you left
+          off.
+        </p>
+      </div>
 
-    <section class="space-y-6">
-      <p class="max-w-2xl text-sm text-muted-foreground">
-        Existing workspaces stay persisted in the backend registry and can be reopened anytime.
-      </p>
+      <div class="flex flex-wrap items-center gap-2">
+        <Button variant="outline" @click="registryStore.loadEntries">Refresh</Button>
+        <Button @click="router.push({ name: 'workspace-create' })">Create Workspace</Button>
+      </div>
     </section>
 
     <section class="grid gap-3 md:grid-cols-3">
@@ -78,8 +87,10 @@ async function openWorkspace(workspaceId: string, kind: "ctf-runtime" | "solver"
       </Card>
       <Card>
         <CardHeader class="pb-2">
-          <CardDescription>Runtime</CardDescription>
-          <CardTitle class="text-3xl">{{ runtimeCount }}</CardTitle>
+          <CardDescription>Runtime (Initialized / Pending)</CardDescription>
+          <CardTitle class="text-3xl"
+            >{{ initializedRuntimeCount }} / {{ pendingRuntimeCount }}</CardTitle
+          >
         </CardHeader>
       </Card>
       <Card>
@@ -87,6 +98,31 @@ async function openWorkspace(workspaceId: string, kind: "ctf-runtime" | "solver"
           <CardDescription>Solver</CardDescription>
           <CardTitle class="text-3xl">{{ solverCount }}</CardTitle>
         </CardHeader>
+      </Card>
+    </section>
+
+    <section class="grid gap-3 lg:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle class="text-base">Latest Update</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p v-if="latestWorkspace" class="text-sm">
+            {{ latestWorkspace.name }} · {{ new Date(latestWorkspace.updatedAt).toLocaleString() }}
+          </p>
+          <p v-else class="text-sm text-muted-foreground">No workspace activity yet.</p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle class="text-base">Runtime Health</CardTitle>
+        </CardHeader>
+        <CardContent class="flex flex-wrap gap-2">
+          <Badge variant="default">Initialized {{ initializedRuntimeCount }}</Badge>
+          <Badge variant="outline">Pending {{ pendingRuntimeCount }}</Badge>
+          <Badge variant="secondary">Solver Workspaces {{ solverCount }}</Badge>
+        </CardContent>
       </Card>
     </section>
 

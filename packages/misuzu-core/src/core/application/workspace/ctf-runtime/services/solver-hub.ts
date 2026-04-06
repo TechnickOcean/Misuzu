@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises"
+import { access, mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { type SolverAgent, type SolverAgentOptions } from "../../../../../agents/solver.ts"
@@ -29,6 +29,7 @@ export interface ChallengeSolverBinding {
   challenge: ChallengeSummary
   detail?: ChallengeDetail
   solverId: string
+  rootDir: string
   solver: SolverAgent
 }
 
@@ -38,6 +39,17 @@ export interface ChallengeSolverActivationState {
   status: "inactive" | "active"
   activeTaskId?: string
   modelId?: string
+}
+
+export type ChallengeProgressStatus = "idle" | "writeup_required" | "solved" | "blocked"
+
+export interface ChallengeSolverProgressState {
+  challengeId: number
+  solverId: string
+  status: ChallengeProgressStatus
+  flagAccepted: boolean
+  writeUpReady: boolean
+  blockedReason?: string
 }
 
 export interface SolverHubDeps {
@@ -53,6 +65,7 @@ export class SolverHub {
   private platformBaseUrl?: string
   private platformNoticeCursor?: string
   private readonly challengeSolvers = new Map<number, ChallengeSolverBinding>()
+  private readonly challengeProgress = new Map<number, ChallengeSolverProgressState>()
 
   private readonly logger: Logger
   private readonly queue: QueueService
@@ -131,6 +144,19 @@ export class SolverHub {
     return [...this.challengeSolvers.values()].map((binding) => this.buildActivationState(binding))
   }
 
+  getChallengeProgressState(challengeId: number): ChallengeSolverProgressState | undefined {
+    const state = this.challengeProgress.get(challengeId)
+    if (!state) {
+      return undefined
+    }
+
+    return { ...state }
+  }
+
+  listChallengeProgressStates(): ChallengeSolverProgressState[] {
+    return [...this.challengeProgress.values()].map((state) => ({ ...state }))
+  }
+
   getChallengeBindings() {
     return [...this.challengeSolvers.values()]
   }
@@ -173,13 +199,28 @@ export class SolverHub {
   }
 
   async submitFlag(challengeId: number, flag: string) {
-    return this.withRuntimeContext(async (context) =>
+    const result = await this.withRuntimeContext(async (context) =>
       this.requirePlugin().submitFlagRaw({
         ...context,
         challengeId,
         flag,
       }),
     )
+
+    if (result.accepted) {
+      const binding = this.challengeSolvers.get(challengeId)
+      const state = this.ensureChallengeProgressState(
+        challengeId,
+        binding?.solverId ?? `solver-${String(challengeId)}`,
+      )
+      state.flagAccepted = true
+      state.writeUpReady = false
+      state.status = "writeup_required"
+      state.blockedReason = "WriteUp.md is required before challenge completion"
+      this.notifyStateChanged()
+    }
+
+    return result
   }
 
   async pollUpdates(cursor?: string) {
@@ -255,12 +296,15 @@ export class SolverHub {
       detail,
       solver,
       solverId,
+      rootDir: managedSolver.rootDir,
     }
 
     this.challengeSolvers.set(challenge.id, binding)
+    this.ensureChallengeProgressState(challenge.id, solverId)
     this.queue.registerSolver({
       solverId,
       solve: async (task) => this.solveWithBinding(binding, task),
+      abortActiveTask: () => binding.solver.abort(),
     })
     this.notifyStateChanged()
 
@@ -310,6 +354,9 @@ export class SolverHub {
   }
 
   private async solveWithBinding(binding: ChallengeSolverBinding, task: SolverTask) {
+    const progress = this.ensureChallengeProgressState(binding.challenge.id, binding.solverId)
+    progress.blockedReason = undefined
+
     const preferredModel = binding.solver.state.model
       ? {
           provider: binding.solver.state.model.provider,
@@ -329,17 +376,87 @@ export class SolverHub {
       }
 
       await binding.solver.prompt(buildSolverTaskPrompt(binding.challenge, task.payload))
+      await this.completeAcceptedChallenge(binding, progress)
+
+      if (!progress.flagAccepted && progress.status !== "solved") {
+        progress.status = "idle"
+      }
     } finally {
       modelLease.release()
+      this.notifyStateChanged()
     }
 
     const output: SolverTaskResult["output"] = {
       challengeId: binding.challenge.id,
       solverId: binding.solverId,
       messageCount: binding.solver.state.messages.length,
+      challengeStatus: progress.status,
     }
 
     return output
+  }
+
+  private ensureChallengeProgressState(challengeId: number, solverId: string) {
+    const existing = this.challengeProgress.get(challengeId)
+    if (existing) {
+      if (existing.solverId !== solverId) {
+        existing.solverId = solverId
+      }
+
+      return existing
+    }
+
+    const state: ChallengeSolverProgressState = {
+      challengeId,
+      solverId,
+      status: "idle",
+      flagAccepted: false,
+      writeUpReady: false,
+    }
+    this.challengeProgress.set(challengeId, state)
+    return state
+  }
+
+  private async completeAcceptedChallenge(
+    binding: ChallengeSolverBinding,
+    progress: ChallengeSolverProgressState,
+  ) {
+    if (!progress.flagAccepted) {
+      return
+    }
+
+    if (await this.hasWriteUp(binding.rootDir)) {
+      progress.status = "solved"
+      progress.writeUpReady = true
+      progress.blockedReason = undefined
+      return
+    }
+
+    progress.status = "writeup_required"
+    progress.writeUpReady = false
+    progress.blockedReason = "WriteUp.md is required before challenge completion"
+
+    await binding.solver.prompt(buildWriteUpPrompt(binding.challenge))
+
+    if (await this.hasWriteUp(binding.rootDir)) {
+      progress.status = "solved"
+      progress.writeUpReady = true
+      progress.blockedReason = undefined
+      return
+    }
+
+    progress.status = "blocked"
+    progress.blockedReason = "Solver submitted an accepted flag but WriteUp.md is still missing"
+    throw new Error(progress.blockedReason)
+  }
+
+  private async hasWriteUp(solverRootDir: string) {
+    try {
+      await access(join(solverRootDir, "WriteUp.md"))
+      return true
+    } catch {
+      return false
+    }
   }
 
   private acquireModelLeaseForSolver(
@@ -576,5 +693,14 @@ function buildSolverTaskPrompt(challenge: ChallengeSummary, payload: unknown) {
     `Category: ${challenge.category}, score: ${challenge.score}, solved: ${challenge.solvedCount}.`,
     "Use platform tools carefully and avoid unnecessary requests.",
     `Task payload:\n${payloadText}`,
+  ].join("\n")
+}
+
+function buildWriteUpPrompt(challenge: ChallengeSummary) {
+  return [
+    `Your flag submission for challenge [${challenge.id}] ${challenge.title} appears accepted.`,
+    "Before finishing this task, create a file named WriteUp.md in the solver workspace root.",
+    "The writeup must include a short exploit path, key evidence, and the final flag rationale.",
+    "Once WriteUp.md is saved, continue with a short completion note.",
   ].join("\n")
 }

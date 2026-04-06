@@ -45,6 +45,7 @@ import {
   type ModelPoolItem,
   type ModelPoolStateSnapshot,
   type ChallengeSolverActivationState,
+  type ChallengeSolverProgressState,
   type RuntimeCronOptions,
   type RuntimeInitOptions,
   type SolverRunner,
@@ -89,6 +90,7 @@ export type CTFSolverTask = SolverTask
 export type CTFSolverTaskResult = SolverTaskResult
 export type CTFSolver = SolverRunner
 export type CTFSolverActivationState = ChallengeSolverActivationState
+export type CTFSolverProgressState = ChallengeSolverProgressState
 
 export class CTFRuntimeWorkspace extends BaseWorkspace {
   runtime?: CTFRuntime
@@ -243,6 +245,10 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     return this.solverHub.listSolverActivationStates()
   }
 
+  listSolverProgressStates(): CTFSolverProgressState[] {
+    return this.solverHub.listChallengeProgressStates()
+  }
+
   async initializeRuntime(options: RuntimeInitOptions) {
     const restoreSnapshot = this.getMatchingPendingRuntimeSnapshot(options)
     this.restoreQueueFromSnapshot(restoreSnapshot)
@@ -285,6 +291,14 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
 
   getSchedulerState() {
     return this.queue.getState()
+  }
+
+  listPendingSchedulerTasks() {
+    return this.queue.listPendingTasks()
+  }
+
+  listInflightSchedulerTasks() {
+    return this.queue.listInflightTasks()
   }
 
   pauseTaskDispatch() {

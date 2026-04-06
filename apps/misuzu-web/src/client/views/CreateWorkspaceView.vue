@@ -1,12 +1,24 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue"
+import { computed, onMounted, reactive, ref, watch } from "vue"
 import { useRouter } from "vue-router"
 import { marked } from "marked"
 import type { ModelPoolInput, PluginCatalogItem, WorkspaceKind } from "@shared/protocol.ts"
+import { CheckIcon, ChevronsUpDownIcon } from "lucide-vue-next"
 import PageHeading from "@/components/layout/PageHeading.vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Combobox,
+  ComboboxAnchor,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxItemIndicator,
+  ComboboxList,
+  ComboboxViewport,
+} from "@/components/ui/combobox"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -55,10 +67,10 @@ const runtimeWithPlugin = ref(true)
 const runtimeAutoOrchestrate = ref(false)
 const modelPool = ref<ModelPoolRow[]>([createModelPoolRow()])
 
-const pluginQuery = ref("")
 const plugins = ref<PluginCatalogItem[]>([])
 const selectedPluginId = ref("")
 const pluginReadmeHtml = ref("")
+const pluginComboboxOpen = ref(false)
 
 const pluginDraft = reactive<PluginConfigDraft>(createDefaultPluginConfigDraft())
 
@@ -69,6 +81,14 @@ const solverSystemPrompt = ref("")
 const selectedPlugin = computed(() =>
   plugins.value.find((plugin) => plugin.id === selectedPluginId.value),
 )
+const selectedPluginLabel = computed(() => {
+  const plugin = selectedPlugin.value
+  if (!plugin) {
+    return "Select plugin"
+  }
+
+  return `${plugin.name} (${plugin.id})`
+})
 
 const normalizedModelPool = computed<ModelPoolInput[]>(() => {
   return modelPool.value.map((item) => ({
@@ -82,6 +102,16 @@ onMounted(async () => {
   await loadPlugins()
 })
 
+watch(selectedPluginId, async (pluginId) => {
+  if (!pluginId) {
+    pluginReadmeHtml.value = ""
+    return
+  }
+
+  await loadPluginReadme(pluginId)
+  pluginComboboxOpen.value = false
+})
+
 function createModelPoolRow(): ModelPoolRow {
   return {
     id: crypto.randomUUID(),
@@ -92,14 +122,15 @@ function createModelPoolRow(): ModelPoolRow {
 }
 
 async function loadPlugins() {
-  plugins.value = await apiClient.listPlugins(pluginQuery.value)
+  plugins.value = await apiClient.listPlugins()
 
   if (!selectedPluginId.value && plugins.value.length > 0) {
     selectedPluginId.value = plugins.value[0].id
+    return
   }
 
-  if (selectedPluginId.value) {
-    await loadPluginReadme(selectedPluginId.value)
+  if (!plugins.value.some((plugin) => plugin.id === selectedPluginId.value)) {
+    selectedPluginId.value = plugins.value[0]?.id ?? ""
   }
 }
 
@@ -376,31 +407,58 @@ function setAuthMode(value: string) {
                   Platform Plugin
                 </h3>
 
-                <div class="flex gap-2">
-                  <Input v-model="pluginQuery" placeholder="search plugin by id/name" />
-                  <Button type="button" variant="outline" @click="loadPlugins">Search</Button>
-                </div>
-
-                <Select v-model="selectedPluginId">
-                  <SelectTrigger class="w-full">
-                    <SelectValue placeholder="Select plugin" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem v-for="plugin in plugins" :key="plugin.id" :value="plugin.id">
-                      {{ plugin.name }} ({{ plugin.id }})
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-
-                <Button
-                  v-if="selectedPluginId"
-                  type="button"
-                  variant="secondary"
-                  class="w-fit"
-                  @click="loadPluginReadme(selectedPluginId)"
+                <Combobox
+                  v-model="selectedPluginId"
+                  :open="pluginComboboxOpen"
+                  @update:open="(value) => (pluginComboboxOpen = Boolean(value))"
                 >
-                  Refresh README
-                </Button>
+                  <ComboboxAnchor class="w-full">
+                    <Button
+                      variant="outline"
+                      type="button"
+                      class="w-full justify-between font-normal"
+                    >
+                      <span class="truncate">{{ selectedPluginLabel }}</span>
+                      <ChevronsUpDownIcon class="size-4 shrink-0 opacity-50" />
+                    </Button>
+                  </ComboboxAnchor>
+
+                  <ComboboxList class="w-[var(--reka-popper-anchor-width)] p-0">
+                    <ComboboxInput placeholder="Search plugin by name or id..." />
+                    <ComboboxEmpty>No plugin found.</ComboboxEmpty>
+
+                    <ComboboxViewport>
+                      <ComboboxGroup>
+                        <ComboboxItem
+                          v-for="plugin in plugins"
+                          :key="plugin.id"
+                          :value="plugin.id"
+                          class="justify-between"
+                        >
+                          <span class="truncate">{{ plugin.name }} ({{ plugin.id }})</span>
+                          <ComboboxItemIndicator>
+                            <CheckIcon class="size-4" />
+                          </ComboboxItemIndicator>
+                        </ComboboxItem>
+                      </ComboboxGroup>
+                    </ComboboxViewport>
+                  </ComboboxList>
+                </Combobox>
+
+                <div class="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" class="w-fit" @click="loadPlugins">
+                    Refresh Plugins
+                  </Button>
+                  <Button
+                    v-if="selectedPluginId"
+                    type="button"
+                    variant="secondary"
+                    class="w-fit"
+                    @click="loadPluginReadme(selectedPluginId)"
+                  >
+                    Refresh README
+                  </Button>
+                </div>
 
                 <article v-if="selectedPlugin" class="rounded-md border bg-muted/30 p-3">
                   <h4 class="mb-2 text-sm font-medium">{{ selectedPlugin.name }} README</h4>

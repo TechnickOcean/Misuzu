@@ -91,4 +91,44 @@ describe("ctf runtime fifo scheduler", () => {
     expect(observedTaskIds).toEqual(["task-paused"])
     expect(workspace.getSchedulerState().paused).toBe(false)
   })
+
+  test("aborts active solver task when queue is paused", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    const observedTaskIds: string[] = []
+    let rejectActiveTask: ((error?: unknown) => void) | undefined
+
+    workspace.registerSolver({
+      solverId: "solver-abort",
+      solve: async (task) => {
+        observedTaskIds.push(task.taskId)
+        if (task.taskId === "task-active") {
+          return new Promise((_resolve, reject) => {
+            rejectActiveTask = reject
+          })
+        }
+
+        return `done:${task.taskId}`
+      },
+      abortActiveTask: () => {
+        rejectActiveTask?.(new Error("task aborted"))
+      },
+    })
+
+    const activeTask = workspace.enqueueTask({ challenge: "active" }, "task-active")
+    const queuedTask = workspace.enqueueTask({ challenge: "queued" }, "task-queued")
+
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    workspace.pauseTaskDispatch()
+
+    await expect(activeTask).rejects.toThrow("task aborted")
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(observedTaskIds).toEqual(["task-active"])
+    expect(workspace.getSchedulerState().paused).toBe(true)
+
+    workspace.resumeTaskDispatch()
+    await expect(queuedTask).resolves.toMatchObject({ taskId: "task-queued" })
+    expect(observedTaskIds).toEqual(["task-active", "task-queued"])
+  })
 })

@@ -35,6 +35,17 @@ function resolveDefaultPoolItem(maxConcurrency = 1) {
   }
 }
 
+async function waitForCondition(condition: () => boolean, timeoutMs = 1200, intervalMs = 20) {
+  const startedAt = Date.now()
+  while (!condition()) {
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error("Condition was not met within timeout")
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+}
+
 afterEach(async () => {
   await Promise.all(
     tempDirs.splice(0, tempDirs.length).map((dir) => rm(dir, { recursive: true, force: true })),
@@ -168,7 +179,7 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
     return {
       submissionId: 1,
       status: `${context.challengeId}:${context.flag}`,
-      accepted: false,
+      accepted: context.flag.includes("accepted"),
     }
   }
 
@@ -563,6 +574,166 @@ describe("ctf runtime platform integration", () => {
 
     finishPrompt?.()
     await pendingTask
+
+    await workspace.shutdown()
+  })
+
+  test("aborts active solver loop when dispatch is paused", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    const plugin = new MockPlatformPlugin([
+      {
+        id: 122,
+        title: "pause-abort",
+        category: "misc",
+        score: 100,
+        solvedCount: 0,
+      },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "cookie", cookie: "sid=abc" },
+      },
+    })
+
+    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
+
+    const solver = workspace.getChallengeSolver(122)
+    expect(solver).toBeDefined()
+
+    let rejectPrompt: ((error?: unknown) => void) | undefined
+    let abortCallCount = 0
+
+    solver!.prompt = async () => {
+      await new Promise<void>((_resolve, reject) => {
+        rejectPrompt = reject
+      })
+    }
+    solver!.abort = () => {
+      abortCallCount += 1
+      rejectPrompt?.(new Error("solver aborted by pause"))
+    }
+
+    const runningTask = workspace.enqueueTask({ challenge: 122 }, "task-pause-abort")
+
+    await waitForCondition(() => workspace.getSolverActivationState(122)?.status === "active")
+
+    workspace.pauseTaskDispatch()
+
+    await expect(runningTask).rejects.toThrow("solver aborted by pause")
+    await waitForCondition(() => workspace.getSolverActivationState(122)?.status === "inactive")
+    expect(abortCallCount).toBe(1)
+    expect(workspace.isTaskDispatchPaused()).toBe(true)
+
+    await workspace.shutdown()
+  })
+
+  test("requires WriteUp.md before marking accepted challenge as solved", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    const plugin = new MockPlatformPlugin([
+      {
+        id: 123,
+        title: "writeup-gate",
+        category: "misc",
+        score: 100,
+        solvedCount: 0,
+      },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "cookie", cookie: "sid=abc" },
+      },
+    })
+
+    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
+
+    const solver = workspace.getChallengeSolver(123)
+    expect(solver).toBeDefined()
+
+    const solverHub = Reflect.get(workspace as object, "solverHub") as {
+      submitFlag: (challengeId: number, flag: string) => Promise<{ accepted: boolean }>
+    }
+    const solverWorkspace = await workspace.deriveSolverWorkspace("solver-123")
+
+    let promptCount = 0
+    solver!.prompt = async () => {
+      promptCount += 1
+      await solverHub.submitFlag(123, "flag{accepted}")
+
+      if (promptCount >= 2) {
+        await writeFile(
+          join(solverWorkspace.rootDir, "WriteUp.md"),
+          "# Writeup\n\n- solved challenge\n",
+          "utf-8",
+        )
+      }
+    }
+
+    await expect(workspace.enqueueTask({ challenge: 123 })).resolves.toMatchObject({
+      solverId: "solver-123",
+    })
+
+    const progress = workspace.listSolverProgressStates().find((state) => state.challengeId === 123)
+    expect(progress?.status).toBe("solved")
+    expect(progress?.writeUpReady).toBe(true)
+
+    await workspace.shutdown()
+  })
+
+  test("blocks accepted challenge completion when WriteUp.md is missing", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    const plugin = new MockPlatformPlugin([
+      {
+        id: 124,
+        title: "writeup-missing",
+        category: "misc",
+        score: 100,
+        solvedCount: 0,
+      },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "cookie", cookie: "sid=abc" },
+      },
+    })
+
+    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
+
+    const solver = workspace.getChallengeSolver(124)
+    expect(solver).toBeDefined()
+
+    const solverHub = Reflect.get(workspace as object, "solverHub") as {
+      submitFlag: (challengeId: number, flag: string) => Promise<{ accepted: boolean }>
+    }
+
+    solver!.prompt = async () => {
+      await solverHub.submitFlag(124, "flag{accepted}")
+    }
+
+    await expect(workspace.enqueueTask({ challenge: 124 })).rejects.toThrow(
+      "WriteUp.md is still missing",
+    )
+
+    const progress = workspace.listSolverProgressStates().find((state) => state.challengeId === 124)
+    expect(progress?.status).toBe("blocked")
+    expect(progress?.writeUpReady).toBe(false)
 
     await workspace.shutdown()
   })

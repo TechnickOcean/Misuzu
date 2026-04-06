@@ -83,39 +83,47 @@ function openAgent(agentId: string) {
         <Badge :variant="summary?.paused ? 'destructive' : 'default'">
           {{ summary?.paused ? "Paused" : "Running" }}
         </Badge>
-        <Button variant="outline" @click="router.push({ name: 'workspace-create' })">New</Button>
       </template>
     </PageHeading>
 
     <section class="flex flex-wrap gap-2 rounded-lg border border-border/60 bg-card p-3">
       <Button variant="outline" @click="runtime.syncChallenges">Sync Challenges</Button>
       <Button variant="outline" @click="runtime.syncNotices">Sync Notices</Button>
-      <Button variant="outline" @click="runtime.ensureEnvironmentAgent"
-        >Add Environment Agent</Button
+      <Button
+        v-if="!summary?.initialized && !summary?.environmentAgentReady"
+        variant="outline"
+        @click="runtime.ensureEnvironmentAgent"
       >
+        Add Environment Agent
+      </Button>
       <Button @click="runtime.startDispatch(true)">Start Flow</Button>
       <Button variant="destructive" @click="runtime.pauseDispatch">Pause Flow</Button>
       <Button variant="secondary" @click="openOverview">Overview</Button>
     </section>
 
-    <section class="grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
+    <section class="grid gap-4 xl:grid-cols-[292px_minmax(0,1fr)]">
       <Card class="bg-card/80">
         <CardHeader>
           <CardTitle class="text-sm uppercase tracking-wide text-muted-foreground"
             >Agents</CardTitle
           >
         </CardHeader>
-        <CardContent class="space-y-3">
+        <CardContent class="space-y-3 px-3 pb-3">
           <ScrollArea class="h-[260px] rounded-md border">
-            <div class="grid gap-2 p-2">
+            <div class="grid gap-2 p-2 pr-3">
               <Button
                 v-for="agent in summary?.agents ?? []"
                 :key="agent.id"
-                :variant="route.params.agentId === agent.id ? 'default' : 'outline'"
-                class="justify-between"
+                :variant="route.params.agentId === agent.id ? 'secondary' : 'ghost'"
+                class="w-full min-w-0 justify-between border border-transparent px-2 text-foreground hover:text-foreground"
+                :class="
+                  route.params.agentId === agent.id
+                    ? 'border-border bg-accent text-accent-foreground'
+                    : 'text-muted-foreground'
+                "
                 @click="openAgent(agent.id)"
               >
-                <span class="truncate">{{ agent.name }}</span>
+                <span class="min-w-0 flex-1 truncate text-left">{{ agent.name }}</span>
                 <Badge :variant="agent.role === 'environment' ? 'secondary' : 'outline'">
                   {{ agent.role }}
                 </Badge>

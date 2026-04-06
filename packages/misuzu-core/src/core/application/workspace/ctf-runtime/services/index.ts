@@ -9,6 +9,8 @@ export {
   SolverHub,
   type ChallengeSolverBinding,
   type ChallengeSolverActivationState,
+  type ChallengeSolverProgressState,
+  type ChallengeProgressStatus,
 } from "./solver-hub.ts"
 export { SolverWorkspaceService, type ManagedSolver } from "./solver-workspaces.ts"
 export { SyncService } from "./sync.ts"

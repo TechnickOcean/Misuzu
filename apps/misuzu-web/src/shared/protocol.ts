@@ -68,8 +68,10 @@ export interface ChallengeSummaryView {
   category: string
   score: number
   solvedCount: number
-  status: "inactive" | "active"
+  status: "active" | "queued" | "solved" | "blocked" | "idle"
   activeTaskId?: string
+  queuedTaskId?: string
+  statusReason?: string
   modelId?: string
 }
 
@@ -105,6 +107,21 @@ export interface SolverWorkspaceSnapshot {
   messageCount: number
 }
 
+export interface AgentMessageTextPart {
+  kind: "text"
+  text: string
+}
+
+export interface AgentMessageToolPart {
+  kind: "tool"
+  toolType: string
+  name?: string
+  argsText?: string
+  resultText?: string
+}
+
+export type AgentMessagePart = AgentMessageTextPart | AgentMessageToolPart
+
 export interface AgentStateSnapshot {
   modelId?: string
   thinkingLevel?: string
@@ -112,6 +129,7 @@ export interface AgentStateSnapshot {
   messages: Array<{
     role: string
     text: string
+    parts?: AgentMessagePart[]
     timestamp?: number
   }>
 }

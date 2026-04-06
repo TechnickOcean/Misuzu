@@ -19,6 +19,7 @@ export interface SolverExecutionState {
 export interface SolverRunner {
   solverId: string
   solve(task: SolverTask): Promise<unknown>
+  abortActiveTask?(): void
 }
 
 interface PendingSolverTask {
@@ -82,6 +83,7 @@ export class QueueService {
     }
 
     this.paused = true
+    this.abortRunningTasks()
     this.notifyStateChanged()
   }
 
@@ -154,6 +156,23 @@ export class QueueService {
       active: true,
       activeTaskId: activeTask.taskId,
     }
+  }
+
+  listPendingTasks() {
+    return this.pendingTaskQueue.map((pendingTask) => ({
+      taskId: pendingTask.task.taskId,
+      payload: pendingTask.task.payload,
+    }))
+  }
+
+  listInflightTasks() {
+    return [...this.inflightTasks.entries()].map(([solverId, task]) => ({
+      solverId,
+      task: {
+        taskId: task.taskId,
+        payload: task.payload,
+      },
+    }))
   }
 
   private nextTaskId() {
@@ -266,6 +285,12 @@ export class QueueService {
       resolve: () => {},
       reject: () => {},
     })
+  }
+
+  private abortRunningTasks() {
+    for (const solverId of this.busySolverIds) {
+      this.solverRegistry.get(solverId)?.abortActiveTask?.()
+    }
   }
 
   private notifyStateChanged() {
