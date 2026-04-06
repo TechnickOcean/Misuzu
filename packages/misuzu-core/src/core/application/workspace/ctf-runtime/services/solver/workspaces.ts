@@ -1,11 +1,14 @@
 import { join } from "node:path"
-import { SolverAgent, type SolverAgentOptions } from "../../../../../agents/solver.ts"
-import { createSolverWorkspaceWithoutPersistence, SolverWorkspace } from "../../solver/workspace.ts"
-import type { Logger } from "../../../../infrastructure/logging/types.ts"
-import type { ProviderRegistry } from "../../../providers/registry.ts"
-import { providerRegistryToken } from "../../../../infrastructure/di/tokens.ts"
-import { resolveWorkspacePaths } from "../../shared/paths.ts"
-import { ProxyProviderBootstrap } from "../../shared/proxy-provider-bootstrap.ts"
+import { SolverAgent, type SolverAgentOptions } from "../../../../../../agents/solver.ts"
+import {
+  createSolverWorkspaceWithoutPersistence,
+  SolverWorkspace,
+} from "../../../solver/workspace.ts"
+import type { Logger } from "../../../../../infrastructure/logging/types.ts"
+import type { ProviderRegistry } from "../../../../providers/registry.ts"
+import { providerRegistryToken } from "../../../../../infrastructure/di/tokens.ts"
+import { resolveWorkspacePaths } from "../../../shared/paths.ts"
+import { ProxyProviderBootstrap } from "../../../shared/proxy-provider-bootstrap.ts"
 
 export interface SolverWorkspaceServiceDeps {
   rootDir: string

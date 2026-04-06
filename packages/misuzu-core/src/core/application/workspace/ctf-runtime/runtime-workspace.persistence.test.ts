@@ -3,7 +3,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, test } from "vite-plus/test"
 import { getModels } from "@mariozechner/pi-ai"
-import { createCTFRuntimeWorkspace, createCTFRuntimeWorkspaceWithoutPersistence } from "../index.ts"
+import {
+  createCTFRuntimeWorkspace,
+  createCTFRuntimeWorkspaceWithoutPersistence,
+} from "./workspace.ts"
 
 const tempDirs: string[] = []
 

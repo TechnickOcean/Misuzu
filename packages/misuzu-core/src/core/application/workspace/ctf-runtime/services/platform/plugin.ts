@@ -3,8 +3,8 @@ import {
   findBuiltinPlugin,
   loadBuiltinPluginCatalog,
   resolveBuiltinPluginEntryPath,
-} from "../../../../../plugins/catalog.ts"
-import type { CTFPlatformPlugin } from "../../../../../../plugins/index.ts"
+} from "../../../../../../plugins/catalog.ts"
+import type { CTFPlatformPlugin } from "../../../../../../../plugins/index.ts"
 
 export interface ResolveRuntimePluginOptions {
   plugin?: CTFPlatformPlugin

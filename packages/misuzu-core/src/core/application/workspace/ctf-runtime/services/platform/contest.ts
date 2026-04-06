@@ -1,4 +1,4 @@
-import type { ContestBinding, ContestSummary } from "../../../../../../plugins/index.ts"
+import type { ContestBinding, ContestSummary } from "../../../../../../../plugins/index.ts"
 
 export interface PlatformContestManagerOptions {
   onStateChanged?: () => void

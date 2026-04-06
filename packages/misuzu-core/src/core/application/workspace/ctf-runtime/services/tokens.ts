@@ -1,10 +1,10 @@
 import { createToken } from "../../../../infrastructure/di/container.ts"
-import { RuntimeOrchestrator } from "./orchestrator.ts"
-import { WorkspaceModelPool } from "./model-pool.ts"
-import { SolverHub } from "./solver-hub.ts"
-import { SolverWorkspaceService } from "./solver-workspaces.ts"
-import { SyncService } from "./sync.ts"
-import { QueueService } from "./queue.ts"
+import { RuntimeOrchestrator } from "./platform/runtime.ts"
+import { WorkspaceModelPool } from "./model/pool.ts"
+import { SolverHub } from "./platform/hub.ts"
+import { SolverWorkspaceService } from "./solver/workspaces.ts"
+import { SyncService } from "./platform/sync.ts"
+import { QueueService } from "./scheduler/queue.ts"
 
 export const queueToken = createToken<QueueService>("queue")
 export const modelPoolToken = createToken<WorkspaceModelPool>("modelPool")

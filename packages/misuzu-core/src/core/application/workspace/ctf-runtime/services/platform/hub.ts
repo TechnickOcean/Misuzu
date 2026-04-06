@@ -1,9 +1,9 @@
 import { access, mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
-import { type SolverAgent, type SolverAgentOptions } from "../../../../../agents/solver.ts"
-import { createBaseTools } from "../../../../../tools/index.ts"
-import type { Logger } from "../../../../infrastructure/logging/types.ts"
+import { type SolverAgent, type SolverAgentOptions } from "../../../../../../agents/solver.ts"
+import { createBaseTools } from "../../../../../../tools/index.ts"
+import type { Logger } from "../../../../../infrastructure/logging/types.ts"
 import {
   PlatformAuthError,
   transformPluginToTools,
@@ -12,19 +12,19 @@ import {
   type ChallengeSummary,
   type PlatformRequestContext,
   type SolverToolPlugin,
-} from "../../../../../../plugins/index.ts"
-import type { RuntimeInitOptions } from "./orchestrator.ts"
-import { type SolverTask, type SolverTaskResult, QueueService } from "./queue.ts"
-import { SolverWorkspaceService } from "./solver-workspaces.ts"
-import { PlatformAuthManager } from "./auth-manager.ts"
-import { PlatformContestManager } from "./contest-manager.ts"
-import { RuntimePluginLoader } from "./plugin-loader.ts"
-import { WorkspaceModelPool, isModelPoolError } from "./model-pool.ts"
+} from "../../../../../../../plugins/index.ts"
+import type { RuntimeInitOptions } from "./runtime.ts"
+import { type SolverTask, type SolverTaskResult, QueueService } from "../scheduler/queue.ts"
+import { SolverWorkspaceService } from "../solver/workspaces.ts"
+import { PlatformAuthManager } from "./auth.ts"
+import { PlatformContestManager } from "./contest.ts"
+import { RuntimePluginLoader } from "./plugin.ts"
+import { WorkspaceModelPool, isModelPoolError } from "../model/pool.ts"
 import type {
   PersistedCTFRuntimeChallengeProgress,
   PersistedCTFRuntimePlatformState,
   PersistedCTFRuntimeSolverHubState,
-} from "../state.ts"
+} from "../../state.ts"
 
 export interface ChallengeSolverBinding {
   challenge: ChallengeSummary
@@ -53,6 +53,13 @@ export interface ChallengeSolverProgressState {
   blockedReason?: string
 }
 
+export interface UnexpectedSolverStopEvent {
+  challengeId: number
+  solverId: string
+  taskId: string
+  error: unknown
+}
+
 export interface SolverHubDeps {
   logger: Logger
   queue: QueueService
@@ -76,6 +83,7 @@ export class SolverHub {
   private readonly authManager: PlatformAuthManager
   private readonly contestManager: PlatformContestManager
   private onStateChanged: () => void = () => {}
+  private onUnexpectedStop: (event: UnexpectedSolverStopEvent) => void = () => {}
 
   constructor(deps: SolverHubDeps) {
     this.logger = deps.logger
@@ -92,6 +100,10 @@ export class SolverHub {
 
   setStateChangeListener(listener: () => void) {
     this.onStateChanged = listener
+  }
+
+  setUnexpectedStopListener(listener: (event: UnexpectedSolverStopEvent) => void) {
+    this.onUnexpectedStop = listener
   }
 
   async initialize(options: RuntimeInitOptions) {
@@ -299,6 +311,7 @@ export class SolverHub {
         solverId: binding.solverId,
         title: binding.challenge.title,
         category: binding.challenge.category,
+        requiresContainer: binding.detail?.requiresContainer,
         score: binding.challenge.score,
         solvedCount: binding.challenge.solvedCount,
       })),
@@ -415,11 +428,26 @@ export class SolverHub {
         binding.solver.setModel(modelLease.model)
       }
 
-      if (shouldContinueSolverTask(task.payload, binding.solver.state.messages.length > 0)) {
+      try {
+        if (shouldContinueSolverTask(task.payload, binding.solver.state.messages.length > 0)) {
+          await binding.solver.continue()
+        } else {
+          await binding.solver.prompt(buildSolverTaskPrompt(binding.challenge, task.payload))
+        }
+      } catch (error) {
+        if (progress.status === "solved" || isAbortLikeError(error)) {
+          throw error
+        }
+
+        this.onUnexpectedStop({
+          challengeId: binding.challenge.id,
+          solverId: binding.solverId,
+          taskId: task.taskId,
+          error,
+        })
         await binding.solver.continue()
-      } else {
-        await binding.solver.prompt(buildSolverTaskPrompt(binding.challenge, task.payload))
       }
+
       await this.completeAcceptedChallenge(binding, progress)
 
       if (!progress.flagAccepted && progress.status !== "solved") {
@@ -772,4 +800,17 @@ function isPersistedProgressStatus(
     status === "solved" ||
     status === "blocked"
   )
+}
+
+function isAbortLikeError(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return false
+  }
+
+  const message = (error as { message?: unknown }).message
+  if (typeof message !== "string") {
+    return false
+  }
+
+  return /abort|cancel/i.test(message)
 }

@@ -80,6 +80,7 @@ export interface ChallengeSummaryView {
   solverId: string
   title: string
   category: string
+  requiresContainer?: boolean
   score: number
   solvedCount: number
   status: "active" | "queued" | "solved" | "blocked" | "idle"

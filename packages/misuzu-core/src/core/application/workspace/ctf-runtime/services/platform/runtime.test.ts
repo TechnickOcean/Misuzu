@@ -3,16 +3,19 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, test } from "vite-plus/test"
 import { getModels } from "@mariozechner/pi-ai"
-import { createCTFRuntimeWorkspace, createCTFRuntimeWorkspaceWithoutPersistence } from "../index.ts"
-import { providerRegistryToken } from "../../../infrastructure/di/tokens.ts"
-import { ProviderRegistry, type ProxyProviderOptions } from "../../providers/registry.ts"
+import {
+  createCTFRuntimeWorkspace,
+  createCTFRuntimeWorkspaceWithoutPersistence,
+} from "../../workspace.ts"
+import { providerRegistryToken } from "../../../../../infrastructure/di/tokens.ts"
+import { ProviderRegistry, type ProxyProviderOptions } from "../../../../providers/registry.ts"
 import type {
   CTFPlatformPlugin,
   ChallengeDetail,
   ChallengeSummary,
   ContestUpdate,
   PluginConfig,
-} from "../../../../../plugins/index.ts"
+} from "../../../../../../../plugins/index.ts"
 
 const tempDirs: string[] = []
 
@@ -971,6 +974,54 @@ describe("ctf runtime platform integration", () => {
     await workspace.enqueueTask({ challenge: challengeId })
 
     expect(promptCalls).toBe(0)
+    expect(continueCalls).toBe(1)
+
+    await workspace.shutdown()
+  })
+
+  test("auto-recovers from unexpected solver stop by sending continue", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const challengeId = 183
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    const plugin = new MockPlatformPlugin([
+      {
+        id: challengeId,
+        title: "unexpected-stop-recover",
+        category: "misc",
+        score: 80,
+        solvedCount: 0,
+      },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "cookie", cookie: "sid=abc" },
+      },
+    })
+
+    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
+
+    const solver = workspace.getChallengeSolver(challengeId)
+    expect(solver).toBeDefined()
+
+    let promptCalls = 0
+    let continueCalls = 0
+    solver!.prompt = async () => {
+      promptCalls += 1
+      throw new Error("unexpected agent stop")
+    }
+    solver!.continue = async () => {
+      continueCalls += 1
+    }
+
+    await expect(workspace.enqueueTask({ challenge: challengeId })).resolves.toMatchObject({
+      solverId: `solver-${String(challengeId)}`,
+    })
+    expect(promptCalls).toBe(1)
     expect(continueCalls).toBe(1)
 
     await workspace.shutdown()

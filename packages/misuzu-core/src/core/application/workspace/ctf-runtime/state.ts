@@ -48,6 +48,7 @@ export interface PersistedCTFRuntimeManagedChallenge {
   solverId: string
   title: string
   category: string
+  requiresContainer?: boolean
   score: number
   solvedCount: number
 }

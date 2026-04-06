@@ -1,9 +1,9 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { getEnvApiKey, getModels, getProviders, type Api, type Model } from "@mariozechner/pi-ai"
-import type { ProviderRegistry } from "../../../providers/registry.ts"
-import type { Logger } from "../../../../infrastructure/logging/types.ts"
-import { resolveWorkspacePaths } from "../../shared/paths.ts"
+import type { ProviderRegistry } from "../../../../providers/registry.ts"
+import type { Logger } from "../../../../../infrastructure/logging/types.ts"
+import { resolveWorkspacePaths } from "../../../shared/paths.ts"
 
 const MODEL_POOL_STATE_VERSION = "1.0.0"
 const MODEL_POOL_CONFIG_FILE = "model-pool.json"

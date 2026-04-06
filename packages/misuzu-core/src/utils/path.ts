@@ -95,7 +95,7 @@ export function resolveMisuzuRoot(startDir = dirname(fileURLToPath(import.meta.u
   while (true) {
     try {
       if (statSync(join(current, "pnpm-workspace.yaml")).isFile()) {
-        return current
+        return join(current, "packages/misuzu-core")
       }
     } catch {}
 

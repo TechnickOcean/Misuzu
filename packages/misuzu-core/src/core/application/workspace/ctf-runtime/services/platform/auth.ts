@@ -3,7 +3,7 @@ import {
   type AuthSession,
   type CTFPlatformPlugin,
   type PluginAuthConfig,
-} from "../../../../../../plugins/index.ts"
+} from "../../../../../../../plugins/index.ts"
 
 export interface PlatformAuthManagerOptions {
   onStateChanged?: () => void

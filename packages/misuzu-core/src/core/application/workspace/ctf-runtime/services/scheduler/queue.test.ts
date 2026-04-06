@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, test } from "vite-plus/test"
-import { createCTFRuntimeWorkspaceWithoutPersistence } from "../index.ts"
+import { createCTFRuntimeWorkspaceWithoutPersistence } from "../../workspace.ts"
 
 const tempDirs: string[] = []
 
@@ -130,5 +130,47 @@ describe("ctf runtime fifo scheduler", () => {
     workspace.resumeTaskDispatch()
     await expect(queuedTask).resolves.toMatchObject({ taskId: "task-queued" })
     expect(observedTaskIds).toEqual(["task-active", "task-queued"])
+  })
+
+  test("cancels pending scheduler task by task id", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    workspace.pauseTaskDispatch()
+
+    workspace.registerSolver({
+      solverId: "solver-cancel-pending",
+      solve: async () => "done",
+    })
+
+    const pendingTask = workspace.enqueueTask({ challenge: "cancel" }, "task-cancel-pending")
+
+    const cancelled = workspace.cancelSchedulerTask("task-cancel-pending")
+    expect(cancelled).toBe("pending")
+    await expect(pendingTask).rejects.toThrow("Task cancelled")
+  })
+
+  test("cancels inflight scheduler task by task id", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    let rejectActiveTask: ((error?: unknown) => void) | undefined
+    workspace.registerSolver({
+      solverId: "solver-cancel-inflight",
+      solve: async () =>
+        new Promise((_resolve, reject) => {
+          rejectActiveTask = reject
+        }),
+      abortActiveTask: () => {
+        rejectActiveTask?.(new Error("task aborted by cancel"))
+      },
+    })
+
+    const inflightTask = workspace.enqueueTask({ challenge: "cancel" }, "task-cancel-inflight")
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    const cancelled = workspace.cancelSchedulerTask("task-cancel-inflight")
+    expect(cancelled).toBe("inflight")
+    await expect(inflightTask).rejects.toThrow("task aborted by cancel")
   })
 })

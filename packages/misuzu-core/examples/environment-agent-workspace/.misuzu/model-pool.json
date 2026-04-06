@@ -1,0 +1,11 @@
+{
+  "version": "1.0.0",
+  "lastModified": "2026-04-06T12:58:48.444Z",
+  "items": [
+    {
+      "provider": "rightcode",
+      "modelId": "gpt-5.3-codex",
+      "maxConcurrency": 1
+    }
+  ]
+}

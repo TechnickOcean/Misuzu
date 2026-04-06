@@ -15,7 +15,6 @@ import {
   type SolverWorkspace,
 } from "misuzu-core"
 import type {
-  AgentMessagePart,
   AgentStateSnapshot,
   ChallengeSummaryView,
   PluginCatalogItem,
@@ -28,6 +27,7 @@ import type {
   WorkspaceRegistryEntry,
   WsServerMessage,
 } from "../../shared/protocol.ts"
+import { extractMessageParts, renderMessagePartsAsText } from "./agent-message-parts.ts"
 import { EventBus } from "./event-bus.ts"
 import { WorkspaceRegistryStore } from "./workspace-registry-store.ts"
 
@@ -43,7 +43,6 @@ interface RuntimeWorkspaceSession {
   environmentAgent?: EnvironmentAgent
   environmentUnsubscribe?: () => void
   solverUnsubscribers: Map<string, () => void>
-  autoQueuedChallenges: Set<number>
 }
 
 interface SolverWorkspaceSession {
@@ -173,12 +172,14 @@ export class WorkspaceManager {
   async setRuntimeDispatch(workspaceId: string, paused: boolean, autoEnqueue: boolean) {
     const session = await this.requireRuntimeSession(workspaceId)
     if (paused) {
+      session.workspace.setAutoDispatchManaged(false)
       session.workspace.pauseTaskDispatch()
     } else {
-      if (autoEnqueue || session.autoOrchestrate) {
-        this.enqueueManagedChallenges(session)
-      }
+      session.workspace.setAutoDispatchManaged(session.autoOrchestrate || autoEnqueue)
       session.workspace.resumeTaskDispatch()
+      if (session.workspace.isAutoDispatchManaged()) {
+        session.workspace.scheduleAutoDispatchRebalance(true)
+      }
     }
 
     this.publishRuntimeSnapshot(session)
@@ -202,8 +203,8 @@ export class WorkspaceManager {
     await session.workspace.syncChallengesOnce()
     this.bindRuntimeSolverAgents(session)
 
-    if (session.autoOrchestrate) {
-      this.enqueueManagedChallenges(session)
+    if (session.workspace.isAutoDispatchManaged()) {
+      session.workspace.scheduleAutoDispatchRebalance(true)
     }
 
     this.publishRuntimeSnapshot(session)
@@ -366,15 +367,23 @@ export class WorkspaceManager {
       runtimeInitialized,
       autoOrchestrate: Boolean(entry.runtime?.autoOrchestrate),
       solverUnsubscribers: new Map(),
-      autoQueuedChallenges: new Set(),
     }
 
     this.runtimeSessions.set(entry.id, session)
+    session.workspace.setRuntimeStateChangeListener(() => {
+      const activeSession = this.runtimeSessions.get(entry.id)
+      if (!activeSession) {
+        return
+      }
+
+      this.publishRuntimeSnapshot(activeSession)
+    })
     this.bindRuntimeSolverAgents(session)
-    this.seedAutoQueuedChallenges(session)
+    session.workspace.setAutoDispatchManaged(false)
 
     if (session.autoOrchestrate && session.runtimeInitialized) {
-      this.enqueueManagedChallenges(session)
+      session.workspace.setAutoDispatchManaged(true)
+      session.workspace.scheduleAutoDispatchRebalance(true)
     }
 
     return session
@@ -435,6 +444,7 @@ export class WorkspaceManager {
 
     await session.workspace.initializeRuntime(runtimeOptions)
     session.workspace.pauseTaskDispatch()
+    session.workspace.setAutoDispatchManaged(false)
     session.runtimeInitialized = true
     session.entry = {
       ...session.entry,
@@ -445,10 +455,10 @@ export class WorkspaceManager {
       },
     }
     this.bindRuntimeSolverAgents(session)
-    this.seedAutoQueuedChallenges(session)
 
     if (session.autoOrchestrate) {
-      this.enqueueManagedChallenges(session)
+      session.workspace.setAutoDispatchManaged(true)
+      session.workspace.scheduleAutoDispatchRebalance(true)
     }
   }
 
@@ -611,6 +621,7 @@ export class WorkspaceManager {
         solverId: challenge.solverId,
         title: challenge.title,
         category: challenge.category,
+        requiresContainer: challenge.requiresContainer,
         score: challenge.score,
         solvedCount: challenge.solvedCount,
         status,
@@ -696,87 +707,6 @@ export class WorkspaceManager {
         }
       }),
     }
-  }
-
-  private enqueueManagedChallenges(session: RuntimeWorkspaceSession) {
-    const challengeIds = session.workspace
-      .listManagedChallenges()
-      .map((challenge) => challenge.challengeId)
-      .sort((left, right) => left - right)
-
-    for (const challengeId of challengeIds) {
-      this.enqueueAutoChallenge(session, challengeId)
-    }
-  }
-
-  private seedAutoQueuedChallenges(session: RuntimeWorkspaceSession) {
-    session.autoQueuedChallenges.clear()
-
-    for (const task of session.workspace.listPendingSchedulerTasks()) {
-      const challengeId = resolveChallengeIdFromPayload(task.payload)
-      if (challengeId === undefined) {
-        continue
-      }
-
-      session.autoQueuedChallenges.add(challengeId)
-    }
-
-    for (const inflight of session.workspace.listInflightSchedulerTasks()) {
-      const challengeId = resolveChallengeIdFromPayload(inflight.task.payload)
-      if (challengeId === undefined) {
-        continue
-      }
-
-      session.autoQueuedChallenges.add(challengeId)
-    }
-  }
-
-  private enqueueAutoChallenge(session: RuntimeWorkspaceSession, challengeId: number) {
-    if (session.autoQueuedChallenges.has(challengeId)) {
-      return
-    }
-
-    if (!this.isAutoQueueEligible(session, challengeId)) {
-      return
-    }
-
-    session.autoQueuedChallenges.add(challengeId)
-
-    void session.workspace
-      .enqueueTask({ challenge: challengeId })
-      .then(() => {
-        this.handleAutoChallengeTaskSettled(session, challengeId)
-      })
-      .catch(() => {
-        this.handleAutoChallengeTaskSettled(session, challengeId)
-      })
-  }
-
-  private handleAutoChallengeTaskSettled(session: RuntimeWorkspaceSession, challengeId: number) {
-    session.autoQueuedChallenges.delete(challengeId)
-
-    if (!this.runtimeSessions.has(session.id) || !session.autoOrchestrate) {
-      return
-    }
-
-    if (session.workspace.isTaskDispatchPaused()) {
-      return
-    }
-
-    this.enqueueManagedChallenges(session)
-    this.publishRuntimeSnapshot(session)
-  }
-
-  private isAutoQueueEligible(session: RuntimeWorkspaceSession, challengeId: number) {
-    if (!session.workspace.getChallengeSolver(challengeId)) {
-      return false
-    }
-
-    const progress = session.workspace
-      .listSolverProgressStates()
-      .find((state) => state.challengeId === challengeId)
-
-    return progress?.status !== "solved" && progress?.status !== "blocked"
   }
 
   private async applyModelPool(
@@ -903,122 +833,6 @@ function resolveChallengeIdFromPayload(payload: unknown) {
 
   const challengeId = (payload as { challenge?: unknown }).challenge
   return typeof challengeId === "number" && Number.isFinite(challengeId) ? challengeId : undefined
-}
-
-function extractMessageParts(content: unknown): AgentMessagePart[] {
-  if (typeof content === "string") {
-    return [{ kind: "text", text: content }]
-  }
-
-  if (!Array.isArray(content)) {
-    return []
-  }
-
-  const parts: AgentMessagePart[] = []
-  for (const item of content) {
-    const normalized = normalizeMessagePart(item)
-    if (normalized) {
-      parts.push(normalized)
-    }
-  }
-
-  return parts
-}
-
-function normalizeMessagePart(part: unknown): AgentMessagePart | undefined {
-  if (!part || typeof part !== "object") {
-    return undefined
-  }
-
-  const typedPart = part as Record<string, unknown>
-  const partType = typeof typedPart.type === "string" ? typedPart.type : undefined
-  if (partType === "text" && typeof typedPart.text === "string") {
-    return {
-      kind: "text",
-      text: typedPart.text,
-    }
-  }
-
-  if (typeof typedPart.text === "string" && typedPart.text.trim().length > 0) {
-    return {
-      kind: "text",
-      text: typedPart.text,
-    }
-  }
-
-  const name = readFirstStringField(typedPart, ["toolName", "name", "tool", "label"])
-  const args = readFirstDefinedField(typedPart, ["args", "input", "arguments"])
-  const result = readFirstDefinedField(typedPart, ["result", "output", "details", "content"])
-
-  if (partType?.includes("tool") || name || args !== undefined || result !== undefined) {
-    return {
-      kind: "tool",
-      toolType: partType ?? "tool",
-      name,
-      argsText: args === undefined ? undefined : serializeForMessageText(args),
-      resultText: result === undefined ? undefined : serializeForMessageText(result),
-    }
-  }
-
-  return undefined
-}
-
-function renderMessagePartsAsText(parts: AgentMessagePart[]) {
-  return parts
-    .map((part) => {
-      if (part.kind === "text") {
-        return part.text
-      }
-
-      const lines: string[] = []
-      lines.push(part.name ? `[${part.toolType}] ${part.name}` : `[${part.toolType}]`)
-
-      if (part.argsText !== undefined) {
-        lines.push(`args: ${part.argsText}`)
-      }
-
-      if (part.resultText !== undefined) {
-        lines.push(`result: ${part.resultText}`)
-      }
-
-      return lines.join("\n")
-    })
-    .filter((text) => text.trim().length > 0)
-    .join("\n\n")
-}
-
-function readFirstStringField(part: Record<string, unknown>, keys: string[]) {
-  for (const key of keys) {
-    const value = part[key]
-    if (typeof value === "string" && value.trim().length > 0) {
-      return value
-    }
-  }
-
-  return undefined
-}
-
-function readFirstDefinedField(part: Record<string, unknown>, keys: string[]) {
-  for (const key of keys) {
-    const value = part[key]
-    if (value !== undefined) {
-      return value
-    }
-  }
-
-  return undefined
-}
-
-function serializeForMessageText(value: unknown) {
-  if (typeof value === "string") {
-    return value
-  }
-
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
-  }
 }
 
 async function applyPromptMode(

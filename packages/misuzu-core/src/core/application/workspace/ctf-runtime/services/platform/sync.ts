@@ -1,7 +1,7 @@
-import type { ContestUpdate } from "../../../../../../plugins/index.ts"
-import type { Logger } from "../../../../infrastructure/logging/types.ts"
-import { SolverHub } from "./solver-hub.ts"
-import { isModelPoolError } from "./model-pool.ts"
+import type { ContestUpdate } from "../../../../../../../plugins/index.ts"
+import type { Logger } from "../../../../../infrastructure/logging/types.ts"
+import { SolverHub } from "./hub.ts"
+import { isModelPoolError } from "../model/pool.ts"
 
 const HINT_LIKE_KEYWORDS = [
   "hint",

@@ -1,4 +1,4 @@
-import type { PersistedCTFRuntimeQueueState, PersistedCTFRuntimeQueueTask } from "../state.ts"
+import type { PersistedCTFRuntimeQueueState, PersistedCTFRuntimeQueueTask } from "../../state.ts"
 
 export interface SolverTask {
   taskId: string
@@ -15,6 +15,8 @@ export interface SolverExecutionState {
   active: boolean
   activeTaskId?: string
 }
+
+export type SolverTaskCancelResult = "pending" | "inflight"
 
 export interface SolverRunner {
   solverId: string
@@ -173,6 +175,29 @@ export class QueueService {
         payload: task.payload,
       },
     }))
+  }
+
+  cancelTask(taskId: string): SolverTaskCancelResult | undefined {
+    const pendingTaskIndex = this.pendingTaskQueue.findIndex(
+      (entry) => entry.task.taskId === taskId,
+    )
+    if (pendingTaskIndex >= 0) {
+      const [removedTask] = this.pendingTaskQueue.splice(pendingTaskIndex, 1)
+      removedTask?.reject(new Error(`Task cancelled: ${taskId}`))
+      this.notifyStateChanged()
+      return "pending"
+    }
+
+    for (const [solverId, task] of this.inflightTasks.entries()) {
+      if (task.taskId !== taskId) {
+        continue
+      }
+
+      this.solverRegistry.get(solverId)?.abortActiveTask?.()
+      return "inflight"
+    }
+
+    return undefined
   }
 
   private nextTaskId() {
