@@ -2,13 +2,25 @@ import "dotenv/config"
 import { createInterface } from "node:readline"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import type { ProxyProviderOptions } from "@/index.ts"
 import { createSolverWorkspace } from "@/core/application/workspace/index.ts"
 
 const defaultWorkspaceRootDir = dirname(fileURLToPath(import.meta.url))
 const workspaceRootDir = resolve(process.argv[2] ?? defaultWorkspaceRootDir)
 const workspace = await createSolverWorkspace({ rootDir: workspaceRootDir })
 workspace.bootstrap()
-const model = workspace.providers.getModel("rightcode", "gpt-5.2")
+
+const model = resolveDefaultModel(workspace.loadProxyProviderOptions(), (provider, modelId) => {
+  return workspace.getModel(provider, modelId)
+})
+
+if (!model) {
+  console.error(
+    "No model found from .misuzu/providers.json. Configure at least one provider/model mapping.",
+  )
+  process.exit(1)
+}
+
 let mainAgent = workspace.mainAgent
 
 if (!mainAgent)
@@ -42,14 +54,9 @@ mainAgent.subscribe((event) => {
   }
 })
 
-if (!model) {
-  console.log("no models available!")
-  process.exit(1)
-}
-
 console.log(`Workspace: ${workspace.rootDir}`)
 console.log(`Model: ${model.provider}/${model.id}`)
-console.log("Type your prompt. Use /quit to exit.\n")
+console.log("Type your prompt. Use /compact to compact context, /quit to exit.\n")
 
 const readline = createInterface({ input: process.stdin, output: process.stdout, prompt: "> " })
 readline.prompt()
@@ -85,7 +92,41 @@ readline.on("line", async (line) => {
   readline.prompt()
 })
 
-readline.on("close", () => {
+readline.on("close", async () => {
+  await workspace.shutdown()
   console.log("Bye")
   process.exit(0)
 })
+
+function resolveDefaultModel<T>(
+  optionsList: ProxyProviderOptions[],
+  getModel: (provider: string, modelId: string) => T | undefined,
+) {
+  for (const options of optionsList) {
+    const modelIds = extractCandidateModelIds(options)
+    for (const modelId of modelIds) {
+      const model = getModel(options.provider, modelId)
+      if (model) {
+        return model
+      }
+    }
+  }
+
+  return undefined
+}
+
+function extractCandidateModelIds(options: ProxyProviderOptions) {
+  if (options.modelMappings && options.modelMappings.length > 0) {
+    return options.modelMappings
+      .map((mapping) => {
+        if (typeof mapping === "string") {
+          return mapping
+        }
+
+        return mapping.targetModelId ?? mapping.sourceModelId
+      })
+      .filter((modelId): modelId is string => Boolean(modelId))
+  }
+
+  return options.modelIds ?? []
+}

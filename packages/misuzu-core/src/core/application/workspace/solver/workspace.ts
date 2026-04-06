@@ -3,7 +3,7 @@ import { loadAgentSkills } from "../../../../agents/features/skill.ts"
 import { SolverAgent, type SolverAgentOptions } from "../../../../agents/solver.ts"
 import type { Container } from "../../../infrastructure/di/container.ts"
 import { providerRegistryToken } from "../../../infrastructure/di/tokens.ts"
-import { ProviderRegistry } from "../../providers/index.ts"
+import { ProviderRegistry } from "../../providers/registry.ts"
 import { resolveWorkspacePaths } from "../shared/paths.ts"
 import { ProxyProviderBootstrap } from "../shared/proxy-provider-bootstrap.ts"
 import {
@@ -16,6 +16,7 @@ const workspaceRegistry = new Map<string, SolverWorkspace>()
 
 export interface SolverWorkspaceOptions extends WorkspaceOptions {
   configRootDir?: string
+  providerBootstrap?: ProxyProviderBootstrap
 }
 
 export class SolverWorkspace extends BaseWorkspace {
@@ -32,17 +33,19 @@ export class SolverWorkspace extends BaseWorkspace {
     const configPaths = resolveWorkspacePaths(options.configRootDir ?? rootDir)
     this.configRootDir = configPaths.rootDir
 
-    this.providerBootstrap = new ProxyProviderBootstrap({
-      logger: this.logger.child({ component: "ProxyProviderBootstrap" }),
-      providers: this.providers,
-      providerConfigPath: configPaths.providerConfigPath,
-      onProvidersLoaded: () => {
-        const persistence = this.persistence
-        if (persistence) {
-          void this.safePersist(() => persistence.recordChange({ type: "providers-loaded" }))
-        }
-      },
-    })
+    this.providerBootstrap =
+      options.providerBootstrap ??
+      new ProxyProviderBootstrap({
+        logger: this.logger.child({ component: "ProxyProviderBootstrap" }),
+        providers: this.providers,
+        providerConfigPath: configPaths.providerConfigPath,
+        onProvidersLoaded: () => {
+          const persistence = this.persistence
+          if (persistence) {
+            void this.safePersist(() => persistence.recordChange({ type: "providers-loaded" }))
+          }
+        },
+      })
   }
 
   async createMainAgent(options: SolverAgentOptions = {}) {

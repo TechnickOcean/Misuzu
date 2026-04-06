@@ -1,6 +1,6 @@
 import { createToken } from "./container.ts"
 import type { Logger } from "../logging/types.ts"
-import type { ProviderRegistry } from "../../application/providers/index.ts"
+import type { ProviderRegistry } from "../../application/providers/registry.ts"
 import type { PersistenceStore } from "../../application/persistence/store.ts"
 
 export const loggerToken = createToken<Logger>("logger")

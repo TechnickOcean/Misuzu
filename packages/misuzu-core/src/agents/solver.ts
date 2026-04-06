@@ -12,12 +12,16 @@ const SOLVER_STANDALONE_PROMPT = [
   'You are a Solver agent of Agents system "Misuzu" for CTF challenges in an authorized environment.',
   "Focus on solving the assigned challenge, verifying your answer, and producing a concise writeup.",
   "This is defensive competition work, not real-world unauthorized activity.",
-  `Default challenge runtime image: ${CTF_SANDBOX_IMAGE}.`,
+  `A optional sandbox image is provided: ${CTF_SANDBOX_IMAGE}.`,
+  "Feel free to create a container on it whenever you need following tools.",
 ].join("\n")
 
 function renderSandboxToolCatalog() {
   const lines = CTF_SANDBOX_TOOLS.map((toolName) => `- ${toolName}`)
-  return [`Installed sandbox commands (${CTF_SANDBOX_TOOLS.length}):`, ...lines].join("\n")
+  return [
+    `Installed sandbox commands in ${CTF_SANDBOX_IMAGE} (${CTF_SANDBOX_TOOLS.length}):`,
+    ...lines,
+  ].join("\n")
 }
 
 function buildSolverPrompt(basePrompt: string | undefined) {

@@ -22,11 +22,21 @@ if (!model) {
   process.exit(1)
 }
 
+await workspace.setModelPoolItems([
+  {
+    provider: model.provider,
+    modelId: model.id,
+    maxConcurrency: 1,
+  },
+])
+
 const environmentAgent = workspace.createEnvironmentAgent({
   initialState: {
     model,
   },
 })
+
+const restoredMessageCount = environmentAgent.state.messages.length
 
 let streamedText = false
 
@@ -55,10 +65,11 @@ environmentAgent.subscribe((event) => {
 console.log(`Workspace: ${workspace.rootDir}`)
 console.log(`Environment base: ${environmentAgent.workspaceBaseDir}`)
 console.log(`Model: ${model.provider}/${model.id}`)
+console.log(`Restored message count: ${restoredMessageCount}`)
 console.log("Try: scaffold a plugin for a new platform named acme-ctf")
 console.log("Then: ensure plugins/catalog.json contains the new plugin entry")
 console.log("After creation, select pluginId from workspace creation plugin list")
-console.log("Use /compact to compact context, /quit to exit.\n")
+console.log("Use /compact to compact context, /state to inspect state, /quit to exit.\n")
 
 const readline = createInterface({ input: process.stdin, output: process.stdout, prompt: "> " })
 readline.prompt()
@@ -76,6 +87,26 @@ readline.on("line", async (line) => {
       .compact()
       .then(() => readline.prompt())
       .catch(() => {})
+    return
+  }
+
+  if (input === "/state") {
+    console.log(
+      JSON.stringify(
+        {
+          workspaceRootDir: workspace.rootDir,
+          workspaceBaseDir: environmentAgent.workspaceBaseDir,
+          messageCount: environmentAgent.state.messages.length,
+          thinkingLevel: environmentAgent.state.thinkingLevel,
+          model: environmentAgent.state.model
+            ? `${environmentAgent.state.model.provider}/${environmentAgent.state.model.id}`
+            : null,
+        },
+        null,
+        2,
+      ),
+    )
+    readline.prompt()
     return
   }
 

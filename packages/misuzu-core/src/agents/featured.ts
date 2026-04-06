@@ -5,13 +5,13 @@ import {
   type AgentEvent,
   type AgentState,
 } from "@mariozechner/pi-agent-core"
-import type { Model } from "@mariozechner/pi-ai"
+import { getEnvApiKey, type Model } from "@mariozechner/pi-ai"
 import { type Skill, buildSkillsCatalog } from "../agents/features/skill.ts"
 import { convertToLlm } from "./features/messages/index.ts"
 import { checkCompact, compact } from "./features/compaction.ts"
 import type { Logger } from "../core/infrastructure/logging/types.ts"
 import type { PersistenceStore } from "../core/application/persistence/store.ts"
-import type { ProviderRegistry } from "../core/application/providers/index.ts"
+import type { ProviderRegistry } from "../core/application/providers/registry.ts"
 import { createBaseTools } from "../tools/index.ts"
 import { textFromMessage } from "./features/utils.ts"
 
@@ -57,6 +57,12 @@ export class FeaturedAgent {
         if (proxyProviderApiKey !== undefined) {
           return proxyProviderApiKey
         }
+
+        const envApiKey = getEnvApiKey(provider)
+        if (envApiKey !== undefined) {
+          return envApiKey
+        }
+
         if (inheritedApiKeyResolver) {
           return inheritedApiKeyResolver(provider)
         }

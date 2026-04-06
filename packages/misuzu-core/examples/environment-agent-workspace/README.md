@@ -6,6 +6,8 @@ This example starts an `EnvironmentAgent` with built-in plugin workspace default
 
 - Create `CTFRuntimeWorkspace` and bootstrap provider config.
 - Create `EnvironmentAgent` through workspace factory (defaults to built-in `packages/misuzu-core/plugins`).
+- Persist and restore EnvironmentAgent state even when runtime plugin is not activated.
+- Configure workspace-scoped model pool before launching EnvironmentAgent.
 - Register plugin metadata in `plugins/catalog.json` so it appears in workspace plugin selection.
 - Interact with the agent in a CLI loop.
 
@@ -31,3 +33,9 @@ Then register it:
 
 Then continue with endpoint mapping and implementation based on the `plugin-authoring` skill.
 After that, go back to workspace creation page and select `acme-ctf` from plugin list.
+
+## CLI commands
+
+- `/compact` compact context
+- `/state` print current EnvironmentAgent state summary
+- `/quit` exit

@@ -1,3 +1,4 @@
+import type { AgentMessage, AgentState } from "@mariozechner/pi-agent-core"
 import type { AuthSession, PluginConfig } from "../../../../../plugins/index.ts"
 
 export const CTF_RUNTIME_STATE_VERSION = "1.0.0"
@@ -5,6 +6,14 @@ export const CTF_RUNTIME_STATE_VERSION = "1.0.0"
 export interface PersistedCTFRuntimeState {
   runtimeId: string
   payload: Record<string, unknown>
+}
+
+// Payload used when EnvironmentAgent is attached before runtime plugin activation.
+export interface PersistedEnvironmentAgentRuntimeState extends Record<string, unknown> {
+  modelId?: string
+  baseSystemPrompt?: string
+  thinkingLevel?: AgentState["thinkingLevel"]
+  messages: AgentMessage[]
 }
 
 export interface PersistedCTFRuntimeConfig {

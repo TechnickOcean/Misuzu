@@ -50,11 +50,11 @@ export function createFindTool(
       try {
         searchPathStat = await ops.stat(searchPath)
       } catch {
-        throw new Error(`Directory not found: ${params.path ?? "."}`)
+        throw new Error(`Directory not found: ${searchPath ?? "."}`)
       }
 
       if (!searchPathStat.isDirectory()) {
-        throw new Error(`Directory not found: ${params.path ?? "."}`)
+        throw new Error(`Directory not found: ${searchPath ?? "."}`)
       }
 
       const results = await ops.glob(params.pattern, searchPath, { limit })

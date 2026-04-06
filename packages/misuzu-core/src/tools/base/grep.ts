@@ -95,7 +95,7 @@ export function createGrepTool(cwd: string): AgentTool<typeof grepSchema> {
       try {
         entries = await collectSearchEntries(searchPath, params.glob)
       } catch {
-        throw new Error(`Path not found: ${params.path ?? "."}`)
+        throw new Error(`Path not found: ${searchPath ?? "."}`)
       }
 
       const outputLines: string[] = []

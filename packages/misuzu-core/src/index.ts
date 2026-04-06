@@ -14,7 +14,7 @@ export {
   ProviderRegistry,
   type ProxyProviderModelMapping,
   type ProxyProviderOptions,
-} from "./core/application/providers/index.ts"
+} from "./core/application/providers/registry.ts"
 export {
   BaseWorkspace,
   SolverWorkspace,

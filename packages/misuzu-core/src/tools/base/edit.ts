@@ -51,7 +51,7 @@ export function createEditTool(
       try {
         await ops.access(absolutePath)
       } catch {
-        throw new Error(`File not found: ${params.path}`)
+        throw new Error(`File not found: ${absolutePath}`)
       }
 
       return withFileMutationQueue(absolutePath, async () => {
@@ -62,12 +62,12 @@ export function createEditTool(
         const occurrences = content.split(params.oldText).length - 1
         if (occurrences === 0) {
           throw new Error(
-            `Could not find the exact text in ${params.path}. The text must match exactly.`,
+            `Could not find the exact text in ${absolutePath}. The text must match exactly.`,
           )
         }
         if (occurrences > 1) {
           throw new Error(
-            `Found ${occurrences} occurrences of the text in ${params.path}. The text must be unique.`,
+            `Found ${occurrences} occurrences of the text in ${absolutePath}. The text must be unique.`,
           )
         }
 
@@ -90,7 +90,7 @@ export function createEditTool(
         for (const line of newLines) diffLines.push(`+ ${line}`)
 
         return {
-          content: [{ type: "text", text: `File edited: ${params.path}` }],
+          content: [{ type: "text", text: `File edited: ${absolutePath}` }],
           details: { diff: diffLines.join("\n"), firstChangedLine } satisfies EditToolDetails,
         }
       })

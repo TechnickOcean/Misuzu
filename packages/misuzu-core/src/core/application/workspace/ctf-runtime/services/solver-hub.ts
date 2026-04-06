@@ -1,14 +1,11 @@
-import { pathToFileURL } from "node:url"
+import { mkdir, writeFile } from "node:fs/promises"
+import { join } from "node:path"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { type SolverAgent, type SolverAgentOptions } from "../../../../../agents/solver.ts"
-import {
-  findBuiltinPlugin,
-  loadBuiltinPluginCatalog,
-  resolveBuiltinPluginEntryPath,
-} from "../../../../../plugins/catalog.ts"
 import { createBaseTools } from "../../../../../tools/index.ts"
 import type { Logger } from "../../../../infrastructure/logging/types.ts"
 import {
+  PlatformAuthError,
   transformPluginToTools,
   type CTFPlatformPlugin,
   type ChallengeDetail,
@@ -21,6 +18,8 @@ import { type SolverTask, type SolverTaskResult, QueueService } from "./queue.ts
 import { SolverWorkspaceService } from "./solver-workspaces.ts"
 import { PlatformAuthManager } from "./auth-manager.ts"
 import { PlatformContestManager } from "./contest-manager.ts"
+import { RuntimePluginLoader } from "./plugin-loader.ts"
+import { WorkspaceModelPool, isModelPoolError } from "./model-pool.ts"
 import type {
   PersistedCTFRuntimePlatformState,
   PersistedCTFRuntimeSolverHubState,
@@ -33,21 +32,33 @@ export interface ChallengeSolverBinding {
   solver: SolverAgent
 }
 
+export interface ChallengeSolverActivationState {
+  challengeId: number
+  solverId: string
+  status: "inactive" | "active"
+  activeTaskId?: string
+  modelId?: string
+}
+
 export interface SolverHubDeps {
   logger: Logger
   queue: QueueService
   solverWorkspaces: SolverWorkspaceService
+  modelPool: WorkspaceModelPool
 }
 
 export class SolverHub {
   private platformPlugin?: CTFPlatformPlugin
   private platformPluginId?: string
+  private platformBaseUrl?: string
   private platformNoticeCursor?: string
   private readonly challengeSolvers = new Map<number, ChallengeSolverBinding>()
 
   private readonly logger: Logger
   private readonly queue: QueueService
   private readonly solverWorkspaces: SolverWorkspaceService
+  private readonly modelPool: WorkspaceModelPool
+  private readonly pluginLoader = new RuntimePluginLoader()
   private readonly authManager: PlatformAuthManager
   private readonly contestManager: PlatformContestManager
   private onStateChanged: () => void = () => {}
@@ -56,6 +67,7 @@ export class SolverHub {
     this.logger = deps.logger
     this.queue = deps.queue
     this.solverWorkspaces = deps.solverWorkspaces
+    this.modelPool = deps.modelPool
     this.authManager = new PlatformAuthManager({
       onStateChanged: () => this.notifyStateChanged(),
     })
@@ -73,13 +85,16 @@ export class SolverHub {
       throw new Error("Platform runtime is already initialized")
     }
 
-    const plugin = options.plugin ?? (await this.resolvePluginOrThrow(options.pluginId))
-    const pluginId = options.pluginId ?? plugin.meta.id
+    const { plugin, pluginId } = await this.pluginLoader.resolve({
+      plugin: options.plugin,
+      pluginId: options.pluginId,
+    })
 
     await plugin.setup(options.pluginConfig)
 
     this.platformPlugin = plugin
     this.platformPluginId = pluginId
+    this.platformBaseUrl = options.pluginConfig.baseUrl
     this.authManager.initialize({
       plugin,
       authConfig: options.pluginConfig.auth,
@@ -101,6 +116,19 @@ export class SolverHub {
 
   getChallengeSolver(challengeId: number) {
     return this.challengeSolvers.get(challengeId)?.solver
+  }
+
+  getSolverActivationState(challengeId: number): ChallengeSolverActivationState | undefined {
+    const binding = this.challengeSolvers.get(challengeId)
+    if (!binding) {
+      return undefined
+    }
+
+    return this.buildActivationState(binding)
+  }
+
+  listSolverActivationStates(): ChallengeSolverActivationState[] {
+    return [...this.challengeSolvers.values()].map((binding) => this.buildActivationState(binding))
   }
 
   getChallengeBindings() {
@@ -220,10 +248,7 @@ export class SolverHub {
     })
     const solver = managedSolver.solver
 
-    const platformTools = transformPluginToTools(this.createSolverToolPlugin(), {
-      namespace: this.getPluginId(),
-    }) as unknown as AgentTool<any>[]
-    solver.setTools([...createBaseTools(managedSolver.rootDir), ...platformTools])
+    solver.setTools([...createBaseTools(managedSolver.rootDir), ...this.createPlatformTools()])
 
     const binding: ChallengeSolverBinding = {
       challenge,
@@ -285,17 +310,28 @@ export class SolverHub {
   }
 
   private async solveWithBinding(binding: ChallengeSolverBinding, task: SolverTask) {
-    const payloadText =
-      typeof task.payload === "string" ? task.payload : JSON.stringify(task.payload, null, 2)
+    const preferredModel = binding.solver.state.model
+      ? {
+          provider: binding.solver.state.model.provider,
+          modelId: binding.solver.state.model.id,
+        }
+      : undefined
+    const modelLease = this.acquireModelLeaseForSolver(preferredModel)
 
-    await binding.solver.prompt(
-      [
-        `You are assigned to challenge [${binding.challenge.id}] ${binding.challenge.title}.`,
-        `Category: ${binding.challenge.category}, score: ${binding.challenge.score}, solved: ${binding.challenge.solvedCount}.`,
-        "Use platform tools carefully and avoid unnecessary requests.",
-        `Task payload:\n${payloadText}`,
-      ].join("\n"),
-    )
+    try {
+      const currentModel = binding.solver.state.model
+      if (
+        !currentModel ||
+        currentModel.provider !== modelLease.model.provider ||
+        currentModel.id !== modelLease.model.id
+      ) {
+        binding.solver.setModel(modelLease.model)
+      }
+
+      await binding.solver.prompt(buildSolverTaskPrompt(binding.challenge, task.payload))
+    } finally {
+      modelLease.release()
+    }
 
     const output: SolverTaskResult["output"] = {
       challengeId: binding.challenge.id,
@@ -306,23 +342,142 @@ export class SolverHub {
     return output
   }
 
+  private acquireModelLeaseForSolver(
+    preferredModel: { provider: string; modelId: string } | undefined,
+  ) {
+    if (!preferredModel) {
+      return this.modelPool.acquire()
+    }
+
+    try {
+      return this.modelPool.acquire(preferredModel)
+    } catch (error) {
+      if (
+        !isModelPoolError(error) ||
+        (error.code !== "MODEL_NOT_IN_POOL" && error.code !== "MODEL_NOT_AVAILABLE")
+      ) {
+        throw error
+      }
+
+      // Allow restored/unactivated solvers to migrate onto current pool configuration.
+      return this.modelPool.acquire()
+    }
+  }
+
+  private createPlatformTools() {
+    const pluginId = this.getPluginId()
+    const platformTools = transformPluginToTools(this.createSolverToolPlugin(), {
+      namespace: pluginId,
+    })
+
+    return platformTools as unknown as AgentTool<any>[]
+  }
+
   private createSolverToolPlugin(): SolverToolPlugin {
+    const plugin = this.requirePlugin()
+
     return {
       meta: {
         id: this.getPluginId(),
-        name: this.requirePlugin().meta.name,
+        name: plugin.meta.name,
       },
       listChallenges: async () => this.listChallenges(),
       getChallenge: async (challengeId: number) => this.getChallenge(challengeId),
       submitFlagRaw: async (challengeId: number, flag: string) =>
         this.submitFlag(challengeId, flag),
-      openContainer: this.requirePlugin().openContainer
+      downloadAttachment: async (challengeId: number, attachmentIndex: number, fileName?: string) =>
+        this.downloadAttachmentForSolver(challengeId, attachmentIndex, fileName),
+      openContainer: plugin.openContainer
         ? async (challengeId: number) => this.openContainer(challengeId)
         : undefined,
-      destroyContainer: this.requirePlugin().destroyContainer
+      destroyContainer: plugin.destroyContainer
         ? async (challengeId: number) => this.destroyContainer(challengeId)
         : undefined,
     }
+  }
+
+  private buildActivationState(binding: ChallengeSolverBinding): ChallengeSolverActivationState {
+    const executionState = this.queue.getSolverExecutionState(binding.solverId)
+    const model = binding.solver.state.model
+
+    return {
+      challengeId: binding.challenge.id,
+      solverId: binding.solverId,
+      status: executionState.active ? "active" : "inactive",
+      activeTaskId: executionState.activeTaskId,
+      modelId: model ? `${model.provider}/${model.id}` : undefined,
+    }
+  }
+
+  private async downloadAttachmentForSolver(
+    challengeId: number,
+    attachmentIndex: number,
+    fileName?: string,
+  ) {
+    const binding = this.challengeSolvers.get(challengeId)
+    if (!binding) {
+      throw new Error(`Challenge solver is not managed: ${String(challengeId)}`)
+    }
+
+    const detail = binding.detail ?? (await this.getChallenge(challengeId))
+    binding.detail = detail
+
+    const attachment = detail.attachments[attachmentIndex]
+    if (!attachment) {
+      throw new Error(
+        `Attachment index out of range for challenge ${String(challengeId)}: ${String(attachmentIndex)}`,
+      )
+    }
+
+    const response = await this.withRuntimeContext(async (context) => {
+      const headers = new Headers()
+      if (context.session.cookie) {
+        headers.set("cookie", context.session.cookie)
+      }
+      if (context.session.bearerToken) {
+        headers.set("authorization", `Bearer ${context.session.bearerToken}`)
+      }
+
+      const resolvedUrl = resolveAttachmentUrl(attachment.url, this.platformBaseUrl)
+      const result = await fetch(resolvedUrl, { headers })
+      if (result.status === 401 || result.status === 403) {
+        throw new PlatformAuthError(
+          `Attachment download requires re-authentication (${String(result.status)})`,
+        )
+      }
+
+      if (!result.ok) {
+        throw new Error(
+          `Attachment download failed (${String(result.status)}) for challenge ${String(challengeId)}`,
+        )
+      }
+
+      return result
+    })
+
+    const attachmentDir = await this.ensureSolverAttachmentDir(binding.solverId, challengeId)
+    const outputName = sanitizeAttachmentFileName(fileName ?? attachment.name, attachmentIndex)
+    const outputPath = join(attachmentDir, outputName)
+    const content = Buffer.from(await response.arrayBuffer())
+    await writeFile(outputPath, content)
+
+    return {
+      challengeId,
+      solverId: binding.solverId,
+      attachmentIndex,
+      attachmentName: outputName,
+      sourceUrl: attachment.url,
+      filePath: outputPath,
+      sizeBytes: content.byteLength,
+      contentType: response.headers.get("content-type") ?? undefined,
+    }
+  }
+
+  private async ensureSolverAttachmentDir(solverId: string, challengeId: number) {
+    const workspace = await this.solverWorkspaces.getOrCreateWorkspace(solverId)
+    const attachmentDir = join(workspace.rootDir, "attachments", String(challengeId))
+    await mkdir(attachmentDir, { recursive: true })
+    return attachmentDir
   }
 
   private requirePlugin() {
@@ -350,77 +505,6 @@ export class SolverHub {
 
   private async ensureRuntimeContext(): Promise<PlatformRequestContext> {
     return this.withRuntimeContext(async (context) => context)
-  }
-
-  private async resolvePluginOrThrow(pluginId: string | undefined) {
-    if (!pluginId) {
-      throw new Error(
-        "Missing pluginId in runtime config. Select a plugin from built-in plugin catalog.",
-      )
-    }
-
-    const pluginEntry = findBuiltinPlugin(pluginId)
-    if (!pluginEntry) {
-      const availableIds = loadBuiltinPluginCatalog().map((entry) => entry.id)
-      throw new Error(
-        `Required plugin is missing from catalog: ${pluginId}. Available plugins: ${availableIds.join(", ") || "none"}`,
-      )
-    }
-
-    const plugin = await this.loadPluginFromPath(resolveBuiltinPluginEntryPath(pluginEntry))
-
-    if (plugin.meta.id !== pluginId) {
-      throw new Error(`Platform plugin id mismatch: expected ${pluginId}, actual ${plugin.meta.id}`)
-    }
-
-    return plugin
-  }
-
-  private async loadPluginFromPath(modulePath: string) {
-    const moduleUrl = pathToFileURL(modulePath).href
-    const pluginModule = (await import(moduleUrl)) as Record<string, unknown>
-
-    const createPlugin = this.resolvePluginFactory(pluginModule)
-    const plugin = createPlugin()
-    const candidate = plugin as Partial<CTFPlatformPlugin> | null
-
-    if (!candidate || typeof candidate !== "object" || typeof candidate.setup !== "function") {
-      throw new Error(
-        `Invalid platform plugin module. Expected a plugin factory export from ${modulePath}.`,
-      )
-    }
-
-    return candidate as CTFPlatformPlugin
-  }
-
-  private resolvePluginFactory(pluginModule: Record<string, unknown>) {
-    const namedCreatePlugin = pluginModule.createPlugin
-    if (typeof namedCreatePlugin === "function") {
-      return namedCreatePlugin as () => unknown
-    }
-
-    for (const [name, value] of Object.entries(pluginModule)) {
-      if (name.startsWith("create") && name.endsWith("Plugin") && typeof value === "function") {
-        return value as () => unknown
-      }
-    }
-
-    const defaultExport = pluginModule.default
-    if (typeof defaultExport === "function") {
-      return () => {
-        try {
-          return new (defaultExport as new () => unknown)()
-        } catch {
-          return (defaultExport as () => unknown)()
-        }
-      }
-    }
-
-    if (defaultExport && typeof defaultExport === "object") {
-      return () => defaultExport
-    }
-
-    throw new Error("Plugin module has no supported factory export")
   }
 
   private notifyStateChanged() {
@@ -452,5 +536,45 @@ function buildChallengeSolverPrompt(
     hints,
     "Attachments:",
     attachments,
+    "Use platform download_attachment tool for authenticated attachment downloads.",
+  ].join("\n")
+}
+
+function resolveAttachmentUrl(attachmentUrl: string, platformBaseUrl: string | undefined) {
+  try {
+    return new URL(attachmentUrl).toString()
+  } catch {
+    if (!platformBaseUrl) {
+      throw new Error(`Cannot resolve relative attachment URL without base URL: ${attachmentUrl}`)
+    }
+
+    const base = platformBaseUrl.endsWith("/") ? platformBaseUrl : `${platformBaseUrl}/`
+    return new URL(attachmentUrl, base).toString()
+  }
+}
+
+function sanitizeAttachmentFileName(name: string, attachmentIndex: number) {
+  const withoutReservedChars = name.replace(/[<>:"/\\|?*]/g, "_")
+  const withoutControlChars = withoutReservedChars
+    .split("")
+    .map((char) => {
+      const code = char.charCodeAt(0)
+      return code >= 0 && code <= 31 ? "_" : char
+    })
+    .join("")
+
+  const safe = withoutControlChars.replace(/\s+/g, " ").trim().replace(/^\.+$/, "")
+
+  return safe.length > 0 ? safe : `attachment-${String(attachmentIndex)}`
+}
+
+function buildSolverTaskPrompt(challenge: ChallengeSummary, payload: unknown) {
+  const payloadText = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2)
+
+  return [
+    `You are assigned to challenge [${challenge.id}] ${challenge.title}.`,
+    `Category: ${challenge.category}, score: ${challenge.score}, solved: ${challenge.solvedCount}.`,
+    "Use platform tools carefully and avoid unnecessary requests.",
+    `Task payload:\n${payloadText}`,
   ].join("\n")
 }

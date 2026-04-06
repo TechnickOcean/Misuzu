@@ -1,6 +1,7 @@
 import type { ContestUpdate } from "../../../../../../plugins/index.ts"
 import type { Logger } from "../../../../infrastructure/logging/types.ts"
 import { SolverHub } from "./solver-hub.ts"
+import { isModelPoolError } from "./model-pool.ts"
 
 const HINT_LIKE_KEYWORDS = [
   "hint",
@@ -45,7 +46,21 @@ export class SyncService {
 
       const existing = this.solverHub.getChallengeBinding(challenge.id)
       if (!existing) {
-        await this.solverHub.ensureChallengeSolver(challenge)
+        try {
+          await this.solverHub.ensureChallengeSolver(challenge)
+        } catch (error) {
+          if (!isModelPoolError(error)) {
+            throw error
+          }
+
+          this.logger.warn(
+            "Skip challenge solver creation because model pool cannot allocate model",
+            {
+              challengeId: challenge.id,
+              reason: error.code,
+            },
+          )
+        }
         continue
       }
 
@@ -64,6 +79,7 @@ export class SyncService {
   async syncNoticesOnce() {
     const result = await this.solverHub.pollUpdates(this.solverHub.getNoticeCursor())
     this.solverHub.setNoticeCursor(result.cursor)
+    const indexedBindings = indexChallengeBindings(this.solverHub.getChallengeBindings())
 
     for (const update of result.updates) {
       if (!isHintLikeUpdate(update)) {
@@ -71,19 +87,14 @@ export class SyncService {
       }
 
       const normalizedMessage = normalizeForKeywordMatch(update.message)
-      for (const binding of this.solverHub.getChallengeBindings()) {
-        const normalizedTitle = normalizeForKeywordMatch(binding.challenge.title)
-        if (normalizedTitle.length === 0) {
+      for (const indexedBinding of indexedBindings) {
+        if (!normalizedMessage.includes(indexedBinding.normalizedTitle)) {
           continue
         }
 
-        if (!normalizedMessage.includes(normalizedTitle)) {
-          continue
-        }
-
-        binding.solver.steer(
+        indexedBinding.binding.solver.steer(
           [
-            `Potential hint/update detected for challenge [${binding.challenge.id}] ${binding.challenge.title}.`,
+            `Potential hint/update detected for challenge [${indexedBinding.binding.challenge.id}] ${indexedBinding.binding.challenge.title}.`,
             `Update type: ${update.type}`,
             `Update message: ${update.message}`,
             "Please validate if this affects your current solving strategy.",
@@ -104,4 +115,13 @@ function normalizeForKeywordMatch(input: string) {
     .toLowerCase()
     .replace(/\s+/g, "")
     .replace(/[^a-z0-9\u4e00-\u9fa5]/g, "")
+}
+
+function indexChallengeBindings(bindings: ReturnType<SolverHub["getChallengeBindings"]>) {
+  return bindings
+    .map((binding) => ({
+      binding,
+      normalizedTitle: normalizeForKeywordMatch(binding.challenge.title),
+    }))
+    .filter((entry) => entry.normalizedTitle.length > 0)
 }

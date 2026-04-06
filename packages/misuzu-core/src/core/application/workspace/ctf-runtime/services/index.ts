@@ -5,11 +5,25 @@ export {
   type RuntimeCronOptions,
   type RuntimeInitOptions,
 } from "./orchestrator.ts"
-export { SolverHub, type ChallengeSolverBinding } from "./solver-hub.ts"
+export {
+  SolverHub,
+  type ChallengeSolverBinding,
+  type ChallengeSolverActivationState,
+} from "./solver-hub.ts"
 export { SolverWorkspaceService, type ManagedSolver } from "./solver-workspaces.ts"
 export { SyncService } from "./sync.ts"
 export { QueueService, type SolverRunner, type SolverTask, type SolverTaskResult } from "./queue.ts"
 export {
+  WorkspaceModelPool,
+  ModelPoolError,
+  type ModelPoolItem,
+  type ModelPoolStateSnapshot,
+  type ModelPoolCatalogProvider,
+  type ModelPoolCatalogModel,
+  isModelPoolError,
+} from "./model-pool.ts"
+export {
+  modelPoolToken,
   orchestratorToken,
   queueToken,
   solverHubToken,

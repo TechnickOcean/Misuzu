@@ -60,20 +60,6 @@ export class CTFRuntimePersistence {
     await this.saveToDisk(state)
   }
 
-  async saveRuntimeState(runtimeState: PersistedCTFRuntimeState) {
-    await this.saveState({
-      runtimeState,
-      runtime: this.state?.runtime,
-    })
-  }
-
-  async saveStructuredRuntimeState(runtime: PersistedCTFRuntimeSnapshot) {
-    await this.saveState({
-      runtime,
-      runtimeState: this.state?.runtimeState,
-    })
-  }
-
   async clear() {
     this.ensureInitialized()
     this.state = null
@@ -101,6 +87,7 @@ export class CTFRuntimePersistence {
     try {
       const raw = await fs.readFile(this.stateFilePath, "utf-8")
       const state = JSON.parse(raw) as PersistedCTFRuntimeWorkspaceState
+      // Keep loading older snapshots so operators can migrate state manually.
       if (state.version !== CTF_RUNTIME_STATE_VERSION) {
         this.logger.warn("State version mismatch", {
           expected: CTF_RUNTIME_STATE_VERSION,

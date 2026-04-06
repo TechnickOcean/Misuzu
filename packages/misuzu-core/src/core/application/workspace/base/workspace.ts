@@ -12,7 +12,7 @@ import { ConsoleLogSink } from "../../../infrastructure/logging/sinks/console-si
 import type { Logger } from "../../../infrastructure/logging/types.ts"
 import { JsonFilePersistenceAdapter } from "../../persistence/adapters/json.ts"
 import type { PersistenceStore } from "../../persistence/store.ts"
-import { ProviderRegistry } from "../../providers/index.ts"
+import { ProviderRegistry } from "../../providers/registry.ts"
 import { resolveWorkspacePaths } from "../shared/paths.ts"
 
 export interface WorkspaceOptions {

@@ -47,7 +47,7 @@ export function createReadTool(
       try {
         await ops.access(absolutePath)
       } catch {
-        throw new Error(`File not found: ${params.path}`)
+        throw new Error(`File not found: ${absolutePath}`)
       }
 
       const buffer = await ops.readFile(absolutePath)

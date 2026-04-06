@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join, normalize } from "node:path"
 import { afterEach, describe, expect, test } from "vite-plus/test"
 import type { PersistenceStore } from "../core/application/persistence/store.ts"
-import { ProviderRegistry } from "../core/application/providers/index.ts"
+import { ProviderRegistry } from "../core/application/providers/registry.ts"
 import type { Logger } from "../core/infrastructure/logging/types.ts"
 import {
   EnvironmentAgent,

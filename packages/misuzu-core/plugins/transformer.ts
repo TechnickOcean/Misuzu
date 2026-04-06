@@ -10,6 +10,11 @@ export interface SolverToolPlugin {
   listChallenges(): Promise<unknown>
   getChallenge(challengeId: number): Promise<unknown>
   submitFlagRaw(challengeId: number, flag: string): Promise<unknown>
+  downloadAttachment?(
+    challengeId: number,
+    attachmentIndex: number,
+    fileName?: string,
+  ): Promise<unknown>
   openContainer?(challengeId: number): Promise<unknown>
   destroyContainer?(challengeId: number): Promise<unknown>
 }
@@ -111,6 +116,26 @@ const submitFlagSchema = {
     },
   },
   required: ["challengeId", "flag"],
+  additionalProperties: false,
+} as const
+
+const downloadAttachmentSchema = {
+  type: "object",
+  properties: {
+    challengeId: {
+      type: "number",
+      description: "Challenge id",
+    },
+    attachmentIndex: {
+      type: "number",
+      description: "Zero-based attachment index from get_challenge response",
+    },
+    fileName: {
+      type: "string",
+      description: "Optional output file name override",
+    },
+  },
+  required: ["challengeId", "attachmentIndex"],
   additionalProperties: false,
 } as const
 
@@ -226,6 +251,31 @@ export function transformPluginToTools(
       SENSITIVE_MUTATION_RULE,
     ),
   )
+
+  if (plugin.downloadAttachment) {
+    tools.push(
+      withRateLimit(
+        {
+          name: `${prefix}download_attachment`,
+          label: `${prefix}download_attachment`,
+          description:
+            "Download challenge attachment with runtime authentication and save it to solver workspace.",
+          parameters: downloadAttachmentSchema,
+          async execute(_toolCallId, params) {
+            return createResult(
+              await plugin.downloadAttachment!(
+                params.challengeId as number,
+                params.attachmentIndex as number,
+                params.fileName as string | undefined,
+              ),
+            )
+          },
+        },
+        limiter,
+        GENERAL_QUERY_RULE,
+      ),
+    )
+  }
 
   if (plugin.openContainer) {
     tools.push(

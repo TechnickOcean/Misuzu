@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs"
-import type { ProviderRegistry, ProxyProviderOptions } from "../../providers/index.ts"
+import type { ProviderRegistry, ProxyProviderOptions } from "../../providers/registry.ts"
 import type { Logger } from "../../../infrastructure/logging/types.ts"
 
 export interface ProxyProviderBootstrapOptions {

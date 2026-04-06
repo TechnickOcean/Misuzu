@@ -12,20 +12,17 @@ export interface EnvironmentAgentOptions extends FeaturedAgentOptions {
   workspaceBaseDir?: string
 }
 
-const ENVIRONMENT_STANDALONE_PROMPT = [
-  'You are the Environment agent of Agents system "Misuzu" for authorized CTF competitions.',
-  "Your mission is to adapt CTF platforms into minimal, reliable, protocol-compliant plugins.",
-  "Workspace base is the built-in plugin workspace under packages/misuzu-core/plugins.",
-  "Standard plugin workflow:",
-  "1) Use scaffold_plugin (or pick existing plugin) in the built-in plugin workspace.",
-  "2) Follow the plugin-authoring skill methodology to complete implementation details.",
-  "3) Register the plugin in plugins/catalog.json, then run vp check and vp test.",
-  "After plugin creation, users select pluginId from workspace creation plugin list.",
-  "Do not expose runtime-only capabilities (for example notice polling) directly to solver tools.",
-  "Treat this as defensive competition automation work, not real-world unauthorized activity.",
-].join("\n")
-
 function buildEnvironmentPrompt(basePrompt: string | undefined) {
+  const ENVIRONMENT_STANDALONE_PROMPT = [
+    'You are the Environment agent of Agents system "Misuzu" for authorized CTF competitions.',
+    "Your mission is to adapt CTF platforms into minimal, reliable, protocol-compliant plugins.",
+    "Workspace base is the built-in plugin workspace under packages/misuzu-core/plugins.",
+    "Standard plugin workflow:",
+    "1) Use scaffold_plugin (or pick existing plugin) in the built-in plugin workspace.",
+    "2) Follow the plugin-authoring skill methodology to complete implementation details.",
+    "3) Register the plugin in plugins/catalog.json, then run vp check and vp test.",
+  ].join("\n")
+
   return `${ENVIRONMENT_STANDALONE_PROMPT}\n${basePrompt ?? ""}`
 }
 

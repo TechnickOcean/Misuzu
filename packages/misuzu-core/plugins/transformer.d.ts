@@ -9,6 +9,11 @@ export interface SolverToolPlugin {
   listChallenges(): Promise<unknown>
   getChallenge(challengeId: number): Promise<unknown>
   submitFlagRaw(challengeId: number, flag: string): Promise<unknown>
+  downloadAttachment?(
+    challengeId: number,
+    attachmentIndex: number,
+    fileName?: string,
+  ): Promise<unknown>
   openContainer?(challengeId: number): Promise<unknown>
   destroyContainer?(challengeId: number): Promise<unknown>
 }

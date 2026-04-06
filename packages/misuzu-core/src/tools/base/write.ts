@@ -41,7 +41,7 @@ export function createWriteTool(
       })
 
       return {
-        content: [{ type: "text" as const, text: `File written: ${params.path}` }],
+        content: [{ type: "text" as const, text: `File written: ${absolutePath}` }],
         details: undefined,
       }
     },

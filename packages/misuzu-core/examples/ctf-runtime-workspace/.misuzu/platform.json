@@ -1,7 +1,7 @@
 {
   "pluginId": "gzctf",
   "pluginConfig": {
-    "baseUrl": "https://nctf.x1ct34m.com",
+    "baseUrl": "https://nctf.x1ct34m.com/",
     "contest": {
       "mode": "id",
       "value": 2

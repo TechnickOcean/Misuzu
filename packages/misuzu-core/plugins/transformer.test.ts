@@ -109,6 +109,36 @@ describe("plugin to tools transformer", () => {
     })
   })
 
+  test("exposes download_attachment tool when plugin supports it", async () => {
+    const tools = transformPluginToTools({
+      ...createMockPlugin(),
+      async downloadAttachment(challengeId: number, attachmentIndex: number, fileName?: string) {
+        return {
+          challengeId,
+          attachmentIndex,
+          fileName,
+          ok: true,
+        }
+      },
+    })
+
+    const downloadTool = tools.find((tool) => tool.name === "mock_platform_download_attachment")
+    expect(downloadTool).toBeDefined()
+
+    const result = await downloadTool!.execute("d1", {
+      challengeId: 101,
+      attachmentIndex: 0,
+      fileName: "challenge.zip",
+    })
+
+    expect(result.details).toEqual({
+      challengeId: 101,
+      attachmentIndex: 0,
+      fileName: "challenge.zip",
+      ok: true,
+    })
+  })
+
   test("enforces strict sliding window limit on submit and container tools", async () => {
     const tools = transformPluginToTools(createMockPlugin())
     const submitTool = tools.find((tool) => tool.name === "mock_platform_submit_flag")

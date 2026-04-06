@@ -4,6 +4,8 @@ import { join } from "node:path"
 import { afterEach, describe, expect, test } from "vite-plus/test"
 import { getModels } from "@mariozechner/pi-ai"
 import { createCTFRuntimeWorkspace, createCTFRuntimeWorkspaceWithoutPersistence } from "../index.ts"
+import { providerRegistryToken } from "../../../infrastructure/di/tokens.ts"
+import { ProviderRegistry, type ProxyProviderOptions } from "../../providers/registry.ts"
 import type {
   CTFPlatformPlugin,
   ChallengeDetail,
@@ -20,148 +22,23 @@ async function createRuntimeWorkspaceDir() {
   return dir
 }
 
+function resolveDefaultPoolItem(maxConcurrency = 1) {
+  const defaultModel = getModels("openai")[0]
+  if (!defaultModel) {
+    throw new Error("OpenAI default model is missing for test model pool setup")
+  }
+
+  return {
+    provider: defaultModel.provider,
+    modelId: defaultModel.id,
+    maxConcurrency,
+  }
+}
+
 afterEach(async () => {
   await Promise.all(
     tempDirs.splice(0, tempDirs.length).map((dir) => rm(dir, { recursive: true, force: true })),
   )
-})
-
-describe("ctf runtime workspace persistence", () => {
-  test("persists and restores runtime state", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-
-    const runtimeWorkspace = await createCTFRuntimeWorkspace({ rootDir })
-    const snapshot = {
-      queue: ["challenge-1", "challenge-2"],
-      limits: { maxConcurrency: 2, maxContainers: 1 },
-    }
-
-    await runtimeWorkspace.attachRuntime({
-      runtimeId: "ctf-runtime",
-      getPersistedState: () => snapshot,
-    })
-    await runtimeWorkspace.persistRuntimeState()
-    await runtimeWorkspace.shutdown()
-
-    const restoredWorkspace = await createCTFRuntimeWorkspace({ rootDir })
-    let restoredPayload: Record<string, unknown> | undefined
-
-    await restoredWorkspace.attachRuntime({
-      runtimeId: "ctf-runtime",
-      getPersistedState: () => ({}),
-      restoreFromPersistedState: async (payload) => {
-        restoredPayload = payload
-      },
-    })
-
-    expect(restoredPayload).toEqual(snapshot)
-  })
-
-  test("ignores persisted state when runtime id mismatches", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-
-    const runtimeWorkspace = await createCTFRuntimeWorkspace({ rootDir })
-    await runtimeWorkspace.attachRuntime({
-      runtimeId: "runtime-a",
-      getPersistedState: () => ({ marker: "a" }),
-    })
-    await runtimeWorkspace.persistRuntimeState()
-    await runtimeWorkspace.shutdown()
-
-    const restoredWorkspace = await createCTFRuntimeWorkspace({ rootDir })
-    let restoredCalled = false
-
-    await restoredWorkspace.attachRuntime({
-      runtimeId: "runtime-b",
-      getPersistedState: () => ({}),
-      restoreFromPersistedState: async () => {
-        restoredCalled = true
-      },
-    })
-
-    expect(restoredCalled).toBe(false)
-  })
-})
-
-describe("ctf runtime providers", () => {
-  test("bootstraps provider config once", async () => {
-    const sourceModel = getModels("openai")[0]
-    expect(sourceModel).toBeDefined()
-
-    const rootDir = await createRuntimeWorkspaceDir()
-    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    await mkdir(workspace.markerDir, { recursive: true })
-    await writeFile(
-      workspace.providerConfigPath,
-      JSON.stringify(
-        [
-          {
-            provider: `ctf-proxy-${Date.now()}`,
-            baseProvider: "openai",
-            modelMappings: [sourceModel!.id],
-          },
-        ],
-        null,
-        2,
-      ),
-      "utf-8",
-    )
-
-    const firstLoad = workspace.bootstrapProviders()
-    const secondLoad = workspace.bootstrapProviders()
-
-    expect(firstLoad.length).toBe(1)
-    expect(secondLoad.length).toBe(0)
-  })
-})
-
-describe("ctf runtime fifo scheduler", () => {
-  test("dispatches queued tasks in FIFO order", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    const observedTaskIds: string[] = []
-    workspace.registerSolver({
-      solverId: "solver-1",
-      solve: async (task) => {
-        observedTaskIds.push(task.taskId)
-        return `done:${task.taskId}`
-      },
-    })
-
-    const first = workspace.enqueueTask({ challenge: "a" }, "task-1")
-    const second = workspace.enqueueTask({ challenge: "b" }, "task-2")
-    const third = workspace.enqueueTask({ challenge: "c" }, "task-3")
-
-    const results = await Promise.all([first, second, third])
-
-    expect(observedTaskIds).toEqual(["task-1", "task-2", "task-3"])
-    expect(results.map((result) => result.taskId)).toEqual(["task-1", "task-2", "task-3"])
-    expect(results.map((result) => result.solverId)).toEqual(["solver-1", "solver-1", "solver-1"])
-  })
-
-  test("keeps task order when tasks arrive before solver registration", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    const observedTaskIds: string[] = []
-    const first = workspace.enqueueTask({ challenge: "a" }, "task-1")
-    const second = workspace.enqueueTask({ challenge: "b" }, "task-2")
-
-    workspace.registerSolver({
-      solverId: "solver-late",
-      solve: async (task) => {
-        observedTaskIds.push(task.taskId)
-        return task.payload
-      },
-    })
-
-    const results = await Promise.all([first, second])
-
-    expect(observedTaskIds).toEqual(["task-1", "task-2"])
-    expect(results.map((result) => result.taskId)).toEqual(["task-1", "task-2"])
-  })
 })
 
 class MockPlatformPlugin implements CTFPlatformPlugin {
@@ -317,6 +194,15 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
   }
 }
 
+class CountingProviderRegistry extends ProviderRegistry {
+  registerProxyProvidersCalls = 0
+
+  registerProxyProviders(optionsList: ProxyProviderOptions[]) {
+    this.registerProxyProvidersCalls += 1
+    return super.registerProxyProviders(optionsList)
+  }
+}
+
 describe("ctf runtime platform integration", () => {
   test("lists built-in plugins from catalog", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
@@ -384,6 +270,7 @@ describe("ctf runtime platform integration", () => {
     const derivedWorkspace = await workspace.deriveSolverWorkspace("solver-301")
     expect(derivedWorkspace.rootDir).toBe(join(rootDir, "solvers", "solver-301"))
     expect(derivedWorkspace.configRootDir).toBe(rootDir)
+    expect(derivedWorkspace.providers).toBe(workspace.providers)
     expect(derivedWorkspace.providerConfigPath).toBe(
       join(rootDir, "solvers", "solver-301", ".misuzu", "providers.json"),
     )
@@ -394,6 +281,67 @@ describe("ctf runtime platform integration", () => {
     expect(solver!.state.systemPrompt).toContain("parent-skill")
 
     await access(join(rootDir, "solvers", "solver-301", ".misuzu", "workspace-state.json"))
+
+    await workspace.shutdown()
+  })
+
+  test("shares provider bootstrap across derived solver workspaces", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const sourceModel = getModels("openai")[0]
+
+    await mkdir(join(rootDir, ".misuzu"), { recursive: true })
+    await writeFile(
+      join(rootDir, ".misuzu", "providers.json"),
+      JSON.stringify(
+        [
+          {
+            provider: "shared-provider",
+            baseProvider: "openai",
+            modelMappings: [sourceModel!.id],
+          },
+        ],
+        null,
+        2,
+      ),
+      "utf-8",
+    )
+
+    const countingProviders = new CountingProviderRegistry()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({
+      rootDir,
+      configureContainer: (container) => {
+        container.registerValue(providerRegistryToken, countingProviders)
+      },
+    })
+
+    const plugin = new MockPlatformPlugin([
+      {
+        id: 401,
+        title: "solver-a",
+        category: "misc",
+        score: 100,
+        solvedCount: 0,
+      },
+      {
+        id: 402,
+        title: "solver-b",
+        category: "web",
+        score: 150,
+        solvedCount: 0,
+      },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "cookie", cookie: "sid=abc" },
+      },
+    })
+
+    expect(workspace.getManagedChallengeIds().sort((a, b) => a - b)).toEqual([401, 402])
+    expect(countingProviders.registerProxyProvidersCalls).toBe(1)
 
     await workspace.shutdown()
   })
@@ -412,6 +360,29 @@ describe("ctf runtime platform integration", () => {
         },
       }),
     ).rejects.toThrow("missing from catalog")
+  })
+
+  test("auto-loads runtime config from platformConfigPath during workspace creation", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    await mkdir(join(rootDir, ".misuzu"), { recursive: true })
+    await writeFile(
+      join(rootDir, ".misuzu", "platform.json"),
+      JSON.stringify(
+        {
+          pluginId: "missing-plugin",
+          pluginConfig: {
+            baseUrl: "https://example.com",
+            contest: { mode: "auto" },
+            auth: { mode: "cookie", cookie: "sid=abc" },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    )
+
+    await expect(createCTFRuntimeWorkspace({ rootDir })).rejects.toThrow("missing from catalog")
   })
 
   test("requires pluginId when runtime plugin is not provided", async () => {
@@ -493,6 +464,86 @@ describe("ctf runtime platform integration", () => {
     await workspace.shutdown()
   })
 
+  test("reports solver activation state during execution", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    const plugin = new MockPlatformPlugin([
+      {
+        id: 111,
+        title: "activation-state",
+        category: "misc",
+        score: 100,
+        solvedCount: 1,
+      },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "cookie", cookie: "sid=abc" },
+      },
+    })
+
+    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
+
+    const solver = workspace.getChallengeSolver(111)
+    expect(solver).toBeDefined()
+
+    let finishPrompt: (() => void) | undefined
+    solver!.prompt = async () => {
+      await new Promise<void>((resolve) => {
+        finishPrompt = resolve
+      })
+    }
+
+    const runningTask = workspace.enqueueTask({ challenge: 111 })
+    const activeState = workspace.getSolverActivationState(111)
+    expect(activeState?.status).toBe("active")
+    expect(activeState?.activeTaskId).toBeDefined()
+
+    finishPrompt?.()
+    await runningTask
+
+    const inactiveState = workspace.getSolverActivationState(111)
+    expect(inactiveState?.status).toBe("inactive")
+
+    await workspace.shutdown()
+  })
+
+  test("creates solver bindings without model pool but blocks execution", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    const plugin = new MockPlatformPlugin([
+      {
+        id: 131,
+        title: "no-pool-yet",
+        category: "misc",
+        score: 100,
+        solvedCount: 0,
+      },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "cookie", cookie: "sid=abc" },
+      },
+    })
+
+    expect(workspace.getManagedChallengeIds()).toEqual([131])
+    expect(workspace.getSolverActivationState(131)?.status).toBe("inactive")
+    await expect(workspace.enqueueTask({ challenge: 131 })).rejects.toThrow("Model pool is empty")
+    expect(workspace.getSolverActivationState(131)?.status).toBe("inactive")
+
+    await workspace.shutdown()
+  })
+
   test("restores auth session, contest binding and queue sequence from runtime snapshot", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
     const firstPlugin = new MockPlatformPlugin([
@@ -518,6 +569,11 @@ describe("ctf runtime platform integration", () => {
     }
 
     const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir, runtime })
+    await firstWorkspace.setModelPoolItems([resolveDefaultPoolItem()])
+    const firstSolver = firstWorkspace.getChallengeSolver(151)
+    expect(firstSolver).toBeDefined()
+    firstSolver!.prompt = async () => {}
+
     const firstTask = await firstWorkspace.enqueueTask({ challenge: 151 })
     expect(firstTask.taskId).toBe("task-1")
     expect(firstPlugin.getLoginCallCount()).toBe(1)
@@ -542,6 +598,12 @@ describe("ctf runtime platform integration", () => {
         plugin: restoredPlugin,
       },
     })
+
+    await restoredWorkspace.setModelPoolItems([resolveDefaultPoolItem()])
+    const restoredSolver = restoredWorkspace.getChallengeSolver(151)
+    expect(restoredSolver).toBeDefined()
+    restoredSolver!.prompt = async () => {}
+    expect(restoredWorkspace.getSolverActivationState(151)?.status).toBe("inactive")
 
     expect(restoredPlugin.getLoginCallCount()).toBe(0)
 
@@ -585,5 +647,75 @@ describe("ctf runtime platform integration", () => {
 
     expect(workspace.getManagedChallengeIds()).toEqual([201])
     await workspace.shutdown()
+  })
+
+  test("restores environment agent state alongside runtime snapshot", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const firstPlugin = new MockPlatformPlugin([
+      {
+        id: 241,
+        title: "runtime-with-environment-agent",
+        category: "misc",
+        score: 200,
+        solvedCount: 2,
+      },
+    ])
+
+    const runtime = {
+      plugin: firstPlugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" as const },
+        auth: { mode: "cookie" as const, cookie: "sid=abc" },
+      },
+    }
+
+    const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir, runtime })
+    await firstWorkspace.setModelPoolItems([resolveDefaultPoolItem()])
+    const firstEnvironmentAgent = firstWorkspace.createEnvironmentAgent({
+      initialState: {
+        systemPrompt: "environment-agent-with-runtime",
+        thinkingLevel: "low",
+      },
+    })
+
+    firstEnvironmentAgent.appendMessage({
+      role: "user",
+      content: "persisted-environment-runtime-message",
+      timestamp: Date.now(),
+    })
+    await firstWorkspace.persistRuntimeState()
+    await firstWorkspace.shutdown()
+
+    const restoredPlugin = new MockPlatformPlugin([
+      {
+        id: 241,
+        title: "runtime-with-environment-agent",
+        category: "misc",
+        score: 200,
+        solvedCount: 2,
+      },
+    ])
+
+    const restoredWorkspace = await createCTFRuntimeWorkspace({
+      rootDir,
+      runtime: {
+        ...runtime,
+        plugin: restoredPlugin,
+      },
+    })
+
+    await restoredWorkspace.setModelPoolItems([resolveDefaultPoolItem()])
+
+    expect(restoredPlugin.getLoginCallCount()).toBe(0)
+
+    const restoredEnvironmentAgent = restoredWorkspace.createEnvironmentAgent()
+    expect(restoredEnvironmentAgent.state.systemPrompt).toContain("environment-agent-with-runtime")
+    expect(restoredEnvironmentAgent.state.thinkingLevel).toBe("low")
+    expect(JSON.stringify(restoredEnvironmentAgent.state.messages)).toContain(
+      "persisted-environment-runtime-message",
+    )
+
+    await restoredWorkspace.shutdown()
   })
 })
