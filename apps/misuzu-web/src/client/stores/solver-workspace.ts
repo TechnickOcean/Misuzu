@@ -1,5 +1,9 @@
 import { defineStore } from "pinia"
-import type { AgentStateSnapshot, SolverWorkspaceSnapshot } from "../../shared/protocol.ts"
+import type {
+  AgentStateSnapshot,
+  PromptMode,
+  SolverWorkspaceSnapshot,
+} from "../../shared/protocol.ts"
 import type { AppServices } from "../di/app-services.ts"
 
 const solverUnsubscribers = new Map<string, () => void>()
@@ -42,10 +46,11 @@ export const useSolverWorkspaceStore = defineStore("solver-workspace", {
       }
     },
 
-    async prompt(workspaceId: string, prompt: string) {
+    async prompt(workspaceId: string, prompt: string, mode: PromptMode = "followup") {
       this.agentStates[workspaceId] = await requireServices().apiClient.promptSolver(
         workspaceId,
         prompt,
+        mode,
       )
       this.snapshots[workspaceId] =
         await requireServices().apiClient.getSolverWorkspace(workspaceId)

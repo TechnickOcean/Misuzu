@@ -134,8 +134,11 @@ export interface AgentStateSnapshot {
   }>
 }
 
+export type PromptMode = "followup" | "steer"
+
 export interface PromptRequest {
   prompt: string
+  mode?: PromptMode
 }
 
 export interface PluginCatalogItem {

@@ -2,6 +2,7 @@ import type {
   AgentStateSnapshot,
   PluginCatalogItem,
   PluginReadmeResponse,
+  PromptMode,
   RuntimeCreateRequest,
   RuntimeDispatchRequest,
   RuntimeEnqueueRequest,
@@ -136,12 +137,17 @@ export class WorkspaceApiClient {
     return response.state
   }
 
-  async promptRuntimeAgent(workspaceId: string, agentId: string, prompt: string) {
+  async promptRuntimeAgent(
+    workspaceId: string,
+    agentId: string,
+    prompt: string,
+    mode: PromptMode = "followup",
+  ) {
     const response = await this.request<{ state: AgentStateSnapshot }>(
       `/api/workspaces/runtime/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId)}/prompt`,
       {
         method: "POST",
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, mode }),
       },
     )
     return response.state
@@ -172,12 +178,12 @@ export class WorkspaceApiClient {
     return response.state
   }
 
-  async promptSolver(workspaceId: string, prompt: string) {
+  async promptSolver(workspaceId: string, prompt: string, mode: PromptMode = "followup") {
     const response = await this.request<{ state: AgentStateSnapshot }>(
       `/api/workspaces/solver/${encodeURIComponent(workspaceId)}/prompt`,
       {
         method: "POST",
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, mode }),
       },
     )
     return response.state

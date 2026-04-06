@@ -20,6 +20,7 @@ import type {
   ChallengeSummaryView,
   PluginCatalogItem,
   PluginReadmeResponse,
+  PromptMode,
   RuntimeCreateRequest,
   RuntimeWorkspaceSnapshot,
   SolverCreateRequest,
@@ -234,11 +235,16 @@ export class WorkspaceManager {
     return this.toAgentSnapshot(agent)
   }
 
-  async promptRuntimeAgent(workspaceId: string, agentId: string, prompt: string) {
+  async promptRuntimeAgent(
+    workspaceId: string,
+    agentId: string,
+    prompt: string,
+    mode: PromptMode = "followup",
+  ) {
     const session = await this.requireRuntimeSession(workspaceId)
     const agent = this.resolveRuntimeAgent(session, agentId)
 
-    await agent.prompt(prompt)
+    await applyPromptMode(agent, prompt, mode)
     this.publishRuntimeSnapshot(session)
 
     return this.toAgentSnapshot(agent)
@@ -309,14 +315,14 @@ export class WorkspaceManager {
     return this.toAgentSnapshot(agent)
   }
 
-  async promptSolver(workspaceId: string, prompt: string) {
+  async promptSolver(workspaceId: string, prompt: string, mode: PromptMode = "followup") {
     const session = await this.requireSolverSession(workspaceId)
     const agent = session.workspace.mainAgent
     if (!agent) {
       throw new Error("Solver workspace has no main agent yet")
     }
 
-    await agent.prompt(prompt)
+    await applyPromptMode(agent, prompt, mode)
     this.publishSolverSnapshot(session)
 
     return this.toAgentSnapshot(agent)
@@ -932,4 +938,17 @@ function serializeForMessageText(value: unknown) {
   } catch {
     return String(value)
   }
+}
+
+async function applyPromptMode(
+  agent: EnvironmentAgent | SolverAgent,
+  prompt: string,
+  mode: PromptMode,
+) {
+  if (mode === "steer") {
+    agent.steer(prompt)
+    return
+  }
+
+  await Promise.resolve(agent.followUp(prompt))
 }

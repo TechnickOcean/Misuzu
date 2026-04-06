@@ -92,6 +92,7 @@ export function registerApiRoutes(app: Hono, manager: WorkspaceManager) {
       c.req.param("workspaceId"),
       c.req.param("agentId"),
       request.prompt,
+      request.mode,
     )
     return c.json({ state })
   })
@@ -114,7 +115,11 @@ export function registerApiRoutes(app: Hono, manager: WorkspaceManager) {
 
   api.post("/workspaces/solver/:workspaceId/prompt", async (c) => {
     const request = await c.req.json<PromptRequest>()
-    const state = await manager.promptSolver(c.req.param("workspaceId"), request.prompt)
+    const state = await manager.promptSolver(
+      c.req.param("workspaceId"),
+      request.prompt,
+      request.mode,
+    )
     return c.json({ state })
   })
 

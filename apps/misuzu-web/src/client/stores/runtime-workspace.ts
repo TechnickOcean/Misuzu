@@ -1,6 +1,7 @@
 import { defineStore } from "pinia"
 import type {
   AgentStateSnapshot,
+  PromptMode,
   RuntimeInitRequest,
   RuntimeWorkspaceSnapshot,
 } from "../../shared/protocol.ts"
@@ -101,11 +102,17 @@ export const useRuntimeWorkspaceStore = defineStore("runtime-workspace", {
       return state
     },
 
-    async promptAgent(workspaceId: string, agentId: string, prompt: string) {
+    async promptAgent(
+      workspaceId: string,
+      agentId: string,
+      prompt: string,
+      mode: PromptMode = "followup",
+    ) {
       const state = await requireServices().apiClient.promptRuntimeAgent(
         workspaceId,
         agentId,
         prompt,
+        mode,
       )
 
       if (!this.agentStates[workspaceId]) {

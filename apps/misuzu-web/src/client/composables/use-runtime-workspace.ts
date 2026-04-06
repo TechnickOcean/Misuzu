@@ -1,5 +1,5 @@
 import { computed } from "vue"
-import type { RuntimeInitRequest } from "../../shared/protocol.ts"
+import type { PromptMode, RuntimeInitRequest } from "../../shared/protocol.ts"
 import { useAppServices } from "../di/app-services.ts"
 import { useRuntimeWorkspaceStore } from "../stores/runtime-workspace.ts"
 
@@ -26,13 +26,13 @@ export function useRuntimeWorkspace(workspaceId: string) {
     loading: computed(() => store.loading),
     open: () => store.openWorkspace(workspaceId),
     setActiveAgent: (agentId: string) => store.setActiveAgent(workspaceId, agentId),
-    promptActiveAgent: (prompt: string) => {
+    promptActiveAgent: (prompt: string, mode: PromptMode = "followup") => {
       const agentId = store.activeAgentIds[workspaceId]
       if (!agentId) {
         throw new Error("No runtime agent selected")
       }
 
-      return store.promptAgent(workspaceId, agentId, prompt)
+      return store.promptAgent(workspaceId, agentId, prompt, mode)
     },
     pauseDispatch: () => store.pauseDispatch(workspaceId),
     startDispatch: (autoEnqueue = false) => store.startDispatch(workspaceId, autoEnqueue),
