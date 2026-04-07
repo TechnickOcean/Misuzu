@@ -30,7 +30,15 @@ export class EventBus {
     }
 
     for (const listener of topicListeners) {
-      listener(message)
+      try {
+        listener(message)
+      } catch {
+        topicListeners.delete(listener)
+      }
+    }
+
+    if (topicListeners.size === 0) {
+      this.listeners.delete(topic)
     }
   }
 }

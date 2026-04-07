@@ -32,7 +32,7 @@ export function createServerApp(options: ServerAppOptions) {
       return {
         onOpen: (_event, ws) => {
           if (!topic) {
-            ws.send(JSON.stringify({ type: "error", payload: { message: "Missing topic" } }))
+            sendWsMessage(ws, { type: "error", payload: { message: "Missing topic" } })
             ws.close()
             return
           }
@@ -40,13 +40,22 @@ export function createServerApp(options: ServerAppOptions) {
           let unsubscribe = () => {}
 
           const sendMessage = (message: WsServerMessage) => {
-            ws.send(JSON.stringify(message))
+            sendWsMessage(ws, message)
           }
 
           unsubscribe = options.events.subscribe(topic, sendMessage)
           ;(ws as unknown as { _misuzuUnsubscribe?: () => void })._misuzuUnsubscribe = unsubscribe
 
-          void sendInitialTopicSnapshot(topic, options.manager, sendMessage)
+          void sendInitialTopicSnapshot(topic, options.manager, sendMessage).catch((error) => {
+            sendMessage({
+              type: "error",
+              payload: {
+                message: error instanceof Error ? error.message : String(error),
+              },
+            })
+            unsubscribe()
+            ws.close()
+          })
         },
         onClose: (_event, ws) => {
           ;(ws as unknown as { _misuzuUnsubscribe?: () => void })._misuzuUnsubscribe?.()
@@ -60,6 +69,20 @@ export function createServerApp(options: ServerAppOptions) {
     injectWebSocket: (server: Parameters<typeof wsRuntime.injectWebSocket>[0]) => {
       wsRuntime.injectWebSocket(server)
     },
+  }
+}
+
+function sendWsMessage(
+  ws: {
+    send: (data: string) => void
+    close: () => void
+  },
+  message: WsServerMessage,
+) {
+  try {
+    ws.send(JSON.stringify(message))
+  } catch {
+    ws.close()
   }
 }
 

@@ -295,7 +295,7 @@ describe("ctf runtime platform integration", () => {
     expect(solver).toBeDefined()
     expect(solver!.state.systemPrompt).toContain("parent-skill")
 
-    await access(join(rootDir, "solvers", "solver-301", ".misuzu", "workspace-state.json"))
+    await access(join(rootDir, "solvers", "solver-301"))
 
     await workspace.shutdown()
   })
@@ -518,6 +518,7 @@ describe("ctf runtime platform integration", () => {
     solver!.continue = waitForFinish
 
     const runningTask = workspace.enqueueTask({ challenge: 111 })
+    await waitForCondition(() => workspace.getSolverActivationState(111)?.status === "active")
     const activeState = workspace.getSolverActivationState(111)
     expect(activeState?.status).toBe("active")
     expect(activeState?.activeTaskId).toBeDefined()
@@ -528,6 +529,90 @@ describe("ctf runtime platform integration", () => {
 
     const inactiveState = workspace.getSolverActivationState(111)
     expect(inactiveState?.status).toBe("inactive")
+
+    await workspace.shutdown()
+  })
+
+  test("caps simultaneously active solvers by model pool concurrency", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    const plugin = new MockPlatformPlugin([
+      { id: 1121, title: "a", category: "misc", score: 100, solvedCount: 0 },
+      { id: 1122, title: "b", category: "web", score: 100, solvedCount: 0 },
+      { id: 1123, title: "c", category: "pwn", score: 100, solvedCount: 0 },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "manual" },
+      },
+      startPaused: true,
+    })
+
+    await workspace.setModelPoolItems([resolveDefaultPoolItem(1)])
+
+    const holdTask = async () => {
+      await new Promise(() => {})
+    }
+
+    for (const challengeId of [1121, 1122, 1123]) {
+      const solver = workspace.getChallengeSolver(challengeId)
+      expect(solver).toBeDefined()
+      solver!.prompt = holdTask
+      solver!.continue = holdTask
+    }
+
+    void workspace.enqueueTask({ challenge: 1121 }, "task-1121").catch(() => {})
+    void workspace.enqueueTask({ challenge: 1122 }, "task-1122").catch(() => {})
+    void workspace.enqueueTask({ challenge: 1123 }, "task-1123").catch(() => {})
+    workspace.resumeTaskDispatch()
+
+    await waitForCondition(() => workspace.getSchedulerState().busySolverCount > 0)
+
+    const activeCount = workspace
+      .listSolverActivationStates()
+      .filter((state) => state.status === "active").length
+    expect(activeCount).toBe(1)
+    expect(workspace.getSchedulerState().busySolverCount).toBe(1)
+
+    await workspace.shutdown()
+  })
+
+  test("does not pre-assign models to every managed solver before dispatch", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    const plugin = new MockPlatformPlugin([
+      { id: 1131, title: "a", category: "misc", score: 100, solvedCount: 0 },
+      { id: 1132, title: "b", category: "web", score: 100, solvedCount: 0 },
+      { id: 1133, title: "c", category: "pwn", score: 100, solvedCount: 0 },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "manual" },
+      },
+      startPaused: true,
+    })
+
+    await workspace.setModelPoolItems([resolveDefaultPoolItem(1)])
+
+    const activationStatuses = workspace
+      .listSolverActivationStates()
+      .map((state) => ({ challengeId: state.challengeId, status: state.status }))
+
+    expect(activationStatuses).toEqual([
+      { challengeId: 1131, status: "model_unassigned" },
+      { challengeId: 1132, status: "model_unassigned" },
+      { challengeId: 1133, status: "model_unassigned" },
+    ])
 
     await workspace.shutdown()
   })
@@ -770,7 +855,7 @@ describe("ctf runtime platform integration", () => {
     })
 
     expect(workspace.getManagedChallengeIds()).toEqual([131])
-    expect(workspace.getChallengeSolver(131)).toBeUndefined()
+    expect(workspace.getChallengeSolver(131)).toBeDefined()
     expect(workspace.getSolverActivationState(131)?.status).toBe("model_unassigned")
 
     const pendingTask = workspace.enqueueTask({ challenge: 131 }, "task-no-model")
@@ -852,7 +937,7 @@ describe("ctf runtime platform integration", () => {
     const restoredSolver = restoredWorkspace.getChallengeSolver(151)
     expect(restoredSolver).toBeDefined()
     restoredSolver!.prompt = async () => {}
-    expect(restoredWorkspace.getSolverActivationState(151)?.status).toBe("inactive")
+    expect(restoredWorkspace.getSolverActivationState(151)?.status).toBe("model_unassigned")
 
     expect(restoredPlugin.getLoginCallCount()).toBe(0)
 
@@ -993,6 +1078,63 @@ describe("ctf runtime platform integration", () => {
     }
 
     await workspace.enqueueTask({ challenge: challengeId })
+
+    expect(promptCalls).toBe(0)
+    expect(continueCalls).toBe(1)
+
+    await workspace.shutdown()
+  })
+
+  test("uses continue loop for resumed solver when payload carries metadata", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const challengeId = 184
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    const plugin = new MockPlatformPlugin([
+      {
+        id: challengeId,
+        title: "resume-continue-with-metadata",
+        category: "misc",
+        score: 85,
+        solvedCount: 0,
+      },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "manual" },
+      },
+    })
+
+    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
+
+    const solver = workspace.getChallengeSolver(challengeId)
+    expect(solver).toBeDefined()
+
+    solver!.replaceMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "restored-history" }],
+        timestamp: Date.now(),
+      } as any,
+    ])
+
+    let promptCalls = 0
+    let continueCalls = 0
+    solver!.prompt = async () => {
+      promptCalls += 1
+    }
+    solver!.continue = async () => {
+      continueCalls += 1
+    }
+
+    await workspace.enqueueTask({
+      challenge: challengeId,
+      reason: "resume-after-pause",
+    })
 
     expect(promptCalls).toBe(0)
     expect(continueCalls).toBe(1)

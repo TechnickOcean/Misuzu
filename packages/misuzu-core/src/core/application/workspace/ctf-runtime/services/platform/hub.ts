@@ -18,6 +18,7 @@ import type { RuntimeInitOptions } from "./runtime.ts"
 import {
   SolverDispatchDeferredError,
   type SolverTask,
+  type SolverTaskDispatchPreparation,
   type SolverTaskResult,
   QueueService,
 } from "../scheduler/queue.ts"
@@ -71,6 +72,10 @@ export interface SolverHubDeps {
   queue: QueueService
   solverWorkspaces: SolverWorkspaceService
   modelPool: WorkspaceModelPool
+}
+
+interface SolverDispatchContext {
+  modelLease: ReturnType<SolverHub["acquireModelLeaseForSolver"]>
 }
 
 export class SolverHub {
@@ -366,7 +371,8 @@ export class SolverHub {
 
     this.queue.registerSolver({
       solverId,
-      solve: async (task) => this.solveWithBinding(binding, task),
+      prepareTask: () => this.prepareSolverTaskDispatch(binding),
+      solve: async (task, context) => this.solveWithBinding(binding, task, context),
       abortActiveTask: () => binding.solver?.abort(),
     })
     this.notifyStateChanged()
@@ -445,7 +451,11 @@ export class SolverHub {
     return this.solverWorkspaces.getOrCreateSolver(solverId, options)
   }
 
-  private async solveWithBinding(binding: ChallengeSolverBinding, task: SolverTask) {
+  private async solveWithBinding(
+    binding: ChallengeSolverBinding,
+    task: SolverTask,
+    context?: unknown,
+  ) {
     const progress = this.ensureChallengeProgressState(binding.challenge.id, binding.solverId)
     progress.blockedReason = undefined
 
@@ -457,21 +467,8 @@ export class SolverHub {
         }
       : undefined
 
-    let modelLease: ReturnType<SolverHub["acquireModelLeaseForSolver"]>
-    try {
-      modelLease = this.acquireModelLeaseForSolver(preferredModel)
-    } catch (error) {
-      if (
-        isModelPoolError(error) &&
-        (error.code === "MODEL_POOL_EMPTY" || error.code === "MODEL_POOL_EXHAUSTED")
-      ) {
-        throw new SolverDispatchDeferredError(
-          `Solver ${binding.solverId} is waiting for model pool capacity (${error.code})`,
-        )
-      }
-
-      throw error
-    }
+    let modelLease = this.resolveModelLeaseFromDispatchContext(context)
+    modelLease ??= this.tryAcquireDispatchModelLease(binding.solverId, preferredModel)
 
     try {
       const solver = await this.ensureBindingSolverLoaded(binding, modelLease.model)
@@ -613,6 +610,58 @@ export class SolverHub {
     }
   }
 
+  private prepareSolverTaskDispatch(
+    binding: ChallengeSolverBinding,
+  ): SolverTaskDispatchPreparation {
+    const existingSolverModel = binding.solver?.state.model
+    const preferredModel = existingSolverModel
+      ? {
+          provider: existingSolverModel.provider,
+          modelId: existingSolverModel.id,
+        }
+      : undefined
+
+    return {
+      status: "ready",
+      context: {
+        modelLease: this.tryAcquireDispatchModelLease(binding.solverId, preferredModel),
+      } satisfies SolverDispatchContext,
+    }
+  }
+
+  private resolveModelLeaseFromDispatchContext(context: unknown) {
+    if (!context || typeof context !== "object") {
+      return undefined
+    }
+
+    const modelLease = (context as Partial<SolverDispatchContext>).modelLease
+    if (!modelLease || typeof modelLease !== "object" || typeof modelLease.release !== "function") {
+      return undefined
+    }
+
+    return modelLease
+  }
+
+  private tryAcquireDispatchModelLease(
+    solverId: string,
+    preferredModel: { provider: string; modelId: string } | undefined,
+  ) {
+    try {
+      return this.acquireModelLeaseForSolver(preferredModel)
+    } catch (error) {
+      if (
+        isModelPoolError(error) &&
+        (error.code === "MODEL_POOL_EMPTY" || error.code === "MODEL_POOL_EXHAUSTED")
+      ) {
+        throw new SolverDispatchDeferredError(
+          `Solver ${solverId} is waiting for model pool capacity (${error.code})`,
+        )
+      }
+
+      throw error
+    }
+  }
+
   private createPlatformTools() {
     const pluginId = this.getPluginId()
     const platformTools = transformPluginToTools(this.createSolverToolPlugin(), {
@@ -656,6 +705,13 @@ export class SolverHub {
 
     const executionState = this.queue.getSolverExecutionState(binding.solverId)
     const model = binding.solver.state.model
+    if (!model) {
+      return {
+        challengeId: binding.challenge.id,
+        solverId: binding.solverId,
+        status: "model_unassigned",
+      }
+    }
 
     return {
       challengeId: binding.challenge.id,
@@ -765,26 +821,8 @@ export class SolverHub {
   }
 
   private async tryHydrateSolverBinding(binding: ChallengeSolverBinding) {
-    let modelLease: ReturnType<SolverHub["acquireModelLeaseForSolver"]>
-    try {
-      modelLease = this.acquireModelLeaseForSolver(undefined)
-    } catch (error) {
-      if (
-        isModelPoolError(error) &&
-        (error.code === "MODEL_POOL_EMPTY" || error.code === "MODEL_POOL_EXHAUSTED")
-      ) {
-        return false
-      }
-
-      throw error
-    }
-
-    try {
-      await this.ensureBindingSolverLoaded(binding, modelLease.model)
-      return true
-    } finally {
-      modelLease.release()
-    }
+    await this.ensureBindingSolverLoaded(binding)
+    return true
   }
 
   private async ensureBindingSolverLoaded(
@@ -923,13 +961,20 @@ function shouldContinueSolverTask(payload: unknown, hasMessageHistory: boolean) 
     return false
   }
 
-  const task = payload as { challenge?: unknown }
+  const task = payload as {
+    challenge?: unknown
+    prompt?: unknown
+  }
+
+  if (typeof task.prompt === "string" && task.prompt.trim().length > 0) {
+    return false
+  }
+
   if (typeof task.challenge !== "number" || !Number.isFinite(task.challenge)) {
     return false
   }
 
-  const keys = Object.keys(payload)
-  return keys.length === 1 && keys[0] === "challenge"
+  return true
 }
 
 function isPersistedProgressStatus(

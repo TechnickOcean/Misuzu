@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vp run dev:client",
+    "dev:full": "node scripts/dev-full.mjs",
     "dev:client": "vp dev --config vite.config.ts",
     "dev:server": "tsx watch src/server/main.ts",
     "build": "vp run build:client",

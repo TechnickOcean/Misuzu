@@ -36,6 +36,7 @@ interface RuntimeSchedulerStateLike {
 
 interface ModelPoolStateLike {
   totalCapacity: number
+  totalAvailable: number
 }
 
 export interface RuntimeRankOrchestratorHost {
@@ -455,7 +456,11 @@ export class RuntimeRankOrchestrator {
       return 0
     }
 
-    const modelCapacity = this.host.getModelPoolState().totalCapacity
+    const modelState = this.host.getModelPoolState()
+    const modelCapacity =
+      typeof modelState.totalAvailable === "number"
+        ? modelState.totalAvailable
+        : modelState.totalCapacity
     if (modelCapacity <= 0) {
       return 0
     }

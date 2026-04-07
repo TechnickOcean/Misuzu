@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, test } from "vite-plus/test"
 import { createCTFRuntimeWorkspaceWithoutPersistence } from "../../workspace.ts"
+import { QueueService } from "./queue.ts"
 
 const tempDirs: string[] = []
 
@@ -172,5 +173,90 @@ describe("ctf runtime fifo scheduler", () => {
     const cancelled = workspace.cancelSchedulerTask("task-cancel-inflight")
     expect(cancelled).toBe("inflight")
     await expect(inflightTask).rejects.toThrow("task aborted by cancel")
+  })
+
+  test("keeps deferred tasks pending during resume until solver becomes dispatchable", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
+    workspace.pauseTaskDispatch()
+
+    const observedTaskIds: string[] = []
+    let releaseFirstTask: (() => void) | undefined
+    let allowSecondSolverDispatch = false
+
+    workspace.registerSolver({
+      solverId: "solver-1",
+      solve: async (task) => {
+        observedTaskIds.push(`solver-1:${task.taskId}`)
+        await new Promise<void>((resolve) => {
+          releaseFirstTask = resolve
+        })
+        return task.payload
+      },
+    })
+
+    const deferredSolver = {
+      solverId: "solver-2",
+      prepareTask: () =>
+        allowSecondSolverDispatch ? { status: "ready" as const } : { status: "deferred" as const },
+      solve: async (task: { taskId: string; payload: unknown }) => {
+        observedTaskIds.push(`solver-2:${task.taskId}`)
+        return task.payload
+      },
+    }
+    workspace.registerSolver(deferredSolver)
+
+    const firstTask = workspace.enqueueTask({ challenge: "a" }, "task-1")
+    const secondTask = workspace.enqueueTask({ challenge: "b" }, "task-2")
+
+    workspace.resumeTaskDispatch()
+
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(observedTaskIds).toEqual(["solver-1:task-1"])
+
+    allowSecondSolverDispatch = true
+    releaseFirstTask?.()
+
+    await expect(firstTask).resolves.toMatchObject({ taskId: "task-1" })
+    await expect(secondTask).resolves.toMatchObject({ taskId: "task-2" })
+    expect(observedTaskIds).toEqual(["solver-1:task-1", "solver-2:task-2"])
+  })
+
+  test("keeps restored tasks pending when solver dispatch is deferred", async () => {
+    const queue = new QueueService()
+    const observedTaskIds: string[] = []
+    let allowDispatch = false
+
+    const deferredSolver = {
+      solverId: "solver-restore",
+      prepareTask: () =>
+        allowDispatch ? { status: "ready" as const } : { status: "deferred" as const },
+      solve: async (task: { taskId: string; payload: unknown }) => {
+        observedTaskIds.push(task.taskId)
+        return task.payload
+      },
+    }
+
+    queue.registerSolver(deferredSolver)
+    queue.restoreState({
+      taskSequence: 2,
+      paused: false,
+      pendingTasks: [{ taskId: "task-1", payload: { challenge: 1 } }],
+      inflightTasks: [{ solverId: "solver-restore", taskId: "task-2", payload: { challenge: 2 } }],
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    expect(observedTaskIds).toEqual([])
+    expect(queue.listPendingTasks().map((task) => task.taskId)).toEqual(["task-2", "task-1"])
+
+    allowDispatch = true
+    queue.wake()
+
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    expect(observedTaskIds).toEqual(["task-2", "task-1"])
+    expect(queue.listPendingTasks()).toEqual([])
   })
 })

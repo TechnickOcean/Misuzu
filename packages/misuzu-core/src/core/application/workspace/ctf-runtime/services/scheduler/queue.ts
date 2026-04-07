@@ -27,9 +27,20 @@ export type SolverTaskCancelResult = "pending" | "inflight"
 
 export interface SolverRunner {
   solverId: string
-  solve(task: SolverTask): Promise<unknown>
+  prepareTask?(task: SolverTask): SolverTaskDispatchPreparation
+  solve(task: SolverTask, context?: unknown): Promise<unknown>
   abortActiveTask?(): void
 }
+
+export type SolverTaskDispatchPreparation =
+  | {
+      status: "ready"
+      context?: unknown
+    }
+  | {
+      status: "deferred"
+      reason?: string
+    }
 
 interface PendingSolverTask {
   task: SolverTask
@@ -236,20 +247,72 @@ export class QueueService {
       return false
     }
 
-    const solverId = this.idleSolverQueue.shift()
-    if (!solverId) {
+    const idleSolverCount = this.idleSolverQueue.length
+    if (idleSolverCount <= 0) {
       this.pendingTaskQueue.unshift(pendingTask)
       return false
     }
 
-    const solver = this.solverRegistry.get(solverId)
-    if (!solver) {
+    const deferredSolverIds: string[] = []
+
+    for (let attempt = 0; attempt < idleSolverCount; attempt += 1) {
+      const solverId = this.idleSolverQueue.shift()
+      if (!solverId) {
+        break
+      }
+
+      const solver = this.solverRegistry.get(solverId)
+      if (!solver) {
+        continue
+      }
+
+      let preparation: SolverTaskDispatchPreparation
+      try {
+        preparation = this.prepareSolverTaskDispatch(solver, pendingTask.task)
+      } catch (error) {
+        this.idleSolverQueue.push(...deferredSolverIds)
+        this.idleSolverQueue.push(solverId)
+        pendingTask.reject(error)
+        this.notifyStateChanged()
+        return this.pendingTaskQueue.length > 0 && this.idleSolverQueue.length > 0
+      }
+
+      if (preparation.status === "deferred") {
+        deferredSolverIds.push(solverId)
+        continue
+      }
+
+      this.idleSolverQueue.push(...deferredSolverIds)
+      this.markTaskInflight(solverId, pendingTask.task)
+      this.runTaskOnSolver(solver, solverId, pendingTask, preparation.context)
       return this.pendingTaskQueue.length > 0 && this.idleSolverQueue.length > 0
     }
 
-    this.markTaskInflight(solverId, pendingTask.task)
-    this.runTaskOnSolver(solver, solverId, pendingTask)
-    return this.pendingTaskQueue.length > 0 && this.idleSolverQueue.length > 0
+    this.idleSolverQueue.push(...deferredSolverIds)
+    this.pendingTaskQueue.unshift(pendingTask)
+    return false
+  }
+
+  private prepareSolverTaskDispatch(
+    solver: SolverRunner,
+    task: SolverTask,
+  ): SolverTaskDispatchPreparation {
+    if (!solver.prepareTask) {
+      return { status: "ready" }
+    }
+
+    try {
+      return solver.prepareTask(task)
+    } catch (error) {
+      if (isSolverDispatchDeferredError(error)) {
+        return {
+          status: "deferred",
+          reason: error.message,
+        }
+      }
+
+      throw error
+    }
   }
 
   private takeNextDispatchableTask() {
@@ -287,8 +350,13 @@ export class QueueService {
     this.notifyStateChanged()
   }
 
-  private runTaskOnSolver(solver: SolverRunner, solverId: string, pendingTask: PendingSolverTask) {
-    void Promise.resolve(solver.solve(pendingTask.task))
+  private runTaskOnSolver(
+    solver: SolverRunner,
+    solverId: string,
+    pendingTask: PendingSolverTask,
+    context?: unknown,
+  ) {
+    void Promise.resolve(solver.solve(pendingTask.task, context))
       .then((output) => {
         this.releaseSolver(solverId)
         this.scheduleDispatch()
