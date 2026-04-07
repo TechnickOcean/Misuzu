@@ -1,22 +1,15 @@
 import { computed, onMounted, reactive, ref } from "vue"
 import { useRouter } from "vue-router"
-import type {
-  ModelPoolInput,
-  ProviderCatalogItem,
-  ProviderConfigEntry,
-  WorkspaceKind,
-} from "@shared/protocol.ts"
+import type { ModelPoolInput, ProviderCatalogItem, ProviderConfigEntry } from "@shared/protocol.ts"
 import {
   createDefaultPluginConfigDraft,
   toPluginConfig,
-  type AuthMode,
-  type ContestMode,
   type PluginConfigDraft,
 } from "@/features/workspace-runtime/composables/plugin-config-form.ts"
 import {
   useCreateRuntimeWorkspaceMutation,
-  useCreateSolverWorkspaceMutation,
   useProviderCatalogQuery,
+  useStartRuntimeDispatchMutation,
 } from "@/shared/composables/workspace-requests.ts"
 
 interface ModelPoolRow {
@@ -26,6 +19,8 @@ interface ModelPoolRow {
   maxConcurrency: string
 }
 
+type ProviderConfigMode = "form" | "upload"
+
 export function useCreateWorkspacePage() {
   const router = useRouter()
 
@@ -33,33 +28,32 @@ export function useCreateWorkspacePage() {
   providerCatalogQuery.paramsRef.value.workspaceId = ""
 
   const createRuntimeWorkspaceMutation = useCreateRuntimeWorkspaceMutation()
-  const createSolverWorkspaceMutation = useCreateSolverWorkspaceMutation()
+  const startRuntimeDispatchMutation = useStartRuntimeDispatchMutation()
 
-  const steps = ["Workspace", "Configuration", "Review"]
+  const steps = ["Workspace", "Providers & Models", "Plugins", "Confirm"]
   const step = ref(1)
   const creating = ref(false)
   const formError = ref("")
 
-  const kind = ref<WorkspaceKind>("ctf-runtime")
   const name = ref("")
   const rootDir = ref("")
 
-  const runtimeWithPlugin = ref(true)
-  const runtimeAutoOrchestrate = ref(false)
   const providerCatalog = computed<ProviderCatalogItem[]>(
     () => providerCatalogQuery.data.value ?? [],
   )
-  const modelPool = ref<ModelPoolRow[]>([createModelPoolRow()])
-  const providerConfigEnabled = ref(false)
+  const providerConfigMode = ref<ProviderConfigMode>("form")
   const providerConfigDraft = ref<ProviderConfigEntry[]>([])
+  const providerConfigSaved = ref(false)
+  const providerConfigError = ref("")
+
+  const modelPool = ref<ModelPoolRow[]>([createModelPoolRow()])
+  const runtimeAutoOrchestrate = ref(false)
 
   const selectedPluginId = ref("")
   const pluginDraft = reactive<PluginConfigDraft>(createDefaultPluginConfigDraft())
   const solverPromptTemplateDraft = ref("")
-
-  const solverProvider = ref("openai")
-  const solverModelId = ref("gpt-4.1")
-  const solverSystemPrompt = ref("")
+  const skipPluginSetup = ref(false)
+  const startFlowAfterCreate = ref(false)
 
   const providerOptions = computed(() =>
     providerCatalog.value
@@ -76,17 +70,14 @@ export function useCreateWorkspacePage() {
   })
 
   onMounted(async () => {
-    await providerCatalogQuery.refetch()
+    await providerCatalogQuery.refetch(true)
   })
 
   function createModelPoolRow(): ModelPoolRow {
-    const fallbackProvider = providerCatalog.value[0]?.provider ?? "openai"
-    const fallbackModelId = providerCatalog.value[0]?.models[0]?.modelId ?? "gpt-4.1"
-
     return {
       id: crypto.randomUUID(),
-      provider: fallbackProvider,
-      modelId: fallbackModelId,
+      provider: "",
+      modelId: "",
       maxConcurrency: "1",
     }
   }
@@ -107,6 +98,62 @@ export function useCreateWorkspacePage() {
     modelPool.value = modelPool.value.filter((item) => item.id !== rowId)
   }
 
+  async function importProviderConfigFile(file: File | undefined) {
+    if (!file) {
+      return
+    }
+
+    providerConfigError.value = ""
+    formError.value = ""
+
+    try {
+      const text = await file.text()
+      const parsed = JSON.parse(text) as unknown
+      if (!Array.isArray(parsed)) {
+        throw new Error("providers.json must be a JSON array")
+      }
+
+      providerConfigDraft.value = parsed.filter(
+        (entry): entry is ProviderConfigEntry => Boolean(entry) && typeof entry === "object",
+      )
+      providerConfigSaved.value = false
+      providerConfigMode.value = "form"
+    } catch (error) {
+      providerConfigError.value =
+        error instanceof Error ? error.message : "Failed to parse providers.json file"
+    }
+  }
+
+  function markProviderConfigDirty(nextConfig: ProviderConfigEntry[]) {
+    providerConfigDraft.value = nextConfig
+    providerConfigSaved.value = false
+  }
+
+  async function saveProviderConfigDraft() {
+    providerConfigError.value = ""
+
+    try {
+      validateProviderConfigDraft()
+      providerConfigSaved.value = true
+      await providerCatalogQuery.refetch(true)
+    } catch (error) {
+      providerConfigSaved.value = false
+      providerConfigError.value = error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  function validateProviderConfigDraft() {
+    if (providerConfigDraft.value.length === 0) {
+      throw new Error("Please add at least one provider entry in providers.json")
+    }
+
+    for (const entry of providerConfigDraft.value) {
+      if (!entry.provider?.trim()) {
+        throw new Error("Provider name is required in providers.json entries")
+      }
+    }
+  }
+
   function nextStep() {
     formError.value = ""
     try {
@@ -124,20 +171,41 @@ export function useCreateWorkspacePage() {
 
   function validateStep(currentStep: number) {
     if (currentStep === 1) {
+      if (!name.value.trim()) {
+        throw new Error("Workspace title is required")
+      }
+
+      if (!rootDir.value.trim()) {
+        throw new Error("Workspace directory is required")
+      }
+
       return
     }
 
-    if (kind.value === "ctf-runtime") {
-      validateRuntimeConfig()
+    if (currentStep === 2) {
+      if (!providerConfigSaved.value) {
+        throw new Error("Save providers.json first before continuing")
+      }
+
+      validateProviderConfigDraft()
+      validateRuntimeModelPool()
       return
     }
 
-    if (!solverProvider.value.trim() || !solverModelId.value.trim()) {
-      throw new Error("Solver provider and model id are required")
+    if (currentStep === 3) {
+      if (skipPluginSetup.value) {
+        return
+      }
+
+      if (!selectedPluginId.value) {
+        throw new Error("Please select a plugin")
+      }
+
+      void toPluginConfig(pluginDraft)
     }
   }
 
-  function validateRuntimeConfig() {
+  function validateRuntimeModelPool() {
     if (normalizedModelPool.value.length === 0) {
       throw new Error("At least one model pool item is required")
     }
@@ -147,20 +215,15 @@ export function useCreateWorkspacePage() {
         throw new Error("Model pool provider/model id cannot be empty")
       }
 
-      if (!Number.isFinite(model.maxConcurrency) || model.maxConcurrency <= 0) {
-        throw new Error("Model pool maxConcurrency must be a positive number")
+      if (!Number.isInteger(model.maxConcurrency) || model.maxConcurrency <= 0) {
+        throw new Error("Model pool maxConcurrency must be a positive integer")
       }
     }
+  }
 
-    if (!runtimeWithPlugin.value) {
-      return
-    }
-
-    if (!selectedPluginId.value) {
-      throw new Error("Please select a plugin")
-    }
-
-    void toPluginConfig(pluginDraft)
+  function skipPluginSetupForNow() {
+    skipPluginSetup.value = true
+    nextStep()
   }
 
   async function createWorkspace() {
@@ -168,58 +231,44 @@ export function useCreateWorkspacePage() {
     formError.value = ""
 
     try {
-      validateStep(2)
+      validateStep(3)
 
-      if (kind.value === "ctf-runtime") {
-        const snapshot = await createRuntimeWorkspaceMutation.mutateAsync({
-          name: name.value,
-          rootDir: rootDir.value,
-          providerConfig: providerConfigEnabled.value ? providerConfigDraft.value : undefined,
-          modelPool: normalizedModelPool.value,
-          pluginId: runtimeWithPlugin.value ? selectedPluginId.value : undefined,
-          pluginConfig: runtimeWithPlugin.value ? toPluginConfig(pluginDraft) : undefined,
-          solverPromptTemplate: runtimeWithPlugin.value
-            ? solverPromptTemplateDraft.value
-            : undefined,
-          autoOrchestrate: runtimeAutoOrchestrate.value,
-          createEnvironmentAgent: !runtimeWithPlugin.value,
+      const snapshot = await createRuntimeWorkspaceMutation.mutateAsync({
+        name: name.value.trim(),
+        rootDir: rootDir.value.trim(),
+        providerConfig: providerConfigDraft.value,
+        modelPool: normalizedModelPool.value,
+        pluginId: skipPluginSetup.value ? undefined : selectedPluginId.value,
+        pluginConfig: skipPluginSetup.value ? undefined : toPluginConfig(pluginDraft),
+        solverPromptTemplate: skipPluginSetup.value
+          ? undefined
+          : solverPromptTemplateDraft.value.trim() || undefined,
+        autoOrchestrate: runtimeAutoOrchestrate.value,
+        createEnvironmentAgent: skipPluginSetup.value,
+      })
+
+      if (startFlowAfterCreate.value && !skipPluginSetup.value) {
+        await startRuntimeDispatchMutation.mutateAsync({
+          workspaceId: snapshot.id,
+          autoEnqueue: true,
         })
+      }
 
-        if (!runtimeWithPlugin.value) {
-          await router.push({
-            name: "runtime-agent",
-            params: {
-              id: snapshot.id,
-              agentId: "environment",
-            },
-          })
-          return
-        }
-
+      if (skipPluginSetup.value) {
         await router.push({
-          name: "runtime-overview",
+          name: "runtime-agent",
           params: {
             id: snapshot.id,
+            agentId: "environment",
           },
         })
         return
       }
 
-      const solverSnapshot = await createSolverWorkspaceMutation.mutateAsync({
-        name: name.value,
-        rootDir: rootDir.value,
-        providerConfig: providerConfigEnabled.value ? providerConfigDraft.value : undefined,
-        model: {
-          provider: solverProvider.value,
-          modelId: solverModelId.value,
-        },
-        systemPrompt: solverSystemPrompt.value.trim() || undefined,
-      })
-
       await router.push({
-        name: "solver",
+        name: "runtime-overview",
         params: {
-          id: solverSnapshot.id,
+          id: snapshot.id,
         },
       })
     } catch (error) {
@@ -233,44 +282,37 @@ export function useCreateWorkspacePage() {
     void router.push({ name: "home" })
   }
 
-  function setContestMode(value: string) {
-    pluginDraft.contestMode = value as ContestMode
-  }
-
-  function setAuthMode(value: string) {
-    pluginDraft.authMode = value as AuthMode
-  }
-
   return {
     steps,
     step,
     creating,
     formError,
-    kind,
     name,
     rootDir,
-    runtimeWithPlugin,
-    runtimeAutoOrchestrate,
     providerCatalog,
-    modelPool,
-    providerConfigEnabled,
+    providerConfigMode,
     providerConfigDraft,
+    providerConfigSaved,
+    providerConfigError,
+    modelPool,
+    runtimeAutoOrchestrate,
     selectedPluginId,
     pluginDraft,
     solverPromptTemplateDraft,
-    solverProvider,
-    solverModelId,
-    solverSystemPrompt,
+    skipPluginSetup,
+    startFlowAfterCreate,
     providerOptions,
     normalizedModelPool,
     listModelsForProvider,
     addModelPoolRow,
     removeModelPoolRow,
+    importProviderConfigFile,
+    markProviderConfigDirty,
+    saveProviderConfigDraft,
     nextStep,
     previousStep,
+    skipPluginSetupForNow,
     createWorkspace,
     openHome,
-    setContestMode,
-    setAuthMode,
   }
 }

@@ -17,7 +17,7 @@ export interface PluginConfigDraft {
 
 export function createDefaultPluginConfigDraft(): PluginConfigDraft {
   return {
-    baseUrl: "https://example.com",
+    baseUrl: "",
     contestMode: "auto",
     contestValue: "",
     authMode: "manual",

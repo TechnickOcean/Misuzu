@@ -12,6 +12,7 @@ import {
 import WorkspaceCard from "@/features/workspace-registry/components/WorkspaceCard.vue"
 import { useWorkspaceHomePage } from "@/features/workspace-registry/composables/use-workspace-home-page.ts"
 import AppLayout from "@/layouts/AppLayout.vue"
+import EmptyPlaceholder from "@/components/ui/empty-placeholder/EmptyPlaceholder.vue"
 
 const {
   entries,
@@ -122,9 +123,12 @@ const {
 
     <section class="space-y-3 px-3 py-3 md:px-4">
       <p v-if="loading" class="text-sm text-muted-foreground">Loading workspace registry...</p>
-      <p v-else-if="entries.length === 0" class="text-sm text-muted-foreground">
-        No workspace found. Start by creating one.
-      </p>
+      <EmptyPlaceholder
+        v-else-if="entries.length === 0"
+        title="No workspace found"
+        description="Start by creating your first workspace."
+        class="py-8"
+      />
 
       <div class="grid gap-3">
         <WorkspaceCard

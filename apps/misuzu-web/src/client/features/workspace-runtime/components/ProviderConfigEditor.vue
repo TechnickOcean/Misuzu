@@ -37,7 +37,7 @@ function addEntry() {
       baseProvider: "",
       baseUrl: "",
       apiKeyEnvVar: "",
-      api_key: "",
+      api_key: "$env:OPENAI_API_KEY",
       modelMappings: [],
     },
   ])
@@ -168,7 +168,7 @@ function setMappingsText(index: number, value: string | number) {
             :model-value="entry.api_key"
             :disabled="disabled"
             type="password"
-            placeholder="optional inline key"
+            placeholder="$env:OPENAI_API_KEY"
             @update:model-value="(value) => patchEntry(index, { api_key: String(value) })"
           />
         </div>
