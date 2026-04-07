@@ -108,5 +108,5 @@ function normalizeAuthSession(session: AuthSession | undefined) {
 }
 
 function isAuthMode(value: unknown): value is AuthSession["mode"] {
-  return value === "manual" || value === "cookie" || value === "token" || value === "credentials"
+  return value === "manual" || value === "credentials"
 }

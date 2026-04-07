@@ -1,13 +1,16 @@
 import type {
   AgentStateSnapshot,
+  ProviderCatalogItem,
   PluginCatalogItem,
   PluginReadmeResponse,
   PromptMode,
+  RuntimeConfigUpdateRequest,
   RuntimeCreateRequest,
   RuntimeDispatchRequest,
   RuntimeEnqueueRequest,
   RuntimeInitRequest,
   RuntimeModelPoolUpdateRequest,
+  RuntimeWorkspaceSettingsSnapshot,
   RuntimeWorkspaceSnapshot,
   SolverCreateRequest,
   SolverWorkspaceSnapshot,
@@ -31,6 +34,19 @@ export class WorkspaceApiClient {
     const suffix = searchParams.toString()
     const response = await this.request<{ items: PluginCatalogItem[] }>(
       `/api/plugins${suffix ? `?${suffix}` : ""}`,
+    )
+    return response.items
+  }
+
+  async listProviderCatalog(workspaceId?: string) {
+    const searchParams = new URLSearchParams()
+    if (workspaceId?.trim()) {
+      searchParams.set("workspaceId", workspaceId.trim())
+    }
+
+    const suffix = searchParams.toString()
+    const response = await this.request<{ items: ProviderCatalogItem[] }>(
+      `/api/providers/catalog${suffix ? `?${suffix}` : ""}`,
     )
     return response.items
   }
@@ -124,6 +140,60 @@ export class WorkspaceApiClient {
   async enqueueRuntimeChallenge(workspaceId: string, request: RuntimeEnqueueRequest) {
     const response = await this.request<{ snapshot: RuntimeWorkspaceSnapshot }>(
       `/api/workspaces/runtime/${encodeURIComponent(workspaceId)}/queue/enqueue`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    )
+    return response.snapshot
+  }
+
+  async dequeueRuntimeChallenge(workspaceId: string, challengeId: number) {
+    const response = await this.request<{ snapshot: RuntimeWorkspaceSnapshot }>(
+      `/api/workspaces/runtime/${encodeURIComponent(workspaceId)}/queue/dequeue`,
+      {
+        method: "POST",
+        body: JSON.stringify({ challengeId }),
+      },
+    )
+    return response.snapshot
+  }
+
+  async resetRuntimeSolver(workspaceId: string, challengeId: number) {
+    const response = await this.request<{ snapshot: RuntimeWorkspaceSnapshot }>(
+      `/api/workspaces/runtime/${encodeURIComponent(workspaceId)}/solver/reset`,
+      {
+        method: "POST",
+        body: JSON.stringify({ challengeId }),
+      },
+    )
+    return response.snapshot
+  }
+
+  async getRuntimeSettings(workspaceId: string) {
+    const response = await this.request<{ settings: RuntimeWorkspaceSettingsSnapshot }>(
+      `/api/workspaces/runtime/${encodeURIComponent(workspaceId)}/settings`,
+    )
+    return response.settings
+  }
+
+  async updateRuntimeProviderConfig(
+    workspaceId: string,
+    providerConfig: RuntimeCreateRequest["providerConfig"],
+  ) {
+    const response = await this.request<{ snapshot: RuntimeWorkspaceSnapshot }>(
+      `/api/workspaces/runtime/${encodeURIComponent(workspaceId)}/settings/provider-config`,
+      {
+        method: "POST",
+        body: JSON.stringify({ providerConfig }),
+      },
+    )
+    return response.snapshot
+  }
+
+  async updateRuntimeConfig(workspaceId: string, request: RuntimeConfigUpdateRequest) {
+    const response = await this.request<{ snapshot: RuntimeWorkspaceSnapshot }>(
+      `/api/workspaces/runtime/${encodeURIComponent(workspaceId)}/settings/runtime-config`,
       {
         method: "POST",
         body: JSON.stringify(request),

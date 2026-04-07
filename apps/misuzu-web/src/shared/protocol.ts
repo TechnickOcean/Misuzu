@@ -36,10 +36,37 @@ export interface ModelPoolSnapshot {
   hasAvailableModel: boolean
 }
 
+export interface ProviderConfigModelMapping {
+  sourceModelId: string
+  targetModelId?: string
+  targetModelName?: string
+}
+
+export interface ProviderConfigEntry {
+  provider: string
+  baseProvider?: string
+  baseUrl?: string
+  apiKeyEnvVar?: string
+  api_key?: string
+  modelIds?: string[]
+  modelMappings?: Array<string | ProviderConfigModelMapping>
+}
+
+export interface ProviderCatalogModel {
+  modelId: string
+  modelName: string
+}
+
+export interface ProviderCatalogItem {
+  provider: string
+  models: ProviderCatalogModel[]
+}
+
 export interface RuntimeCreateRequest {
   id?: string
   name?: string
   rootDir?: string
+  providerConfig?: ProviderConfigEntry[]
   pluginId?: string
   pluginConfig?: {
     baseUrl: string
@@ -49,9 +76,7 @@ export interface RuntimeCreateRequest {
       | { mode: "title"; value: string }
       | { mode: "url"; value: string }
     auth?: {
-      mode: "manual" | "cookie" | "token" | "credentials"
-      cookie?: string
-      bearerToken?: string
+      mode: "manual" | "credentials"
       username?: string
       password?: string
       loginUrl?: string
@@ -68,6 +93,7 @@ export interface SolverCreateRequest {
   id?: string
   name?: string
   rootDir?: string
+  providerConfig?: ProviderConfigEntry[]
   model?: {
     provider: string
     modelId: string
@@ -83,7 +109,7 @@ export interface ChallengeSummaryView {
   requiresContainer?: boolean
   score: number
   solvedCount: number
-  status: "active" | "queued" | "solved" | "blocked" | "idle"
+  status: "active" | "queued" | "solved" | "blocked" | "idle" | "model_unassigned"
   activeTaskId?: string
   queuedTaskId?: string
   statusReason?: string
@@ -183,6 +209,35 @@ export interface RuntimeModelPoolUpdateRequest {
 
 export interface RuntimeEnqueueRequest {
   challengeId: number
+}
+
+export interface RuntimeDequeueRequest {
+  challengeId: number
+}
+
+export interface RuntimeResetSolverRequest {
+  challengeId: number
+}
+
+export interface RuntimePlatformConfig {
+  pluginId: string
+  pluginConfig: NonNullable<RuntimeCreateRequest["pluginConfig"]>
+  cron?: {
+    noticePollIntervalMs?: number
+    challengeSyncIntervalMs?: number
+  }
+}
+
+export interface RuntimeConfigUpdateRequest {
+  autoOrchestrate?: boolean
+  platformConfig?: RuntimePlatformConfig
+}
+
+export interface RuntimeWorkspaceSettingsSnapshot {
+  providerConfig: ProviderConfigEntry[]
+  autoOrchestrate: boolean
+  platformConfig?: RuntimePlatformConfig
+  providerCatalog: ProviderCatalogItem[]
 }
 
 export interface WsMessage<TType extends string = string, TPayload = unknown> {

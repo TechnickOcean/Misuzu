@@ -3,6 +3,7 @@ import CreateWorkspaceView from "./views/CreateWorkspaceView.vue"
 import HomeView from "./views/HomeView.vue"
 import RuntimeAgentView from "./views/runtime/RuntimeAgentView.vue"
 import RuntimeOverviewView from "./views/runtime/RuntimeOverviewView.vue"
+import RuntimeSettingsView from "./views/runtime/RuntimeSettingsView.vue"
 import RuntimeWorkspaceLayout from "./views/runtime/RuntimeWorkspaceLayout.vue"
 import SolverWorkspaceView from "./views/SolverWorkspaceView.vue"
 
@@ -47,6 +48,17 @@ export const router = createRouter({
           component: RuntimeOverviewView,
           meta: {
             breadcrumb: "Overview",
+          },
+          props: (route) => ({
+            workspaceId: String(route.params.id),
+          }),
+        },
+        {
+          path: "settings",
+          name: "runtime-settings",
+          component: RuntimeSettingsView,
+          meta: {
+            breadcrumb: "Settings",
           },
           props: (route) => ({
             workspaceId: String(route.params.id),

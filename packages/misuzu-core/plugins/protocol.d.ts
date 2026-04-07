@@ -14,11 +14,9 @@ export type ContestBinding =
       mode: "url"
       value: string
     }
-export type AuthMode = "manual" | "cookie" | "token" | "credentials"
+export type AuthMode = "manual" | "credentials"
 export interface PluginAuthConfig {
   mode: AuthMode
-  cookie?: string
-  bearerToken?: string
   username?: string
   password?: string
   loginUrl?: string

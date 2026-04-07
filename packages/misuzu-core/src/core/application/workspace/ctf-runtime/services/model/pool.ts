@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { getEnvApiKey, getModels, getProviders, type Api, type Model } from "@mariozechner/pi-ai"
+import { getEnvApiKey, type Api, type Model } from "@mariozechner/pi-ai"
 import type { ProviderRegistry } from "../../../../providers/registry.ts"
 import type { Logger } from "../../../../../infrastructure/logging/types.ts"
 import { resolveWorkspacePaths } from "../../../shared/paths.ts"
@@ -99,7 +99,7 @@ export class WorkspaceModelPool {
     this.items = persisted?.items ?? []
   }
 
-  getState(): ModelPoolStateSnapshot {
+  getState() {
     const items = this.items.map((item) => {
       const inUse = this.inUseByModel.get(toModelKey(item.provider, item.modelId)) ?? 0
       const modelResolved = Boolean(this.providers.getModel(item.provider, item.modelId))
@@ -128,16 +128,16 @@ export class WorkspaceModelPool {
     }
   }
 
-  listCatalogProviders(): ModelPoolCatalogProvider[] {
-    return getProviders().map((provider) => {
-      const models = getModels(provider).map((model) => ({
+  listCatalogProviders() {
+    return this.providers.listProviders().map((provider) => {
+      const models = this.providers.listModels(provider).map((model) => ({
         modelId: model.id,
         modelName: model.name,
       }))
 
       return {
         provider,
-        hasEnvApiKey: Boolean(getEnvApiKey(provider)),
+        hasEnvApiKey: Boolean(getEnvApiKey(provider) ?? this.providers.getApiKey(provider)),
         models,
       }
     })
@@ -236,7 +236,7 @@ export class WorkspaceModelPool {
     )
   }
 
-  private async loadFromDisk(): Promise<PersistedModelPoolConfig | undefined> {
+  private async loadFromDisk() {
     try {
       const raw = await readFile(this.configFilePath, "utf-8")
       const parsed = JSON.parse(raw) as PersistedModelPoolConfig

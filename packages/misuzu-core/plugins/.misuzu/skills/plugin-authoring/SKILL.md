@@ -104,7 +104,8 @@ Implement protocol auth methods clearly:
 
 Rules:
 
-- For captcha-heavy platforms, support `manual` and `cookie` first.
+- Prioritize `manual` first so EnvironmentAgent can use an interactive flow to build/fix the plugin quickly.
+- Add `credentials` mode only after manual flow is stable.
 - On protected API `401/403`, throw `PlatformAuthError` so runtime can re-login and retry.
 
 ### 6) Implement poll updates for runtime
@@ -142,7 +143,7 @@ Then users can select this plugin id in workspace creation/config pages and set 
 
 In plugin README, explicitly document:
 
-- auth constraints (manual/cookie/token)
+- auth constraints (manual/credentials and current support status)
 - auth expiry behavior and re-login trigger
 - known endpoint assumptions
 - attachment behavior

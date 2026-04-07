@@ -128,6 +128,62 @@ describe("ctf runtime workspace persistence", () => {
     await restoredWorkspace.shutdown()
   })
 
+  test("keeps environment agent state after persisting a different runtime", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const defaultModel = getModels("openai")[0]!
+
+    const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir })
+    await firstWorkspace.setModelPoolItems([
+      {
+        provider: defaultModel.provider,
+        modelId: defaultModel.id,
+        maxConcurrency: 1,
+      },
+    ])
+
+    const firstEnvironmentAgent = firstWorkspace.createEnvironmentAgent({
+      initialState: {
+        thinkingLevel: "high",
+        systemPrompt: "persist-environment-after-runtime-switch",
+      },
+    })
+
+    firstEnvironmentAgent.appendMessage({
+      role: "user",
+      content: "persist-environment-runtime-switch-message",
+      timestamp: Date.now(),
+    })
+    await firstWorkspace.persistRuntimeState()
+    await firstWorkspace.shutdown()
+
+    const secondWorkspace = await createCTFRuntimeWorkspace({ rootDir })
+    await secondWorkspace.attachRuntime({
+      runtimeId: "plugin-runtime",
+      getPersistedState: () => ({ runtime: "plugin" }),
+    })
+    await secondWorkspace.persistRuntimeState()
+    await secondWorkspace.shutdown()
+
+    const thirdWorkspace = await createCTFRuntimeWorkspace({ rootDir })
+    await thirdWorkspace.setModelPoolItems([
+      {
+        provider: defaultModel.provider,
+        modelId: defaultModel.id,
+        maxConcurrency: 1,
+      },
+    ])
+
+    const restoredEnvironmentAgent = thirdWorkspace.createEnvironmentAgent()
+    expect(restoredEnvironmentAgent.state.systemPrompt).toContain(
+      "persist-environment-after-runtime-switch",
+    )
+    expect(JSON.stringify(restoredEnvironmentAgent.state.messages)).toContain(
+      "persist-environment-runtime-switch-message",
+    )
+
+    await thirdWorkspace.shutdown()
+  })
+
   test("loads runtime options from platformConfigPath and resolves env placeholders", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })

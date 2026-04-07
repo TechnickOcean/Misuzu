@@ -2,6 +2,7 @@ import { access, mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { AgentTool } from "@mariozechner/pi-agent-core"
 import { type SolverAgent, type SolverAgentOptions } from "../../../../../../agents/solver.ts"
+import type { Api, Model } from "@mariozechner/pi-ai"
 import { createBaseTools } from "../../../../../../tools/index.ts"
 import type { Logger } from "../../../../../infrastructure/logging/types.ts"
 import {
@@ -14,7 +15,12 @@ import {
   type SolverToolPlugin,
 } from "../../../../../../../plugins/index.ts"
 import type { RuntimeInitOptions } from "./runtime.ts"
-import { type SolverTask, type SolverTaskResult, QueueService } from "../scheduler/queue.ts"
+import {
+  SolverDispatchDeferredError,
+  type SolverTask,
+  type SolverTaskResult,
+  QueueService,
+} from "../scheduler/queue.ts"
 import { SolverWorkspaceService } from "../solver/workspaces.ts"
 import { PlatformAuthManager } from "./auth.ts"
 import { PlatformContestManager } from "./contest.ts"
@@ -31,13 +37,13 @@ export interface ChallengeSolverBinding {
   detail?: ChallengeDetail
   solverId: string
   rootDir: string
-  solver: SolverAgent
+  solver?: SolverAgent
 }
 
 export interface ChallengeSolverActivationState {
   challengeId: number
   solverId: string
-  status: "inactive" | "active"
+  status: "inactive" | "active" | "model_unassigned"
   activeTaskId?: string
   modelId?: string
 }
@@ -144,7 +150,7 @@ export class SolverHub {
     return this.challengeSolvers.get(challengeId)?.solver
   }
 
-  getSolverActivationState(challengeId: number): ChallengeSolverActivationState | undefined {
+  getSolverActivationState(challengeId: number) {
     const binding = this.challengeSolvers.get(challengeId)
     if (!binding) {
       return undefined
@@ -153,7 +159,7 @@ export class SolverHub {
     return this.buildActivationState(binding)
   }
 
-  listSolverActivationStates(): ChallengeSolverActivationState[] {
+  listSolverActivationStates() {
     return [...this.challengeSolvers.values()].map((binding) => this.buildActivationState(binding))
   }
 
@@ -335,29 +341,31 @@ export class SolverHub {
     const detail = await this.getChallenge(challenge.id)
 
     const solverId = `solver-${challenge.id}`
-    const managedSolver = await this.createSolver(solverId, {
-      initialState: {
-        systemPrompt: buildChallengeSolverPrompt(challenge, detail, this.getPluginId()),
-      },
-    })
-    const solver = managedSolver.solver
-
-    solver.setTools([...createBaseTools(managedSolver.rootDir), ...this.createPlatformTools()])
+    const workspace = await this.solverWorkspaces.getOrCreateWorkspace(solverId)
+    const solver = workspace.mainAgent
+    if (solver) {
+      solver.setTools([...createBaseTools(workspace.rootDir), ...this.createPlatformTools()])
+    }
 
     const binding: ChallengeSolverBinding = {
       challenge,
       detail,
       solver,
       solverId,
-      rootDir: managedSolver.rootDir,
+      rootDir: workspace.rootDir,
     }
 
     this.challengeSolvers.set(challenge.id, binding)
     this.ensureChallengeProgressState(challenge.id, solverId)
+
+    if (!binding.solver) {
+      await this.tryHydrateSolverBinding(binding)
+    }
+
     this.queue.registerSolver({
       solverId,
       solve: async (task) => this.solveWithBinding(binding, task),
-      abortActiveTask: () => binding.solver.abort(),
+      abortActiveTask: () => binding.solver?.abort(),
     })
     this.notifyStateChanged()
 
@@ -368,6 +376,35 @@ export class SolverHub {
     })
 
     return binding
+  }
+
+  async refreshUnassignedSolvers() {
+    for (const binding of this.challengeSolvers.values()) {
+      if (binding.solver || this.isChallengeSolved(binding.challenge.id)) {
+        continue
+      }
+
+      await this.tryHydrateSolverBinding(binding)
+    }
+  }
+
+  resetChallengeSolver(challengeId: number) {
+    const binding = this.challengeSolvers.get(challengeId)
+    if (!binding) {
+      return false
+    }
+
+    binding.solver?.abort()
+    binding.solver?.replaceMessages([])
+
+    const progress = this.ensureChallengeProgressState(challengeId, binding.solverId)
+    progress.status = "idle"
+    progress.flagAccepted = false
+    progress.writeUpReady = false
+    progress.blockedReason = undefined
+
+    this.notifyStateChanged()
+    return true
   }
 
   updateChallengeMetadata(challenge: ChallengeSummary) {
@@ -388,7 +425,7 @@ export class SolverHub {
 
     const previous = existing.challenge
     existing.challenge = challenge
-    existing.solver.steer(
+    existing.solver?.steer(
       [
         `Platform challenge metadata updated for [${challenge.id}] ${challenge.title}.`,
         `Score: ${previous.score} -> ${challenge.score}`,
@@ -410,29 +447,47 @@ export class SolverHub {
     const progress = this.ensureChallengeProgressState(binding.challenge.id, binding.solverId)
     progress.blockedReason = undefined
 
-    const preferredModel = binding.solver.state.model
+    const existingSolverModel = binding.solver?.state.model
+    const preferredModel = existingSolverModel
       ? {
-          provider: binding.solver.state.model.provider,
-          modelId: binding.solver.state.model.id,
+          provider: existingSolverModel.provider,
+          modelId: existingSolverModel.id,
         }
       : undefined
-    const modelLease = this.acquireModelLeaseForSolver(preferredModel)
+
+    let modelLease: ReturnType<SolverHub["acquireModelLeaseForSolver"]>
+    try {
+      modelLease = this.acquireModelLeaseForSolver(preferredModel)
+    } catch (error) {
+      if (
+        isModelPoolError(error) &&
+        (error.code === "MODEL_POOL_EMPTY" || error.code === "MODEL_POOL_EXHAUSTED")
+      ) {
+        throw new SolverDispatchDeferredError(
+          `Solver ${binding.solverId} is waiting for model pool capacity (${error.code})`,
+        )
+      }
+
+      throw error
+    }
 
     try {
-      const currentModel = binding.solver.state.model
+      const solver = await this.ensureBindingSolverLoaded(binding, modelLease.model)
+
+      const currentModel = solver.state.model
       if (
         !currentModel ||
         currentModel.provider !== modelLease.model.provider ||
         currentModel.id !== modelLease.model.id
       ) {
-        binding.solver.setModel(modelLease.model)
+        solver.setModel(modelLease.model)
       }
 
       try {
-        if (shouldContinueSolverTask(task.payload, binding.solver.state.messages.length > 0)) {
-          await binding.solver.continue()
+        if (shouldContinueSolverTask(task.payload, solver.state.messages.length > 0)) {
+          await solver.continue()
         } else {
-          await binding.solver.prompt(buildSolverTaskPrompt(binding.challenge, task.payload))
+          await solver.prompt(buildSolverTaskPrompt(binding.challenge, task.payload))
         }
       } catch (error) {
         if (progress.status === "solved" || isAbortLikeError(error)) {
@@ -445,10 +500,10 @@ export class SolverHub {
           taskId: task.taskId,
           error,
         })
-        await binding.solver.continue()
+        await solver.continue()
       }
 
-      await this.completeAcceptedChallenge(binding, progress)
+      await this.completeAcceptedChallenge(binding, solver, progress)
 
       if (!progress.flagAccepted && progress.status !== "solved") {
         progress.status = "idle"
@@ -461,7 +516,7 @@ export class SolverHub {
     const output: SolverTaskResult["output"] = {
       challengeId: binding.challenge.id,
       solverId: binding.solverId,
-      messageCount: binding.solver.state.messages.length,
+      messageCount: binding.solver?.state.messages.length ?? 0,
       challengeStatus: progress.status,
     }
 
@@ -491,6 +546,7 @@ export class SolverHub {
 
   private async completeAcceptedChallenge(
     binding: ChallengeSolverBinding,
+    solver: SolverAgent,
     progress: ChallengeSolverProgressState,
   ) {
     if (!progress.flagAccepted) {
@@ -508,7 +564,7 @@ export class SolverHub {
     progress.writeUpReady = false
     progress.blockedReason = "WriteUp.md is required before challenge completion"
 
-    await binding.solver.prompt(buildWriteUpPrompt(binding.challenge))
+    await solver.prompt(buildWriteUpPrompt(binding.challenge))
 
     if (await this.hasWriteUp(binding.rootDir)) {
       progress.status = "solved"
@@ -586,6 +642,14 @@ export class SolverHub {
   }
 
   private buildActivationState(binding: ChallengeSolverBinding): ChallengeSolverActivationState {
+    if (!binding.solver) {
+      return {
+        challengeId: binding.challenge.id,
+        solverId: binding.solverId,
+        status: "model_unassigned",
+      }
+    }
+
     const executionState = this.queue.getSolverExecutionState(binding.solverId)
     const model = binding.solver.state.model
 
@@ -694,6 +758,69 @@ export class SolverHub {
 
   private async ensureRuntimeContext(): Promise<PlatformRequestContext> {
     return this.withRuntimeContext(async (context) => context)
+  }
+
+  private async tryHydrateSolverBinding(binding: ChallengeSolverBinding) {
+    let modelLease: ReturnType<SolverHub["acquireModelLeaseForSolver"]>
+    try {
+      modelLease = this.acquireModelLeaseForSolver(undefined)
+    } catch (error) {
+      if (
+        isModelPoolError(error) &&
+        (error.code === "MODEL_POOL_EMPTY" || error.code === "MODEL_POOL_EXHAUSTED")
+      ) {
+        return false
+      }
+
+      throw error
+    }
+
+    try {
+      await this.ensureBindingSolverLoaded(binding, modelLease.model)
+      return true
+    } finally {
+      modelLease.release()
+    }
+  }
+
+  private async ensureBindingSolverLoaded(
+    binding: ChallengeSolverBinding,
+    initialModel?: Model<Api>,
+  ) {
+    if (binding.solver) {
+      return binding.solver
+    }
+
+    if (!binding.detail) {
+      binding.detail = await this.getChallenge(binding.challenge.id)
+    }
+
+    const managedSolver = await this.createSolver(binding.solverId, {
+      initialState: {
+        model: initialModel,
+        systemPrompt: buildChallengeSolverPrompt(
+          binding.challenge,
+          binding.detail,
+          this.getPluginId(),
+        ),
+      },
+    })
+
+    const solver = managedSolver.solver
+    solver.setTools([...createBaseTools(managedSolver.rootDir), ...this.createPlatformTools()])
+    if (
+      initialModel &&
+      (!solver.state.model ||
+        solver.state.model.provider !== initialModel.provider ||
+        solver.state.model.id !== initialModel.id)
+    ) {
+      solver.setModel(initialModel)
+    }
+
+    binding.solver = solver
+    binding.rootDir = managedSolver.rootDir
+    this.notifyStateChanged()
+    return solver
   }
 
   private notifyStateChanged() {

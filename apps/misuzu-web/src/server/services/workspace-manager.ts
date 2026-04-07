@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { mkdir, readFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
@@ -17,10 +17,15 @@ import {
 import type {
   AgentStateSnapshot,
   ChallengeSummaryView,
+  ProviderCatalogItem,
+  ProviderConfigEntry,
   PluginCatalogItem,
   PluginReadmeResponse,
   PromptMode,
+  RuntimeConfigUpdateRequest,
   RuntimeCreateRequest,
+  RuntimePlatformConfig,
+  RuntimeWorkspaceSettingsSnapshot,
   RuntimeWorkspaceSnapshot,
   SolverCreateRequest,
   SolverWorkspaceSnapshot,
@@ -89,6 +94,15 @@ export class WorkspaceManager {
       }))
   }
 
+  async listProviderCatalog(workspaceId?: string): Promise<ProviderCatalogItem[]> {
+    if (!workspaceId) {
+      return listBuiltinProviderCatalog()
+    }
+
+    const session = await this.requireRuntimeSession(workspaceId)
+    return toProviderCatalog(session.workspace.listModelPoolCatalog())
+  }
+
   async getPluginReadme(pluginId: string): Promise<PluginReadmeResponse> {
     const entry = findBuiltinPlugin(pluginId)
     if (!entry) {
@@ -132,6 +146,11 @@ export class WorkspaceManager {
 
     const session = await this.createRuntimeSession(entry)
     session.autoOrchestrate = Boolean(request.autoOrchestrate)
+
+    if (request.providerConfig) {
+      await this.writeProviderConfig(session.workspace.providerConfigPath, request.providerConfig)
+      session.workspace.reloadProviderConfig()
+    }
 
     await this.applyModelPool(session.workspace, request.modelPool)
 
@@ -224,6 +243,134 @@ export class WorkspaceManager {
     this.ensureRuntimeInitialized(session)
 
     void session.workspace.enqueueTask({ challenge: challengeId }).catch(() => {})
+
+    if (session.workspace.isAutoDispatchManaged()) {
+      session.workspace.scheduleAutoDispatchRebalance(true)
+    }
+
+    this.publishRuntimeSnapshot(session)
+    return this.toRuntimeSnapshot(session)
+  }
+
+  async dequeueRuntimeChallenge(workspaceId: string, challengeId: number) {
+    const session = await this.requireRuntimeSession(workspaceId)
+    this.ensureRuntimeInitialized(session)
+
+    let cancelledCount = 0
+    const pending = session.workspace.listPendingSchedulerTasks()
+    for (const task of pending) {
+      if (resolveChallengeIdFromPayload(task.payload) !== challengeId) {
+        continue
+      }
+
+      const cancelled = session.workspace.cancelSchedulerTask(task.taskId)
+      if (cancelled) {
+        cancelledCount += 1
+      }
+    }
+
+    const inflight = session.workspace.listInflightSchedulerTasks()
+    for (const task of inflight) {
+      if (resolveChallengeIdFromPayload(task.task.payload) !== challengeId) {
+        continue
+      }
+
+      const cancelled = session.workspace.cancelSchedulerTask(task.task.taskId)
+      if (cancelled) {
+        cancelledCount += 1
+      }
+    }
+
+    if (cancelledCount > 0 && session.workspace.isAutoDispatchManaged()) {
+      session.workspace.scheduleAutoDispatchRebalance(true)
+    }
+
+    this.publishRuntimeSnapshot(session)
+    return this.toRuntimeSnapshot(session)
+  }
+
+  async resetRuntimeSolver(workspaceId: string, challengeId: number) {
+    const session = await this.requireRuntimeSession(workspaceId)
+    this.ensureRuntimeInitialized(session)
+
+    await this.dequeueRuntimeChallenge(workspaceId, challengeId)
+
+    const resetChallengeSolver = (
+      session.workspace as {
+        resetChallengeSolver?: (nextChallengeId: number) => boolean
+      }
+    ).resetChallengeSolver
+
+    if (typeof resetChallengeSolver === "function") {
+      if (!resetChallengeSolver(challengeId)) {
+        throw new Error(`Challenge solver not found: ${String(challengeId)}`)
+      }
+    } else {
+      const challenge = this.toRuntimeSnapshot(session).challenges.find(
+        (item) => item.challengeId === challengeId,
+      )
+      if (!challenge) {
+        throw new Error(`Challenge solver not found: ${String(challengeId)}`)
+      }
+
+      session.workspace.getSolverById(challenge.solverId)?.abort()
+      session.workspace.getSolverById(challenge.solverId)?.replaceMessages([])
+    }
+
+    if (session.workspace.isAutoDispatchManaged()) {
+      session.workspace.scheduleAutoDispatchRebalance(true)
+    }
+
+    this.publishRuntimeSnapshot(session)
+    return this.toRuntimeSnapshot(session)
+  }
+
+  async getRuntimeSettings(workspaceId: string): Promise<RuntimeWorkspaceSettingsSnapshot> {
+    const session = await this.requireRuntimeSession(workspaceId)
+    const platformConfig =
+      this.resolveRuntimePlatformConfig(session) ??
+      this.toRuntimePlatformConfig(await session.workspace.loadRuntimeOptionsFromPlatformConfig())
+
+    return {
+      providerConfig: await this.readProviderConfig(session.workspace.providerConfigPath),
+      autoOrchestrate: session.autoOrchestrate,
+      platformConfig,
+      providerCatalog: toProviderCatalog(session.workspace.listModelPoolCatalog()),
+    }
+  }
+
+  async updateRuntimeProviderConfig(workspaceId: string, providerConfig: ProviderConfigEntry[]) {
+    const session = await this.requireRuntimeSession(workspaceId)
+
+    await this.writeProviderConfig(session.workspace.providerConfigPath, providerConfig)
+    session.workspace.reloadProviderConfig()
+
+    this.publishRuntimeSnapshot(session)
+    return this.toRuntimeSnapshot(session)
+  }
+
+  async updateRuntimeConfig(workspaceId: string, request: RuntimeConfigUpdateRequest) {
+    const session = await this.requireRuntimeSession(workspaceId)
+
+    if (typeof request.autoOrchestrate === "boolean") {
+      session.autoOrchestrate = request.autoOrchestrate
+      this.persistRuntimeEntry(session)
+      await this.registry.upsertEntry(session.entry)
+      this.publishRegistryUpdate()
+
+      session.workspace.setAutoDispatchManaged(session.autoOrchestrate)
+      if (session.autoOrchestrate && !session.workspace.isTaskDispatchPaused()) {
+        session.workspace.scheduleAutoDispatchRebalance(true)
+      }
+    }
+
+    if (request.platformConfig) {
+      await this.writeRuntimePlatformConfig(
+        session.workspace.platformConfigPath,
+        request.platformConfig,
+      )
+    }
+
     this.publishRuntimeSnapshot(session)
     return this.toRuntimeSnapshot(session)
   }
@@ -274,6 +421,13 @@ export class WorkspaceManager {
       rootDir,
       createdAt: now,
       updatedAt: now,
+    }
+
+    if (request.providerConfig) {
+      await this.writeProviderConfig(
+        resolve(rootDir, ".misuzu", "providers.json"),
+        request.providerConfig,
+      )
     }
 
     const workspace = await createSolverWorkspace({ rootDir })
@@ -577,6 +731,13 @@ export class WorkspaceManager {
   private toRuntimeSnapshot(session: RuntimeWorkspaceSession): RuntimeWorkspaceSnapshot {
     const activationByChallengeId = new Map<number, ChallengeSummaryView>()
     for (const activation of session.workspace.listSolverActivationStates()) {
+      const status =
+        activation.status === "active"
+          ? "active"
+          : activation.status === "model_unassigned"
+            ? "model_unassigned"
+            : "idle"
+
       activationByChallengeId.set(activation.challengeId, {
         challengeId: activation.challengeId,
         solverId: activation.solverId,
@@ -584,7 +745,7 @@ export class WorkspaceManager {
         category: "unknown",
         score: 0,
         solvedCount: 0,
-        status: activation.status === "active" ? "active" : "idle",
+        status,
         activeTaskId: activation.activeTaskId,
         modelId: activation.modelId,
       })
@@ -627,7 +788,12 @@ export class WorkspaceManager {
         status,
         activeTaskId: existing?.activeTaskId,
         queuedTaskId,
-        statusReason: status === "blocked" ? progress?.blockedReason : undefined,
+        statusReason:
+          status === "blocked"
+            ? progress?.blockedReason
+            : status === "model_unassigned"
+              ? "Solver has no model assignment from model pool yet"
+              : undefined,
         modelId: existing?.modelId,
       })
     }
@@ -726,6 +892,185 @@ export class WorkspaceManager {
     await workspace.setModelPoolItems(items)
   }
 
+  private resolveRuntimePlatformConfig(
+    session: RuntimeWorkspaceSession,
+  ): RuntimePlatformConfig | undefined {
+    return this.toRuntimePlatformConfig(session.workspace.getPersistedRuntimeOptions())
+  }
+
+  private toRuntimePlatformConfig(
+    runtimeOptions:
+      | {
+          pluginId?: string
+          pluginConfig?: RuntimePlatformConfig["pluginConfig"]
+          cron?: RuntimePlatformConfig["cron"]
+        }
+      | undefined,
+  ): RuntimePlatformConfig | undefined {
+    if (!runtimeOptions?.pluginConfig) {
+      return undefined
+    }
+
+    const pluginId = runtimeOptions.pluginId
+    if (!pluginId) {
+      return undefined
+    }
+
+    return {
+      pluginId,
+      pluginConfig: runtimeOptions.pluginConfig,
+      cron: runtimeOptions.cron,
+    }
+  }
+
+  private async readProviderConfig(providerConfigPath: string): Promise<ProviderConfigEntry[]> {
+    try {
+      const raw = await readFile(providerConfigPath, "utf-8")
+      const parsed = JSON.parse(raw) as unknown
+      if (!Array.isArray(parsed)) {
+        return []
+      }
+
+      return parsed
+        .filter((item): item is ProviderConfigEntry => {
+          if (!item || typeof item !== "object") {
+            return false
+          }
+
+          const provider = (item as { provider?: unknown }).provider
+          return typeof provider === "string" && provider.trim().length > 0
+        })
+        .map((item) => ({
+          provider: item.provider.trim(),
+          baseProvider:
+            typeof item.baseProvider === "string" && item.baseProvider.trim().length > 0
+              ? item.baseProvider.trim()
+              : undefined,
+          baseUrl: typeof item.baseUrl === "string" ? item.baseUrl : undefined,
+          apiKeyEnvVar:
+            typeof item.apiKeyEnvVar === "string" && item.apiKeyEnvVar.trim().length > 0
+              ? item.apiKeyEnvVar.trim()
+              : undefined,
+          api_key:
+            typeof item.api_key === "string" && item.api_key.trim().length > 0
+              ? item.api_key.trim()
+              : undefined,
+          modelIds: Array.isArray(item.modelIds)
+            ? item.modelIds.filter((value): value is string => typeof value === "string")
+            : undefined,
+          modelMappings: Array.isArray(item.modelMappings)
+            ? item.modelMappings.filter(
+                (mapping): mapping is NonNullable<ProviderConfigEntry["modelMappings"]>[number] =>
+                  typeof mapping === "string" || (Boolean(mapping) && typeof mapping === "object"),
+              )
+            : undefined,
+        }))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return []
+      }
+
+      throw error
+    }
+  }
+
+  private async writeProviderConfig(providerConfigPath: string, entries: ProviderConfigEntry[]) {
+    const normalizedEntries = entries
+      .filter((entry) => typeof entry.provider === "string" && entry.provider.trim().length > 0)
+      .map((entry) => ({
+        provider: entry.provider.trim(),
+        baseProvider:
+          typeof entry.baseProvider === "string" && entry.baseProvider.trim().length > 0
+            ? entry.baseProvider.trim()
+            : undefined,
+        baseUrl: typeof entry.baseUrl === "string" ? entry.baseUrl : undefined,
+        apiKeyEnvVar:
+          typeof entry.apiKeyEnvVar === "string" && entry.apiKeyEnvVar.trim().length > 0
+            ? entry.apiKeyEnvVar.trim()
+            : undefined,
+        api_key:
+          typeof entry.api_key === "string" && entry.api_key.trim().length > 0
+            ? entry.api_key.trim()
+            : undefined,
+        modelIds:
+          Array.isArray(entry.modelIds) && entry.modelIds.length > 0
+            ? entry.modelIds
+                .map((value) => (typeof value === "string" ? value.trim() : ""))
+                .filter((value) => value.length > 0)
+            : undefined,
+        modelMappings:
+          Array.isArray(entry.modelMappings) && entry.modelMappings.length > 0
+            ? entry.modelMappings
+                .map((mapping) => {
+                  if (typeof mapping === "string") {
+                    const sourceModelId = mapping.trim()
+                    return sourceModelId.length > 0 ? sourceModelId : undefined
+                  }
+
+                  if (!mapping || typeof mapping !== "object") {
+                    return undefined
+                  }
+
+                  const sourceModelId =
+                    typeof mapping.sourceModelId === "string" ? mapping.sourceModelId.trim() : ""
+                  if (!sourceModelId) {
+                    return undefined
+                  }
+
+                  const targetModelId =
+                    typeof mapping.targetModelId === "string" &&
+                    mapping.targetModelId.trim().length > 0
+                      ? mapping.targetModelId.trim()
+                      : undefined
+                  const targetModelName =
+                    typeof mapping.targetModelName === "string" &&
+                    mapping.targetModelName.trim().length > 0
+                      ? mapping.targetModelName.trim()
+                      : undefined
+
+                  return {
+                    sourceModelId,
+                    targetModelId,
+                    targetModelName,
+                  }
+                })
+                .filter(
+                  (mapping): mapping is Exclude<typeof mapping, undefined> => mapping !== undefined,
+                )
+            : undefined,
+      }))
+      .map((entry) => {
+        if (!entry.baseProvider) {
+          return {
+            provider: entry.provider,
+            apiKeyEnvVar: entry.apiKeyEnvVar,
+            api_key: entry.api_key,
+          }
+        }
+
+        return {
+          provider: entry.provider,
+          baseProvider: entry.baseProvider,
+          baseUrl: entry.baseUrl,
+          apiKeyEnvVar: entry.apiKeyEnvVar,
+          api_key: entry.api_key,
+          modelIds: entry.modelIds,
+          modelMappings: entry.modelMappings,
+        }
+      })
+
+    await mkdir(dirname(providerConfigPath), { recursive: true })
+    await writeFile(providerConfigPath, `${JSON.stringify(normalizedEntries, null, 2)}\n`, "utf-8")
+  }
+
+  private async writeRuntimePlatformConfig(
+    platformConfigPath: string,
+    platformConfig: RuntimePlatformConfig,
+  ) {
+    await mkdir(dirname(platformConfigPath), { recursive: true })
+    await writeFile(platformConfigPath, `${JSON.stringify(platformConfig, null, 2)}\n`, "utf-8")
+  }
+
   private persistRuntimeEntry(session: RuntimeWorkspaceSession) {
     const runtimeOptions = session.workspace.getPersistedRuntimeOptions()
     const now = new Date().toISOString()
@@ -741,6 +1086,7 @@ export class WorkspaceManager {
   }
 
   private publishRuntimeSnapshot(session: RuntimeWorkspaceSession) {
+    this.bindRuntimeSolverAgents(session)
     this.publishWs(`runtime:${session.id}`, {
       type: "runtime.snapshot",
       payload: {
@@ -793,13 +1139,32 @@ function challengeStatusWeight(status: ChallengeSummaryView["status"]) {
       return 0
     case "queued":
       return 1
-    case "solved":
+    case "model_unassigned":
       return 2
-    case "blocked":
+    case "solved":
       return 3
-    case "idle":
+    case "blocked":
       return 4
+    case "idle":
+      return 5
   }
+}
+
+function toProviderCatalog(
+  providers: Array<{ provider: string; models: Array<{ modelId: string; modelName: string }> }>,
+): ProviderCatalogItem[] {
+  return providers.map((provider) => ({
+    provider: provider.provider,
+    models: provider.models.map((model) => ({
+      modelId: model.modelId,
+      modelName: model.modelName,
+    })),
+  }))
+}
+
+function listBuiltinProviderCatalog(): ProviderCatalogItem[] {
+  const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir: APP_ROOT_DIR })
+  return toProviderCatalog(workspace.listModelPoolCatalog())
 }
 
 function resolveChallengeStatus(input: {
@@ -813,6 +1178,10 @@ function resolveChallengeStatus(input: {
 
   if (input.queuedTaskId) {
     return "queued"
+  }
+
+  if (input.activationStatus === "model_unassigned") {
+    return "model_unassigned"
   }
 
   if (input.progressStatus === "solved") {

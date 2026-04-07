@@ -56,6 +56,20 @@ describe("workspace provider registry", () => {
     expect(workspace.bootstrap()).toEqual([])
   })
 
+  test("reads inline api_key from providers.json for built-in providers", async () => {
+    const workspaceDir = await createWorkspaceWithProviderConfig([
+      {
+        provider: "openai",
+        api_key: "inline-openai-key",
+      },
+    ])
+
+    const workspace = createSolverWorkspaceWithoutPersistence({ rootDir: workspaceDir })
+    workspace.bootstrap()
+
+    expect(workspace.providers.getApiKey("openai")).toBe("inline-openai-key")
+  })
+
   test("keeps provider registries isolated between workspaces", async () => {
     const sourceModel = getModels("openai")[0]
     expect(sourceModel).toBeDefined()

@@ -85,12 +85,6 @@ const GENERAL_QUERY_RULE: RateLimitRule = {
   windowMs: 60_000,
 }
 
-const emptyParamsSchema = {
-  type: "object",
-  properties: {},
-  additionalProperties: false,
-} as const
-
 const challengeIdSchema = {
   type: "object",
   properties: {
@@ -201,22 +195,6 @@ export function transformPluginToTools(
 
   const tools: PluginTool[] = []
   const limiter = new SlidingWindowRateLimiter()
-
-  tools.push(
-    withRateLimit(
-      {
-        name: `${prefix}list_challenges`,
-        label: `${prefix}list_challenges`,
-        description: "List all challenges in the currently bound contest.",
-        parameters: emptyParamsSchema,
-        async execute() {
-          return createResult(await plugin.listChallenges())
-        },
-      },
-      limiter,
-      GENERAL_QUERY_RULE,
-    ),
-  )
 
   tools.push(
     withRateLimit(

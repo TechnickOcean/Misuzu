@@ -132,33 +132,13 @@ export class GzctfPlugin implements CTFPlatformPlugin {
         })
 
         return {
-          mode: "cookie",
+          mode: "manual",
           cookie: result.cookieHeader,
           refreshable: false,
         }
       }
-      case "cookie":
-        if (!auth.cookie) {
-          throw new Error("Cookie auth mode requires auth.cookie")
-        }
-        return {
-          mode: "cookie",
-          cookie: auth.cookie,
-          refreshable: false,
-        }
-      case "token":
-        if (!auth.bearerToken) {
-          throw new Error("Token auth mode requires auth.bearerToken")
-        }
-        return {
-          mode: "token",
-          bearerToken: auth.bearerToken,
-          refreshable: false,
-        }
       case "credentials":
-        throw new Error(
-          "Credentials login is not supported for this adapter. Use manual auth mode to launch headed browser login.",
-        )
+        throw new Error("Not implemented: credentials auth for gzctf plugin")
     }
   }
 

@@ -87,6 +87,8 @@ export interface PersistedCTFRuntimeSnapshot {
 export interface PersistedCTFRuntimeWorkspaceState {
   version: string
   lastModified: string
+  // Dedicated EnvironmentAgent snapshot retained across runtime switches.
+  environmentRuntimeState?: PersistedEnvironmentAgentRuntimeState
   runtimeState?: PersistedCTFRuntimeState
   runtime?: PersistedCTFRuntimeSnapshot
 }

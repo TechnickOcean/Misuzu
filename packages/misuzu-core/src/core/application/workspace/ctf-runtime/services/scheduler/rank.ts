@@ -63,7 +63,7 @@ function normalizeChallengeCategory(category: string) {
     return "web"
   }
 
-  if (normalized === "re" || normalized.includes("reverse")) {
+  if (normalized === "re" || normalized.includes("reverse") || normalized === "binary") {
     return "re"
   }
 

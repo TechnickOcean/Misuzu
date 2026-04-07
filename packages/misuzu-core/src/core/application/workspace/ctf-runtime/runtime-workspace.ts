@@ -6,10 +6,7 @@ import {
   createDefaultEnvironmentAgent,
   type EnvironmentAgentOptions,
 } from "../../../../agents/environment.ts"
-import {
-  loadBuiltinPluginCatalog,
-  type BuiltinPluginCatalogEntry,
-} from "../../../../plugins/catalog.ts"
+import { loadBuiltinPluginCatalog } from "../../../../plugins/catalog.ts"
 import type { Container } from "../../../infrastructure/di/container.ts"
 import { providerRegistryToken } from "../../../infrastructure/di/tokens.ts"
 import { ProviderRegistry } from "../../providers/registry.ts"
@@ -52,7 +49,6 @@ import {
   CTF_RUNTIME_STATE_VERSION,
   type PersistedEnvironmentAgentRuntimeState,
   type PersistedCTFRuntimeConfig,
-  type PersistedCTFRuntimeManagedChallenge,
   type PersistedCTFRuntimeQueueState,
   type PersistedCTFRuntimeSnapshot,
   type PersistedCTFRuntimeState,
@@ -93,6 +89,8 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
 
   private readonly runtimePersistence: CTFRuntimePersistence
   private pendingRuntimeState?: PersistedCTFRuntimeState
+  private pendingEnvironmentRuntimeState?: PersistedEnvironmentAgentRuntimeState
+  private preservedEnvironmentRuntimeState?: PersistedEnvironmentAgentRuntimeState
   private pendingRuntimeSnapshot?: PersistedCTFRuntimeSnapshot
   private runtimeConfig?: PersistedCTFRuntimeConfig
   private runtimeInitialized = false
@@ -141,7 +139,20 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     await this.runtimePersistence.initialize(this.rootDir)
     const state = this.runtimePersistence.getState()
     this.pendingRuntimeState = state?.runtimeState
+    this.pendingEnvironmentRuntimeState = state?.environmentRuntimeState
     this.pendingRuntimeSnapshot = state?.runtime
+
+    // Backward compatibility: older snapshots stored EnvironmentAgent payload in runtimeState.
+    if (!this.pendingEnvironmentRuntimeState) {
+      const { restoredState, remainingRuntimeState } = consumePendingEnvironmentRuntimeState(
+        this.pendingRuntimeState,
+        this.logger,
+      )
+      this.pendingEnvironmentRuntimeState = restoredState
+      this.pendingRuntimeState = remainingRuntimeState
+    }
+
+    this.preservedEnvironmentRuntimeState = this.pendingEnvironmentRuntimeState
   }
 
   get providers(): ProviderRegistry {
@@ -174,6 +185,8 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
 
   async setModelPoolItems(items: ModelPoolItem[]) {
     await this.modelPool.setItems(items)
+    await this.solverHub.refreshUnassignedSolvers()
+    this.queue.wake()
   }
 
   async deriveSolverWorkspace(solverId: string) {
@@ -217,7 +230,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     return join(this.markerDir, "platform.json")
   }
 
-  listAvailablePlugins(): BuiltinPluginCatalogEntry[] {
+  listAvailablePlugins() {
     return loadBuiltinPluginCatalog()
   }
 
@@ -225,7 +238,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     return this.solverHub.getManagedChallengeIds()
   }
 
-  listManagedChallenges(): PersistedCTFRuntimeManagedChallenge[] {
+  listManagedChallenges() {
     return this.solverHub.snapshotState().managedChallenges
   }
 
@@ -238,15 +251,15 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
       ?.solver
   }
 
-  getSolverActivationState(challengeId: number): CTFSolverActivationState | undefined {
+  getSolverActivationState(challengeId: number) {
     return this.solverHub.getSolverActivationState(challengeId)
   }
 
-  listSolverActivationStates(): CTFSolverActivationState[] {
+  listSolverActivationStates() {
     return this.solverHub.listSolverActivationStates()
   }
 
-  listSolverProgressStates(): CTFSolverProgressState[] {
+  listSolverProgressStates() {
     return this.solverHub.listChallengeProgressStates()
   }
 
@@ -311,6 +324,10 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     return this.queue.cancelTask(taskId)
   }
 
+  resetChallengeSolver(challengeId: number) {
+    return this.solverHub.resetChallengeSolver(challengeId)
+  }
+
   pauseTaskDispatch() {
     this.rankOrchestrator.setDispatchAutoManaged(false)
     this.queue.pause()
@@ -345,7 +362,21 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
   }
 
   async attachRuntime(runtime: CTFRuntime) {
+    this.captureEnvironmentRuntimeStateFromActiveRuntime()
     this.runtime = runtime
+
+    if (runtime.runtimeId === ENVIRONMENT_AGENT_RUNTIME_ID) {
+      if (this.pendingEnvironmentRuntimeState && runtime.restoreFromPersistedState) {
+        await runtime.restoreFromPersistedState(this.pendingEnvironmentRuntimeState)
+      }
+
+      if (this.pendingEnvironmentRuntimeState) {
+        this.preservedEnvironmentRuntimeState = this.pendingEnvironmentRuntimeState
+      }
+
+      this.pendingEnvironmentRuntimeState = undefined
+      return
+    }
 
     if (
       this.pendingRuntimeState &&
@@ -362,12 +393,14 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     this.ensureRuntimePersistenceInitialized()
 
     const runtimeState = this.getRuntimeStatePayload()
+    const environmentRuntimeState = this.getEnvironmentRuntimeStatePayload()
     const runtimeSnapshot = this.runtimeInitialized ? this.getRuntimeSnapshot() : undefined
-    if (!runtimeState && !runtimeSnapshot) {
+    if (!runtimeState && !runtimeSnapshot && !environmentRuntimeState) {
       throw new Error("CTFRuntimeWorkspace has no runtime state to persist")
     }
 
     await this.runtimePersistence.saveState({
+      environmentRuntimeState,
       runtimeState,
       runtime: runtimeSnapshot,
     })
@@ -379,6 +412,8 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
 
     await this.runtimePersistence.clear()
     this.pendingRuntimeState = undefined
+    this.pendingEnvironmentRuntimeState = undefined
+    this.preservedEnvironmentRuntimeState = undefined
     this.pendingRuntimeSnapshot = undefined
     this.runtimeConfig = undefined
     this.runtimeInitialized = false
@@ -501,7 +536,10 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
 
   private canPersistRuntimeStateNow() {
     return (
-      this.runtimePersistence.isInitialized && (this.runtimeInitialized || Boolean(this.runtime))
+      this.runtimePersistence.isInitialized &&
+      (this.runtimeInitialized ||
+        Boolean(this.runtime) ||
+        Boolean(this.preservedEnvironmentRuntimeState))
     )
   }
 
@@ -525,7 +563,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
   }
 
   private getRuntimeStatePayload() {
-    if (!this.runtime) {
+    if (!this.runtime || this.runtime.runtimeId === ENVIRONMENT_AGENT_RUNTIME_ID) {
       return undefined
     }
 
@@ -533,6 +571,36 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
       runtimeId: this.runtime.runtimeId,
       payload: this.runtime.getPersistedState(),
     } satisfies PersistedCTFRuntimeState
+  }
+
+  private getEnvironmentRuntimeStatePayload() {
+    if (this.runtime?.runtimeId !== ENVIRONMENT_AGENT_RUNTIME_ID) {
+      return this.preservedEnvironmentRuntimeState
+    }
+
+    const state = normalizePersistedEnvironmentRuntimeStatePayload(
+      this.runtime.getPersistedState(),
+      this.logger,
+    )
+    if (state) {
+      this.preservedEnvironmentRuntimeState = state
+    }
+
+    return this.preservedEnvironmentRuntimeState
+  }
+
+  private captureEnvironmentRuntimeStateFromActiveRuntime() {
+    if (this.runtime?.runtimeId !== ENVIRONMENT_AGENT_RUNTIME_ID) {
+      return
+    }
+
+    const state = normalizePersistedEnvironmentRuntimeStatePayload(
+      this.runtime.getPersistedState(),
+      this.logger,
+    )
+    if (state) {
+      this.preservedEnvironmentRuntimeState = state
+    }
   }
 
   private restoreQueueFromSnapshot(snapshot: PersistedCTFRuntimeSnapshot | undefined) {
@@ -607,12 +675,12 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
   private buildEnvironmentRestoreContext(
     agentOptions: EnvironmentAgentOptions,
   ): EnvironmentRestoreContext {
-    // Environment-agent runtime state is single-consume to avoid replaying it multiple times.
-    const { restoredState, remainingRuntimeState } = consumePendingEnvironmentRuntimeState(
-      this.pendingRuntimeState,
-      this.logger,
-    )
-    this.pendingRuntimeState = remainingRuntimeState
+    // Keep one stored EnvironmentAgent snapshot and consume it once per process boot.
+    const restoredState = this.pendingEnvironmentRuntimeState
+    this.pendingEnvironmentRuntimeState = undefined
+    if (restoredState) {
+      this.preservedEnvironmentRuntimeState = restoredState
+    }
 
     const { initialState, baseSystemPrompt } = buildEnvironmentInitialStateContext({
       initialState: agentOptions.initialState,

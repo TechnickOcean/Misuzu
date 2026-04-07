@@ -16,6 +16,13 @@ export interface SolverExecutionState {
   activeTaskId?: string
 }
 
+export class SolverDispatchDeferredError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "SolverDispatchDeferredError"
+  }
+}
+
 export type SolverTaskCancelResult = "pending" | "inflight"
 
 export interface SolverRunner {
@@ -38,6 +45,7 @@ export class QueueService {
   private readonly idleSolverQueue: string[] = []
   private readonly busySolverIds = new Set<string>()
   private readonly inflightTasks = new Map<string, SolverTask>()
+  private readonly deferredTaskIds = new Set<string>()
   private taskSequence = 0
   private paused = false
   private onStateChanged: QueueStateChangeListener = () => {}
@@ -74,9 +82,14 @@ export class QueueService {
 
     return new Promise<SolverTaskResult>((resolve, reject) => {
       this.pendingTaskQueue.push({ task, resolve, reject })
+      this.deferredTaskIds.delete(task.taskId)
       this.notifyStateChanged()
       this.scheduleDispatch()
     })
+  }
+
+  wake() {
+    this.scheduleDispatch()
   }
 
   pause() {
@@ -115,6 +128,7 @@ export class QueueService {
 
     this.pendingTaskQueue.length = 0
     this.inflightTasks.clear()
+    this.deferredTaskIds.clear()
     this.enqueueRestoredTasks(state)
 
     this.notifyStateChanged()
@@ -183,6 +197,7 @@ export class QueueService {
     )
     if (pendingTaskIndex >= 0) {
       const [removedTask] = this.pendingTaskQueue.splice(pendingTaskIndex, 1)
+      this.deferredTaskIds.delete(taskId)
       removedTask?.reject(new Error(`Task cancelled: ${taskId}`))
       this.notifyStateChanged()
       return "pending"
@@ -216,7 +231,7 @@ export class QueueService {
       return false
     }
 
-    const pendingTask = this.pendingTaskQueue.shift()
+    const pendingTask = this.takeNextDispatchableTask()
     if (!pendingTask) {
       return false
     }
@@ -237,7 +252,36 @@ export class QueueService {
     return this.pendingTaskQueue.length > 0 && this.idleSolverQueue.length > 0
   }
 
+  private takeNextDispatchableTask() {
+    if (this.pendingTaskQueue.length === 0) {
+      return undefined
+    }
+
+    let deferredSeen = 0
+    const queueLength = this.pendingTaskQueue.length
+    while (deferredSeen < queueLength) {
+      const candidate = this.pendingTaskQueue.shift()
+      if (!candidate) {
+        break
+      }
+
+      if (!this.deferredTaskIds.has(candidate.task.taskId)) {
+        return candidate
+      }
+
+      this.pendingTaskQueue.push(candidate)
+      deferredSeen += 1
+    }
+
+    if (deferredSeen > 0) {
+      this.deferredTaskIds.clear()
+    }
+
+    return undefined
+  }
+
   private markTaskInflight(solverId: string, task: SolverTask) {
+    this.deferredTaskIds.delete(task.taskId)
     this.busySolverIds.add(solverId)
     this.inflightTasks.set(solverId, task)
     this.notifyStateChanged()
@@ -257,6 +301,15 @@ export class QueueService {
       })
       .catch((error) => {
         this.releaseSolver(solverId)
+
+        if (isSolverDispatchDeferredError(error)) {
+          this.deferredTaskIds.add(pendingTask.task.taskId)
+          this.pendingTaskQueue.push(pendingTask)
+          this.notifyStateChanged()
+          this.scheduleDispatch()
+          return
+        }
+
         this.scheduleDispatch()
         pendingTask.reject(error)
       })
@@ -321,4 +374,8 @@ export class QueueService {
   private notifyStateChanged() {
     this.onStateChanged()
   }
+}
+
+function isSolverDispatchDeferredError(error: unknown): error is SolverDispatchDeferredError {
+  return error instanceof SolverDispatchDeferredError
 }

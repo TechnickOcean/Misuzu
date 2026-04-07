@@ -1,11 +1,15 @@
 import { Hono } from "hono"
 import type {
+  RuntimeConfigUpdateRequest,
   PromptRequest,
   RuntimeCreateRequest,
+  RuntimeDequeueRequest,
   RuntimeDispatchRequest,
   RuntimeEnqueueRequest,
   RuntimeInitRequest,
   RuntimeModelPoolUpdateRequest,
+  RuntimeResetSolverRequest,
+  ProviderConfigEntry,
   SolverCreateRequest,
 } from "../../shared/protocol.ts"
 import { WorkspaceManager } from "../services/workspace-manager.ts"
@@ -83,6 +87,44 @@ export function registerApiRoutes(app: Hono, manager: WorkspaceManager) {
     return c.json({ snapshot })
   })
 
+  api.post("/workspaces/runtime/:workspaceId/queue/dequeue", async (c) => {
+    const request = await c.req.json<RuntimeDequeueRequest>()
+    const snapshot = await manager.dequeueRuntimeChallenge(
+      c.req.param("workspaceId"),
+      Number(request.challengeId),
+    )
+    return c.json({ snapshot })
+  })
+
+  api.post("/workspaces/runtime/:workspaceId/solver/reset", async (c) => {
+    const request = await c.req.json<RuntimeResetSolverRequest>()
+    const snapshot = await manager.resetRuntimeSolver(
+      c.req.param("workspaceId"),
+      Number(request.challengeId),
+    )
+    return c.json({ snapshot })
+  })
+
+  api.get("/workspaces/runtime/:workspaceId/settings", async (c) => {
+    const settings = await manager.getRuntimeSettings(c.req.param("workspaceId"))
+    return c.json({ settings })
+  })
+
+  api.post("/workspaces/runtime/:workspaceId/settings/provider-config", async (c) => {
+    const request = await c.req.json<{ providerConfig: ProviderConfigEntry[] }>()
+    const snapshot = await manager.updateRuntimeProviderConfig(
+      c.req.param("workspaceId"),
+      request.providerConfig,
+    )
+    return c.json({ snapshot })
+  })
+
+  api.post("/workspaces/runtime/:workspaceId/settings/runtime-config", async (c) => {
+    const request = await c.req.json<RuntimeConfigUpdateRequest>()
+    const snapshot = await manager.updateRuntimeConfig(c.req.param("workspaceId"), request)
+    return c.json({ snapshot })
+  })
+
   api.post("/workspaces/runtime/:workspaceId/agents/environment", async (c) => {
     const snapshot = await manager.ensureRuntimeEnvironmentAgent(c.req.param("workspaceId"))
     return c.json({ snapshot })
@@ -136,6 +178,12 @@ export function registerApiRoutes(app: Hono, manager: WorkspaceManager) {
   api.get("/plugins", (c) => {
     const query = c.req.query("query")
     return c.json({ items: manager.listPlugins(query) })
+  })
+
+  api.get("/providers/catalog", async (c) => {
+    const workspaceId = c.req.query("workspaceId")
+    const items = await manager.listProviderCatalog(workspaceId)
+    return c.json({ items })
   })
 
   api.get("/plugins/:pluginId/readme", async (c) => {

@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from "vue"
 import { marked } from "marked"
 import { useRouter } from "vue-router"
-import type { ModelPoolInput, PluginCatalogItem } from "@shared/protocol.ts"
+import type { ModelPoolInput, PluginCatalogItem, ProviderCatalogItem } from "@shared/protocol.ts"
 import { CheckIcon, ChevronsUpDownIcon } from "lucide-vue-next"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -53,6 +53,9 @@ const initError = ref("")
 const modelPoolDraft = ref<ModelPoolRow[]>([])
 const modelPoolSaving = ref(false)
 const modelPoolError = ref("")
+const providerCatalog = ref<ProviderCatalogItem[]>([])
+const queueActionChallengeId = ref<number>()
+const queueActionError = ref("")
 
 const snapshot = computed(() => runtime.snapshot.value)
 const activeChallenges = computed(() =>
@@ -66,11 +69,17 @@ const historyChallenges = computed(() =>
     (challenge) =>
       challenge.status === "solved" ||
       challenge.status === "blocked" ||
+      challenge.status === "model_unassigned" ||
       challenge.status === "idle",
   ),
 )
 const selectedPlugin = computed(() =>
   plugins.value.find((plugin) => plugin.id === selectedPluginId.value),
+)
+const providerOptions = computed(() =>
+  providerCatalog.value
+    .map((item) => item.provider)
+    .sort((left, right) => left.localeCompare(right)),
 )
 const selectedPluginLabel = computed(() => {
   const plugin = selectedPlugin.value
@@ -90,6 +99,7 @@ interface ModelPoolRow {
 
 onMounted(async () => {
   await loadPlugins()
+  providerCatalog.value = await apiClient.listProviderCatalog(props.workspaceId)
   syncModelPoolDraftFromSnapshot()
 })
 
@@ -164,12 +174,16 @@ function setAuthMode(value: string) {
   pluginDraft.authMode = value as AuthMode
 }
 
-function badgeVariantForStatus(status: "active" | "queued" | "solved" | "blocked" | "idle") {
+function badgeVariantForStatus(
+  status: "active" | "queued" | "solved" | "blocked" | "idle" | "model_unassigned",
+) {
   switch (status) {
     case "active":
       return "destructive"
     case "queued":
       return "secondary"
+    case "model_unassigned":
+      return "outline"
     case "solved":
       return "default"
     case "blocked":
@@ -197,6 +211,10 @@ function syncModelPoolDraftFromSnapshot() {
 
 function addModelPoolRow() {
   modelPoolDraft.value.push(createModelPoolRow())
+}
+
+function listModelsForProvider(provider: string) {
+  return providerCatalog.value.find((item) => item.provider === provider)?.models ?? []
 }
 
 function removeModelPoolRow(rowId: string) {
@@ -241,6 +259,42 @@ async function applyModelPool() {
     modelPoolError.value = error instanceof Error ? error.message : String(error)
   } finally {
     modelPoolSaving.value = false
+  }
+}
+
+async function enqueueChallenge(challengeId: number) {
+  queueActionError.value = ""
+  queueActionChallengeId.value = challengeId
+  try {
+    await runtime.enqueueChallenge(challengeId)
+  } catch (error) {
+    queueActionError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    queueActionChallengeId.value = undefined
+  }
+}
+
+async function dequeueChallenge(challengeId: number) {
+  queueActionError.value = ""
+  queueActionChallengeId.value = challengeId
+  try {
+    await runtime.dequeueChallenge(challengeId)
+  } catch (error) {
+    queueActionError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    queueActionChallengeId.value = undefined
+  }
+}
+
+async function resetSolver(challengeId: number) {
+  queueActionError.value = ""
+  queueActionChallengeId.value = challengeId
+  try {
+    await runtime.resetSolver(challengeId)
+  } catch (error) {
+    queueActionError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    queueActionChallengeId.value = undefined
   }
 }
 </script>
@@ -369,22 +423,15 @@ async function applyModelPool() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="manual">manual</SelectItem>
-                <SelectItem value="cookie">cookie</SelectItem>
-                <SelectItem value="token">token</SelectItem>
                 <SelectItem value="credentials">credentials</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
-          <div v-if="pluginDraft.authMode === 'cookie'" class="grid gap-2 md:col-span-2">
-            <label class="text-sm font-medium">Cookie</label>
-            <Input v-model="pluginDraft.cookie" placeholder="sid=..." />
-          </div>
-
-          <div v-if="pluginDraft.authMode === 'token'" class="grid gap-2 md:col-span-2">
-            <label class="text-sm font-medium">Bearer Token</label>
-            <Input v-model="pluginDraft.bearerToken" placeholder="eyJ..." />
-          </div>
+          <p class="text-xs text-muted-foreground md:col-span-2">
+            Recommended: start with <code>manual</code> so EnvironmentAgent can assist adapter
+            debugging and plugin maintenance.
+          </p>
 
           <template v-if="pluginDraft.authMode === 'credentials'">
             <div class="grid gap-2">
@@ -430,8 +477,16 @@ async function applyModelPool() {
           :key="item.id"
           class="grid gap-3 rounded-md border p-3 md:grid-cols-[1fr_1fr_150px_auto]"
         >
-          <Input v-model="item.provider" placeholder="provider" />
-          <Input v-model="item.modelId" placeholder="model id" />
+          <Input
+            v-model="item.provider"
+            list="runtime-overview-provider-options"
+            placeholder="provider"
+          />
+          <Input
+            v-model="item.modelId"
+            :list="`runtime-overview-model-options-${item.id}`"
+            placeholder="model id"
+          />
           <Input
             v-model="item.maxConcurrency"
             type="number"
@@ -439,6 +494,14 @@ async function applyModelPool() {
             placeholder="max concurrency"
           />
           <Button variant="ghost" type="button" @click="removeModelPoolRow(item.id)">Remove</Button>
+
+          <datalist :id="`runtime-overview-model-options-${item.id}`">
+            <option
+              v-for="model in listModelsForProvider(item.provider)"
+              :key="model.modelId"
+              :value="model.modelId"
+            />
+          </datalist>
         </article>
 
         <div class="flex flex-wrap items-center gap-2">
@@ -496,10 +559,32 @@ async function applyModelPool() {
               <Separator class="my-3" />
 
               <div class="flex flex-wrap items-center gap-2">
-                <Button variant="outline" @click="runtime.enqueueChallenge(challenge.challengeId)">
+                <Button
+                  variant="outline"
+                  :disabled="queueActionChallengeId === challenge.challengeId"
+                  @click="enqueueChallenge(challenge.challengeId)"
+                >
                   Enqueue
                 </Button>
-                <Button variant="secondary" @click="openSolverAgent(challenge.solverId)">
+                <Button
+                  variant="outline"
+                  :disabled="queueActionChallengeId === challenge.challengeId"
+                  @click="dequeueChallenge(challenge.challengeId)"
+                >
+                  Dequeue
+                </Button>
+                <Button
+                  variant="ghost"
+                  :disabled="queueActionChallengeId === challenge.challengeId"
+                  @click="resetSolver(challenge.challengeId)"
+                >
+                  Reset Solver
+                </Button>
+                <Button
+                  variant="secondary"
+                  :disabled="challenge.status === 'model_unassigned'"
+                  @click="openSolverAgent(challenge.solverId)"
+                >
                   Open {{ challenge.solverId }}
                 </Button>
               </div>
@@ -534,11 +619,30 @@ async function applyModelPool() {
                 <div class="flex flex-wrap items-center gap-2">
                   <Button
                     variant="outline"
-                    @click="runtime.enqueueChallenge(challenge.challengeId)"
+                    :disabled="queueActionChallengeId === challenge.challengeId"
+                    @click="enqueueChallenge(challenge.challengeId)"
                   >
                     Enqueue
                   </Button>
-                  <Button variant="secondary" @click="openSolverAgent(challenge.solverId)">
+                  <Button
+                    variant="outline"
+                    :disabled="queueActionChallengeId === challenge.challengeId"
+                    @click="dequeueChallenge(challenge.challengeId)"
+                  >
+                    Dequeue
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    :disabled="queueActionChallengeId === challenge.challengeId"
+                    @click="resetSolver(challenge.challengeId)"
+                  >
+                    Reset Solver
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    :disabled="challenge.status === 'model_unassigned'"
+                    @click="openSolverAgent(challenge.solverId)"
+                  >
                     Open {{ challenge.solverId }}
                   </Button>
                 </div>
@@ -574,10 +678,32 @@ async function applyModelPool() {
               <Separator class="my-3" />
 
               <div class="flex flex-wrap items-center gap-2">
-                <Button variant="outline" @click="runtime.enqueueChallenge(challenge.challengeId)">
+                <Button
+                  variant="outline"
+                  :disabled="queueActionChallengeId === challenge.challengeId"
+                  @click="enqueueChallenge(challenge.challengeId)"
+                >
                   Enqueue
                 </Button>
-                <Button variant="secondary" @click="openSolverAgent(challenge.solverId)">
+                <Button
+                  variant="outline"
+                  :disabled="queueActionChallengeId === challenge.challengeId"
+                  @click="dequeueChallenge(challenge.challengeId)"
+                >
+                  Dequeue
+                </Button>
+                <Button
+                  variant="ghost"
+                  :disabled="queueActionChallengeId === challenge.challengeId"
+                  @click="resetSolver(challenge.challengeId)"
+                >
+                  Reset Solver
+                </Button>
+                <Button
+                  variant="secondary"
+                  :disabled="challenge.status === 'model_unassigned'"
+                  @click="openSolverAgent(challenge.solverId)"
+                >
                   Open {{ challenge.solverId }}
                 </Button>
               </div>
@@ -587,8 +713,13 @@ async function applyModelPool() {
           <p v-if="(snapshot?.challenges.length ?? 0) === 0" class="text-sm text-muted-foreground">
             No challenges loaded yet. Run challenge sync first.
           </p>
+          <p v-if="queueActionError" class="text-sm text-destructive">{{ queueActionError }}</p>
         </div>
       </CardContent>
     </Card>
+
+    <datalist id="runtime-overview-provider-options">
+      <option v-for="provider in providerOptions" :key="provider" :value="provider" />
+    </datalist>
   </div>
 </template>

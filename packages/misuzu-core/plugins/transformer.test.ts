@@ -73,7 +73,6 @@ describe("plugin to tools transformer", () => {
     const names = tools.map((tool) => tool.name)
 
     expect(names).toEqual([
-      "mock_platform_list_challenges",
       "mock_platform_get_challenge",
       "mock_platform_submit_flag",
       "mock_platform_open_container",

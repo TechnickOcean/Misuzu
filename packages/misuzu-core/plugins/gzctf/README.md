@@ -19,8 +19,7 @@ The plugin name follows platform naming, not contest naming.
     "value": 2
   },
   "auth": {
-    "mode": "cookie",
-    "cookie": "<cookie-header>"
+    "mode": "manual"
   }
 }
 ```
@@ -28,9 +27,7 @@ The plugin name follows platform naming, not contest naming.
 ## Supported auth modes
 
 - `manual`: launches headed Chrome via `plugins/utils/open-headed-auth.ts`, waits for login, and captures cookie auth
-- `cookie`: pass-through cookie string
-- `token`: pass-through bearer token
-- `credentials`: currently unsupported for this adapter (captcha / interactive login flow)
+- `credentials`: currently not implemented for this adapter
 
 When `manual` is used, you may optionally pass:
 
@@ -51,5 +48,5 @@ When `manual` is used, you may optionally pass:
 
 ## Auth expiry handling
 
-- On `401/403`, adapter attempts `refreshAuth(session)` once.
-- If refresh fails, adapter throws `Authentication expired. Re-authentication is required.` so runtime can pause solver scheduling and request a new login.
+- On `401/403`, adapter throws `PlatformAuthError`.
+- Runtime catches that error, clears session, and retries by re-running plugin `login()`.

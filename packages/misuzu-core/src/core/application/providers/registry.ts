@@ -1,4 +1,10 @@
-import { getModel as getBaseModel, getModels, type Api, type Model } from "@mariozechner/pi-ai"
+import {
+  getModel as getBaseModel,
+  getModels,
+  getProviders,
+  type Api,
+  type Model,
+} from "@mariozechner/pi-ai"
 
 export interface ProxyProviderModelMapping {
   sourceModelId: string
@@ -11,6 +17,8 @@ export interface ProxyProviderOptions {
   baseProvider: string
   baseUrl?: string
   apiKeyEnvVar?: string
+  api_key?: string
+  apiKey?: string
   modelIds?: string[]
   modelMappings?: (string | ProxyProviderModelMapping)[]
 }
@@ -77,7 +85,49 @@ function getBuiltInModel(provider: string, modelId: string) {
 
 export class ProviderRegistry {
   private readonly proxyProviderRegistry = new Map<string, Map<string, Model<Api>>>()
-  private readonly proxyProviderApiKeyEnvRegistry = new Map<string, string>()
+  private readonly providerApiKeyEnvRegistry = new Map<string, string>()
+  private readonly providerApiKeyRegistry = new Map<string, string>()
+
+  resetWorkspaceConfig() {
+    this.proxyProviderRegistry.clear()
+    this.providerApiKeyEnvRegistry.clear()
+    this.providerApiKeyRegistry.clear()
+  }
+
+  registerProviderCredentials(options: {
+    provider: string
+    apiKeyEnvVar?: string
+    apiKey?: string
+    api_key?: string
+  }) {
+    const provider = options.provider.trim()
+    if (!provider) {
+      return
+    }
+
+    const inlineApiKey =
+      typeof options.apiKey === "string" && options.apiKey.trim().length > 0
+        ? options.apiKey.trim()
+        : typeof options.api_key === "string" && options.api_key.trim().length > 0
+          ? options.api_key.trim()
+          : undefined
+    const apiKeyEnvVar =
+      typeof options.apiKeyEnvVar === "string" && options.apiKeyEnvVar.trim().length > 0
+        ? options.apiKeyEnvVar.trim()
+        : undefined
+
+    if (apiKeyEnvVar) {
+      this.providerApiKeyEnvRegistry.set(provider, apiKeyEnvVar)
+    } else {
+      this.providerApiKeyEnvRegistry.delete(provider)
+    }
+
+    if (inlineApiKey) {
+      this.providerApiKeyRegistry.set(provider, inlineApiKey)
+    } else {
+      this.providerApiKeyRegistry.delete(provider)
+    }
+  }
 
   registerProxyProvider(options: ProxyProviderOptions) {
     const baseProviderModels = getModels(options.baseProvider as any) as Model<Api>[]
@@ -96,10 +146,7 @@ export class ProviderRegistry {
     }
 
     this.proxyProviderRegistry.set(options.provider, providerModels)
-
-    if (options.apiKeyEnvVar) {
-      this.proxyProviderApiKeyEnvRegistry.set(options.provider, options.apiKeyEnvVar)
-    }
+    this.registerProviderCredentials(options)
 
     return Array.from(providerModels.values())
   }
@@ -121,7 +168,29 @@ export class ProviderRegistry {
   }
 
   getApiKey(provider: string, env: NodeJS.ProcessEnv = process.env) {
-    const apiKeyEnvVar = this.proxyProviderApiKeyEnvRegistry.get(provider)
+    const inlineApiKey = this.providerApiKeyRegistry.get(provider)
+    if (inlineApiKey) {
+      return inlineApiKey
+    }
+
+    const apiKeyEnvVar = this.providerApiKeyEnvRegistry.get(provider)
     return apiKeyEnvVar ? env[apiKeyEnvVar] : undefined
+  }
+
+  listProviders() {
+    return [...new Set([...getProviders(), ...this.proxyProviderRegistry.keys()])]
+  }
+
+  listModels(provider: string) {
+    const proxyModels = this.proxyProviderRegistry.get(provider)
+    if (proxyModels) {
+      return [...proxyModels.values()]
+    }
+
+    try {
+      return getModels(provider as any) as Model<Api>[]
+    } catch {
+      return []
+    }
   }
 }

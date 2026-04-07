@@ -1,5 +1,11 @@
 import { computed } from "vue"
-import type { ModelPoolInput, PromptMode, RuntimeInitRequest } from "../../shared/protocol.ts"
+import type {
+  ModelPoolInput,
+  PromptMode,
+  ProviderConfigEntry,
+  RuntimeConfigUpdateRequest,
+  RuntimeInitRequest,
+} from "../../shared/protocol.ts"
 import { useAppServices } from "../di/app-services.ts"
 import { useRuntimeWorkspaceStore } from "../stores/runtime-workspace.ts"
 
@@ -43,6 +49,12 @@ export function useRuntimeWorkspace(workspaceId: string) {
     initializeRuntime: (pluginId: string, pluginConfig: RuntimeInitRequest["pluginConfig"]) =>
       store.initializeRuntime(workspaceId, { pluginId, pluginConfig }),
     enqueueChallenge: (challengeId: number) => store.enqueueChallenge(workspaceId, challengeId),
+    dequeueChallenge: (challengeId: number) => store.dequeueChallenge(workspaceId, challengeId),
+    resetSolver: (challengeId: number) => store.resetSolver(workspaceId, challengeId),
+    updateProviderConfig: (providerConfig: ProviderConfigEntry[]) =>
+      store.updateProviderConfig(workspaceId, providerConfig),
+    updateRuntimeConfig: (request: RuntimeConfigUpdateRequest) =>
+      store.updateRuntimeConfig(workspaceId, request),
     disconnect: () => store.disconnectWorkspaceFeed(workspaceId),
   }
 }

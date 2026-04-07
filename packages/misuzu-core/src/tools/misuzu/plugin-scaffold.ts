@@ -190,21 +190,27 @@ export class ${className}Plugin implements CTFPlatformPlugin {
   }
 
   async login(_auth?: PluginAuthConfig): Promise<AuthSession> {
-    if (_auth?.mode === "manual") {
+    const auth = _auth ?? { mode: "manual" as const }
+
+    if (auth.mode === "manual") {
       const result = await openHeadedAuth({
-        loginUrl: _auth.loginUrl ?? "https://example.com/account/login",
-        authCheckUrl: _auth.authCheckUrl ?? "https://example.com/api/account/profile",
-        timeoutSec: _auth.timeoutSec,
+        loginUrl: auth.loginUrl ?? "https://example.com/account/login",
+        authCheckUrl: auth.authCheckUrl ?? "https://example.com/api/account/profile",
+        timeoutSec: auth.timeoutSec,
       })
 
       return {
-        mode: "cookie",
+        mode: "manual",
         cookie: result.cookieHeader,
         refreshable: false,
       }
     }
 
-    throw new Error("Not implemented")
+    if (auth.mode === "credentials") {
+      throw new Error("Not implemented: credentials auth")
+    }
+
+    throw new Error("Unsupported auth mode")
   }
 
   async validateSession(_session: AuthSession): Promise<void> {
@@ -252,8 +258,7 @@ Platform: ${displayName ?? pluginId}
   "baseUrl": "https://example.com",
   "contest": { "mode": "auto" },
   "auth": {
-    "mode": "cookie",
-    "cookie": "<cookie-header>"
+    "mode": "manual"
   }
 }
 \`\`\`
@@ -264,5 +269,6 @@ Platform: ${displayName ?? pluginId}
 - Register plugin metadata in \`plugins/catalog.json\` so workspace plugin list can discover it.
 - Keep plugin stateless: auth and contest binding are managed by runtime core.
 - Keep notice polling runtime-only and avoid exposing it directly to solver tools.
+- Prefer implementing and stabilizing \`manual\` auth first so EnvironmentAgent can maintain/fix the plugin flow before credentials mode is added.
 `
 }

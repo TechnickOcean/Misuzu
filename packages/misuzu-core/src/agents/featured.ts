@@ -173,7 +173,9 @@ export class FeaturedAgent {
   }
 
   continue() {
-    return this.agent.continue()
+    if (this.agent.state.isStreaming) throw new Error("Cannot continue a running agent!")
+    if (this.agent.state.messages[-1].role === "user") return this.agent.continue()
+    else return this.agent.prompt("continue")
   }
 
   steer(message: string) {

@@ -3,6 +3,8 @@ import type {
   AgentStateSnapshot,
   ModelPoolInput,
   PromptMode,
+  ProviderConfigEntry,
+  RuntimeConfigUpdateRequest,
   RuntimeInitRequest,
   RuntimeWorkspaceSnapshot,
 } from "../../shared/protocol.ts"
@@ -97,6 +99,34 @@ export const useRuntimeWorkspaceStore = defineStore("runtime-workspace", {
         {
           challengeId,
         },
+      )
+    },
+
+    async dequeueChallenge(workspaceId: string, challengeId: number) {
+      this.snapshots[workspaceId] = await requireServices().apiClient.dequeueRuntimeChallenge(
+        workspaceId,
+        challengeId,
+      )
+    },
+
+    async resetSolver(workspaceId: string, challengeId: number) {
+      this.snapshots[workspaceId] = await requireServices().apiClient.resetRuntimeSolver(
+        workspaceId,
+        challengeId,
+      )
+    },
+
+    async updateProviderConfig(workspaceId: string, providerConfig: ProviderConfigEntry[]) {
+      this.snapshots[workspaceId] = await requireServices().apiClient.updateRuntimeProviderConfig(
+        workspaceId,
+        providerConfig,
+      )
+    },
+
+    async updateRuntimeConfig(workspaceId: string, request: RuntimeConfigUpdateRequest) {
+      this.snapshots[workspaceId] = await requireServices().apiClient.updateRuntimeConfig(
+        workspaceId,
+        request,
       )
     },
 

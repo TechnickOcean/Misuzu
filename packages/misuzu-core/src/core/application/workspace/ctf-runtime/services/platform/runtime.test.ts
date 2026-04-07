@@ -120,7 +120,7 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
   async login() {
     this.loginCallCount += 1
     return {
-      mode: "cookie" as const,
+      mode: "manual" as const,
       cookie: "sid=mock",
       refreshable: false,
     }
@@ -270,12 +270,13 @@ describe("ctf runtime platform integration", () => {
     ])
 
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
     await workspace.initializeRuntime({
       plugin,
       pluginConfig: {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
-        auth: { mode: "cookie", cookie: "sid=abc" },
+        auth: { mode: "manual" },
       },
     })
 
@@ -350,7 +351,7 @@ describe("ctf runtime platform integration", () => {
       pluginConfig: {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
-        auth: { mode: "cookie", cookie: "sid=abc" },
+        auth: { mode: "manual" },
       },
     })
 
@@ -370,7 +371,7 @@ describe("ctf runtime platform integration", () => {
         pluginConfig: {
           baseUrl: "https://example.com",
           contest: { mode: "auto" },
-          auth: { mode: "cookie", cookie: "sid=abc" },
+          auth: { mode: "manual" },
         },
       }),
     ).rejects.toThrow("missing from catalog")
@@ -387,7 +388,7 @@ describe("ctf runtime platform integration", () => {
           pluginConfig: {
             baseUrl: "https://example.com",
             contest: { mode: "auto" },
-            auth: { mode: "cookie", cookie: "sid=abc" },
+            auth: { mode: "manual" },
           },
         },
         null,
@@ -408,7 +409,7 @@ describe("ctf runtime platform integration", () => {
         pluginConfig: {
           baseUrl: "https://example.com",
           contest: { mode: "auto" },
-          auth: { mode: "cookie", cookie: "sid=abc" },
+          auth: { mode: "manual" },
         },
       }),
     ).rejects.toThrow("Missing pluginId")
@@ -417,6 +418,7 @@ describe("ctf runtime platform integration", () => {
   test("initializes platform, creates challenge solvers, syncs notices and new challenges", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
 
     const plugin = new MockPlatformPlugin([
       {
@@ -433,7 +435,7 @@ describe("ctf runtime platform integration", () => {
       pluginConfig: {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
-        auth: { mode: "cookie", cookie: "sid=abc" },
+        auth: { mode: "manual" },
       },
       cron: {
         noticePollIntervalMs: 60_000,
@@ -497,7 +499,7 @@ describe("ctf runtime platform integration", () => {
       pluginConfig: {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
-        auth: { mode: "cookie", cookie: "sid=abc" },
+        auth: { mode: "manual" },
       },
     })
 
@@ -507,17 +509,20 @@ describe("ctf runtime platform integration", () => {
     expect(solver).toBeDefined()
 
     let finishPrompt: (() => void) | undefined
-    solver!.prompt = async () => {
+    const waitForFinish = async () => {
       await new Promise<void>((resolve) => {
         finishPrompt = resolve
       })
     }
+    solver!.prompt = waitForFinish
+    solver!.continue = waitForFinish
 
     const runningTask = workspace.enqueueTask({ challenge: 111 })
     const activeState = workspace.getSolverActivationState(111)
     expect(activeState?.status).toBe("active")
     expect(activeState?.activeTaskId).toBeDefined()
 
+    await waitForCondition(() => Boolean(finishPrompt))
     finishPrompt?.()
     await runningTask
 
@@ -546,7 +551,7 @@ describe("ctf runtime platform integration", () => {
       pluginConfig: {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
-        auth: { mode: "cookie", cookie: "sid=abc" },
+        auth: { mode: "manual" },
       },
       startPaused: true,
     })
@@ -600,7 +605,7 @@ describe("ctf runtime platform integration", () => {
       pluginConfig: {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
-        auth: { mode: "cookie", cookie: "sid=abc" },
+        auth: { mode: "manual" },
       },
     })
 
@@ -655,7 +660,7 @@ describe("ctf runtime platform integration", () => {
       pluginConfig: {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
-        auth: { mode: "cookie", cookie: "sid=abc" },
+        auth: { mode: "manual" },
       },
     })
 
@@ -713,7 +718,7 @@ describe("ctf runtime platform integration", () => {
       pluginConfig: {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
-        auth: { mode: "cookie", cookie: "sid=abc" },
+        auth: { mode: "manual" },
       },
     })
 
@@ -741,7 +746,7 @@ describe("ctf runtime platform integration", () => {
     await workspace.shutdown()
   })
 
-  test("creates solver bindings without model pool but blocks execution", async () => {
+  test("keeps task pending with model-unassigned solver until pool is configured", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
 
@@ -760,13 +765,29 @@ describe("ctf runtime platform integration", () => {
       pluginConfig: {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
-        auth: { mode: "cookie", cookie: "sid=abc" },
+        auth: { mode: "manual" },
       },
     })
 
     expect(workspace.getManagedChallengeIds()).toEqual([131])
-    expect(workspace.getSolverActivationState(131)?.status).toBe("inactive")
-    await expect(workspace.enqueueTask({ challenge: 131 })).rejects.toThrow("Model pool is empty")
+    expect(workspace.getChallengeSolver(131)).toBeUndefined()
+    expect(workspace.getSolverActivationState(131)?.status).toBe("model_unassigned")
+
+    const pendingTask = workspace.enqueueTask({ challenge: 131 }, "task-no-model")
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    expect(workspace.listPendingSchedulerTasks().map((task) => task.taskId)).toContain(
+      "task-no-model",
+    )
+    expect(workspace.getSolverActivationState(131)?.status).toBe("model_unassigned")
+
+    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
+
+    await expect(pendingTask).resolves.toMatchObject({
+      solverId: "solver-131",
+      taskId: "task-no-model",
+    })
+    expect(workspace.getChallengeSolver(131)).toBeDefined()
     expect(workspace.getSolverActivationState(131)?.status).toBe("inactive")
 
     await workspace.shutdown()
@@ -788,7 +809,7 @@ describe("ctf runtime platform integration", () => {
       pluginConfig: {
         baseUrl: "https://example.com",
         contest: { mode: "auto" as const },
-        auth: { mode: "cookie" as const, cookie: "sid=abc" },
+        auth: { mode: "manual" as const },
       },
       cron: {
         noticePollIntervalMs: 60_000,
@@ -862,7 +883,7 @@ describe("ctf runtime platform integration", () => {
       pluginConfig: {
         baseUrl: "https://example.com",
         contest: { mode: "auto" as const },
-        auth: { mode: "cookie" as const, cookie: "sid=abc" },
+        auth: { mode: "manual" as const },
       },
     }
 
@@ -945,7 +966,7 @@ describe("ctf runtime platform integration", () => {
       pluginConfig: {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
-        auth: { mode: "cookie", cookie: "sid=abc" },
+        auth: { mode: "manual" },
       },
     })
 
@@ -999,7 +1020,7 @@ describe("ctf runtime platform integration", () => {
       pluginConfig: {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
-        auth: { mode: "cookie", cookie: "sid=abc" },
+        auth: { mode: "manual" },
       },
     })
 
@@ -1046,7 +1067,7 @@ describe("ctf runtime platform integration", () => {
         pluginConfig: {
           baseUrl: "https://example.com",
           contest: { mode: "auto" },
-          auth: { mode: "cookie", cookie: "sid=abc" },
+          auth: { mode: "manual" },
         },
         cron: {
           noticePollIntervalMs: 60_000,
@@ -1076,7 +1097,7 @@ describe("ctf runtime platform integration", () => {
       pluginConfig: {
         baseUrl: "https://example.com",
         contest: { mode: "auto" as const },
-        auth: { mode: "cookie" as const, cookie: "sid=abc" },
+        auth: { mode: "manual" as const },
       },
     }
 

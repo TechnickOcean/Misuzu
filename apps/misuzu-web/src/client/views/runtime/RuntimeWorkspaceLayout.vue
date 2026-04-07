@@ -9,6 +9,7 @@ import {
   PlayCircleIcon,
   PlusIcon,
   RefreshCcwIcon,
+  Settings2Icon,
   ShieldCheckIcon,
 } from "lucide-vue-next"
 import type { RuntimeWorkspaceSnapshot } from "@shared/protocol.ts"
@@ -31,11 +32,19 @@ const router = useRouter()
 const workspaceId = String(route.params.id)
 const runtime = useRuntimeWorkspace(workspaceId)
 
-type AgentSidebarStatus = "active" | "pause" | "pending" | "blocked" | "stopped" | "solved"
+type AgentSidebarStatus =
+  | "active"
+  | "pause"
+  | "pending"
+  | "blocked"
+  | "stopped"
+  | "solved"
+  | "model_unassigned"
 type SidebarAgent = RuntimeWorkspaceSnapshot["agents"][number] & { status: AgentSidebarStatus }
 
 const summary = computed(() => runtime.snapshot.value)
 const isOverviewRoute = computed(() => route.name === "runtime-overview")
+const isSettingsRoute = computed(() => route.name === "runtime-settings")
 const selectedAgentId = computed(() =>
   typeof route.params.agentId === "string" ? route.params.agentId : undefined,
 )
@@ -52,7 +61,9 @@ const activeAgentName = computed(() => {
   return summary.value?.agents.find((agent) => agent.id === agentId)?.name ?? agentId
 })
 const contentClass = computed(() =>
-  isOverviewRoute.value ? "min-h-0 flex-1 overflow-y-auto" : "min-h-0 flex-1 overflow-hidden",
+  isOverviewRoute.value || isSettingsRoute.value
+    ? "min-h-0 flex-1 overflow-y-auto"
+    : "min-h-0 flex-1 overflow-hidden",
 )
 const sidebarAgents = computed<SidebarAgent[]>(() => {
   const snapshot = summary.value
@@ -151,6 +162,17 @@ async function openAgent(agentId: string) {
   })
 }
 
+async function openSettings() {
+  if (isSettingsRoute.value) {
+    return
+  }
+
+  await router.push({
+    name: "runtime-settings",
+    params: { id: workspaceId },
+  })
+}
+
 function openHome() {
   void router.push({ name: "home" })
 }
@@ -176,7 +198,12 @@ function resolveAgentStatus(
     return snapshot.paused ? "pause" : "stopped"
   }
 
-  if (snapshot.paused && challenge.status !== "blocked" && challenge.status !== "solved") {
+  if (
+    snapshot.paused &&
+    challenge.status !== "blocked" &&
+    challenge.status !== "solved" &&
+    challenge.status !== "model_unassigned"
+  ) {
     return "pause"
   }
 
@@ -187,6 +214,8 @@ function resolveAgentStatus(
       return "pending"
     case "blocked":
       return "blocked"
+    case "model_unassigned":
+      return "model_unassigned"
     case "solved":
       return "solved"
     case "idle":
@@ -204,10 +233,12 @@ function agentStatusWeight(status: AgentSidebarStatus) {
       return 2
     case "blocked":
       return 3
-    case "stopped":
+    case "model_unassigned":
       return 4
-    case "solved":
+    case "stopped":
       return 5
+    case "solved":
+      return 6
   }
 }
 
@@ -221,6 +252,8 @@ function statusLabel(status: AgentSidebarStatus) {
       return "Pending"
     case "blocked":
       return "Blocked"
+    case "model_unassigned":
+      return "No Model"
     case "stopped":
       return "Stopped"
     case "solved":
@@ -238,6 +271,8 @@ function statusBadgeVariant(status: AgentSidebarStatus) {
       return "outline"
     case "blocked":
       return "destructive"
+    case "model_unassigned":
+      return "outline"
     case "stopped":
       return "outline"
     case "solved":
@@ -251,7 +286,10 @@ function statusBadgeVariant(status: AgentSidebarStatus) {
     <template #header-menu>
       <SidebarMenu>
         <SidebarMenuItem>
-          <SidebarMenuButton :is-active="!isOverviewRoute" @click="openDefaultAgent">
+          <SidebarMenuButton
+            :is-active="!isOverviewRoute && !isSettingsRoute"
+            @click="openDefaultAgent"
+          >
             <BotIcon />
             <span>Chat</span>
           </SidebarMenuButton>
@@ -260,6 +298,12 @@ function statusBadgeVariant(status: AgentSidebarStatus) {
           <SidebarMenuButton :is-active="isOverviewRoute" @click="openOverview">
             <ListChecksIcon />
             <span>Queue & Setup</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton :is-active="isSettingsRoute" @click="openSettings">
+            <Settings2Icon />
+            <span>Settings</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
       </SidebarMenu>
@@ -381,7 +425,7 @@ function statusBadgeVariant(status: AgentSidebarStatus) {
     <header class="flex items-center justify-between gap-2 border-b px-4 py-3">
       <div class="flex min-w-0 items-center gap-2">
         <p class="truncate text-sm font-semibold">
-          {{ isOverviewRoute ? "Queue & Setup" : activeAgentName }}
+          {{ isOverviewRoute ? "Queue & Setup" : isSettingsRoute ? "Settings" : activeAgentName }}
         </p>
       </div>
 

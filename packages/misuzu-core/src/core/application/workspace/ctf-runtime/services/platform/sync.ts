@@ -96,7 +96,7 @@ export class SyncService {
           continue
         }
 
-        indexedBinding.binding.solver.steer(
+        indexedBinding.binding.solver?.steer(
           [
             `Potential hint/update detected for challenge [${indexedBinding.binding.challenge.id}] ${indexedBinding.binding.challenge.title}.`,
             `Update type: ${update.type}`,

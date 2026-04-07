@@ -2,7 +2,13 @@
 import { computed, onMounted, reactive, ref, watch } from "vue"
 import { useRouter } from "vue-router"
 import { marked } from "marked"
-import type { ModelPoolInput, PluginCatalogItem, WorkspaceKind } from "@shared/protocol.ts"
+import type {
+  ModelPoolInput,
+  PluginCatalogItem,
+  ProviderCatalogItem,
+  ProviderConfigEntry,
+  WorkspaceKind,
+} from "@shared/protocol.ts"
 import { CheckIcon, ChevronsUpDownIcon, HomeIcon, PlusIcon } from "lucide-vue-next"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -44,6 +50,7 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import ProviderConfigEditor from "@/components/workspace/ProviderConfigEditor.vue"
 import {
   createDefaultPluginConfigDraft,
   toPluginConfig,
@@ -79,7 +86,10 @@ const rootDir = ref("")
 
 const runtimeWithPlugin = ref(true)
 const runtimeAutoOrchestrate = ref(false)
+const providerCatalog = ref<ProviderCatalogItem[]>([])
 const modelPool = ref<ModelPoolRow[]>([createModelPoolRow()])
+const providerConfigEnabled = ref(false)
+const providerConfigDraft = ref<ProviderConfigEntry[]>([])
 
 const plugins = ref<PluginCatalogItem[]>([])
 const selectedPluginId = ref("")
@@ -94,6 +104,11 @@ const solverSystemPrompt = ref("")
 
 const selectedPlugin = computed(() =>
   plugins.value.find((plugin) => plugin.id === selectedPluginId.value),
+)
+const providerOptions = computed(() =>
+  providerCatalog.value
+    .map((item) => item.provider)
+    .sort((left, right) => left.localeCompare(right)),
 )
 const selectedPluginLabel = computed(() => {
   const plugin = selectedPlugin.value
@@ -113,6 +128,7 @@ const normalizedModelPool = computed<ModelPoolInput[]>(() => {
 })
 
 onMounted(async () => {
+  providerCatalog.value = await apiClient.listProviderCatalog()
   await loadPlugins()
 })
 
@@ -127,12 +143,19 @@ watch(selectedPluginId, async (pluginId) => {
 })
 
 function createModelPoolRow(): ModelPoolRow {
+  const fallbackProvider = providerCatalog.value[0]?.provider ?? "openai"
+  const fallbackModelId = providerCatalog.value[0]?.models[0]?.modelId ?? "gpt-4.1"
+
   return {
     id: crypto.randomUUID(),
-    provider: "openai",
-    modelId: "gpt-4.1",
+    provider: fallbackProvider,
+    modelId: fallbackModelId,
     maxConcurrency: "1",
   }
+}
+
+function listModelsForProvider(provider: string) {
+  return providerCatalog.value.find((item) => item.provider === provider)?.models ?? []
 }
 
 async function loadPlugins() {
@@ -232,6 +255,7 @@ async function createWorkspace() {
       const snapshot = await registryStore.createRuntimeWorkspace({
         name: name.value,
         rootDir: rootDir.value,
+        providerConfig: providerConfigEnabled.value ? providerConfigDraft.value : undefined,
         modelPool: normalizedModelPool.value,
         pluginId: runtimeWithPlugin.value ? selectedPluginId.value : undefined,
         pluginConfig: runtimeWithPlugin.value ? toPluginConfig(pluginDraft) : undefined,
@@ -262,6 +286,7 @@ async function createWorkspace() {
     const solverSnapshot = await registryStore.createSolverWorkspace({
       name: name.value,
       rootDir: rootDir.value,
+      providerConfig: providerConfigEnabled.value ? providerConfigDraft.value : undefined,
       model: {
         provider: solverProvider.value,
         modelId: solverModelId.value,
@@ -406,8 +431,16 @@ function setAuthMode(value: string) {
                     :key="item.id"
                     class="grid gap-3 rounded-md border p-3 md:grid-cols-[1fr_1fr_150px_auto]"
                   >
-                    <Input v-model="item.provider" placeholder="provider" />
-                    <Input v-model="item.modelId" placeholder="model id" />
+                    <Input
+                      v-model="item.provider"
+                      list="create-workspace-provider-options"
+                      placeholder="provider"
+                    />
+                    <Input
+                      v-model="item.modelId"
+                      :list="`create-workspace-model-options-${item.id}`"
+                      placeholder="model id"
+                    />
                     <Input
                       v-model="item.maxConcurrency"
                       type="number"
@@ -422,6 +455,16 @@ function setAuthMode(value: string) {
                   <Button variant="outline" type="button" @click="addModelPoolRow"
                     >Add model</Button
                   >
+
+                  <template v-for="item in modelPool" :key="`model-option-${item.id}`">
+                    <datalist :id="`create-workspace-model-options-${item.id}`">
+                      <option
+                        v-for="model in listModelsForProvider(item.provider)"
+                        :key="model.modelId"
+                        :value="model.modelId"
+                      />
+                    </datalist>
+                  </template>
                 </div>
 
                 <Separator />
@@ -568,25 +611,15 @@ function setAuthMode(value: string) {
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="manual">manual</SelectItem>
-                            <SelectItem value="cookie">cookie</SelectItem>
-                            <SelectItem value="token">token</SelectItem>
                             <SelectItem value="credentials">credentials</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
 
-                      <div
-                        v-if="pluginDraft.authMode === 'cookie'"
-                        class="grid gap-2 md:col-span-2"
-                      >
-                        <label class="text-sm font-medium">Cookie</label>
-                        <Input v-model="pluginDraft.cookie" placeholder="sid=..." />
-                      </div>
-
-                      <div v-if="pluginDraft.authMode === 'token'" class="grid gap-2 md:col-span-2">
-                        <label class="text-sm font-medium">Bearer Token</label>
-                        <Input v-model="pluginDraft.bearerToken" placeholder="eyJ..." />
-                      </div>
+                      <p class="text-xs text-muted-foreground md:col-span-2">
+                        Recommended: start with <code>manual</code> so EnvironmentAgent can assist
+                        plugin development and recovery when adapter logic changes.
+                      </p>
 
                       <template v-if="pluginDraft.authMode === 'credentials'">
                         <div class="grid gap-2">
@@ -631,12 +664,20 @@ function setAuthMode(value: string) {
                 <div class="grid gap-4 md:grid-cols-2">
                   <div class="grid gap-2">
                     <label class="text-sm font-medium">Provider</label>
-                    <Input v-model="solverProvider" placeholder="openai" />
+                    <Input
+                      v-model="solverProvider"
+                      list="create-workspace-provider-options"
+                      placeholder="openai"
+                    />
                   </div>
 
                   <div class="grid gap-2">
                     <label class="text-sm font-medium">Model ID</label>
-                    <Input v-model="solverModelId" placeholder="gpt-4.1" />
+                    <Input
+                      v-model="solverModelId"
+                      list="create-workspace-solver-model-options"
+                      placeholder="gpt-4.1"
+                    />
                   </div>
 
                   <div class="grid gap-2 md:col-span-2">
@@ -649,6 +690,29 @@ function setAuthMode(value: string) {
                   </div>
                 </div>
               </template>
+
+              <Separator />
+
+              <div class="space-y-3">
+                <div class="flex items-center justify-between rounded-md border p-3">
+                  <div>
+                    <p class="text-sm font-medium">Edit providers.json before create</p>
+                    <p class="text-xs text-muted-foreground">
+                      Optional: configure built-in/provider proxy API keys and model mappings.
+                    </p>
+                  </div>
+                  <Switch
+                    :checked="providerConfigEnabled"
+                    @update:checked="(checked) => (providerConfigEnabled = Boolean(checked))"
+                  />
+                </div>
+
+                <ProviderConfigEditor
+                  v-if="providerConfigEnabled"
+                  v-model="providerConfigDraft"
+                  :provider-options="providerOptions"
+                />
+              </div>
             </template>
 
             <template v-else>
@@ -660,6 +724,12 @@ function setAuthMode(value: string) {
 
                 <div class="grid gap-2 rounded-md border p-4">
                   <p><strong>Root:</strong> {{ rootDir || "auto-generated" }}</p>
+                  <p>
+                    <strong>providers.json:</strong>
+                    {{
+                      providerConfigEnabled ? `${providerConfigDraft.length} entries` : "default"
+                    }}
+                  </p>
 
                   <template v-if="kind === 'ctf-runtime'">
                     <p><strong>Models:</strong> {{ normalizedModelPool.length }}</p>
@@ -680,6 +750,18 @@ function setAuthMode(value: string) {
                 </div>
               </div>
             </template>
+
+            <datalist id="create-workspace-provider-options">
+              <option v-for="provider in providerOptions" :key="provider" :value="provider" />
+            </datalist>
+
+            <datalist id="create-workspace-solver-model-options">
+              <option
+                v-for="model in listModelsForProvider(solverProvider)"
+                :key="model.modelId"
+                :value="model.modelId"
+              />
+            </datalist>
 
             <p v-if="formError" class="text-sm text-destructive">{{ formError }}</p>
 
