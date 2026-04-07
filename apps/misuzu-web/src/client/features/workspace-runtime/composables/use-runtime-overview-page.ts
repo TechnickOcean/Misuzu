@@ -16,8 +16,10 @@ export function useRuntimeOverviewPage(workspaceId: string) {
   const selectedPluginId = ref("")
   const pluginDraft = reactive<PluginConfigDraft>(createDefaultPluginConfigDraft())
   const initError = ref("")
+  const initNotice = ref("")
   const queueActionChallengeId = ref<number>()
   const queueActionError = ref("")
+  const queueActionNotice = ref("")
 
   const snapshot = computed(() => runtime.snapshot.value)
   const activeChallenges = computed(() =>
@@ -38,14 +40,18 @@ export function useRuntimeOverviewPage(workspaceId: string) {
 
   async function initializeRuntime() {
     initError.value = ""
+    initNotice.value = ""
 
     try {
       if (!selectedPluginId.value) {
         throw new Error("Please select a plugin")
       }
 
+      initNotice.value =
+        "Starting runtime initialization. Browser auth window may open if required."
       await runtime.initializeRuntime(selectedPluginId.value, toPluginConfig(pluginDraft))
       await runtime.syncChallenges()
+      initNotice.value = "Runtime initialized and challenges synced"
     } catch (error) {
       initError.value = error instanceof Error ? error.message : String(error)
     }
@@ -90,9 +96,11 @@ export function useRuntimeOverviewPage(workspaceId: string) {
 
   async function enqueueChallenge(challengeId: number) {
     queueActionError.value = ""
+    queueActionNotice.value = ""
     queueActionChallengeId.value = challengeId
     try {
       await runtime.enqueueChallenge(challengeId)
+      queueActionNotice.value = `Challenge #${String(challengeId)} enqueued`
     } catch (error) {
       queueActionError.value = error instanceof Error ? error.message : String(error)
     } finally {
@@ -102,9 +110,11 @@ export function useRuntimeOverviewPage(workspaceId: string) {
 
   async function dequeueChallenge(challengeId: number) {
     queueActionError.value = ""
+    queueActionNotice.value = ""
     queueActionChallengeId.value = challengeId
     try {
       await runtime.dequeueChallenge(challengeId)
+      queueActionNotice.value = `Challenge #${String(challengeId)} dequeued`
     } catch (error) {
       queueActionError.value = error instanceof Error ? error.message : String(error)
     } finally {
@@ -114,9 +124,11 @@ export function useRuntimeOverviewPage(workspaceId: string) {
 
   async function resetSolver(challengeId: number) {
     queueActionError.value = ""
+    queueActionNotice.value = ""
     queueActionChallengeId.value = challengeId
     try {
       await runtime.resetSolver(challengeId)
+      queueActionNotice.value = `Solver reset for challenge #${String(challengeId)}`
     } catch (error) {
       queueActionError.value = error instanceof Error ? error.message : String(error)
     } finally {
@@ -134,8 +146,10 @@ export function useRuntimeOverviewPage(workspaceId: string) {
     selectedPluginId,
     pluginDraft,
     initError,
+    initNotice,
     queueActionChallengeId,
     queueActionError,
+    queueActionNotice,
     initializeRuntime,
     openSolverAgent,
     setContestMode,

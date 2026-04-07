@@ -33,10 +33,12 @@ export function useRuntimeSettingsPage(workspaceId: string) {
   const providerConfigDraft = ref<ProviderConfigEntry[]>([])
   const providerConfigSaving = ref(false)
   const providerConfigError = ref("")
+  const providerConfigNotice = ref("")
 
   const modelPoolDraft = ref<ModelPoolRow[]>([])
   const modelPoolSaving = ref(false)
   const modelPoolError = ref("")
+  const modelPoolNotice = ref("")
 
   const autoOrchestrateDraft = ref(false)
   const pluginIdDraft = ref("")
@@ -44,6 +46,7 @@ export function useRuntimeSettingsPage(workspaceId: string) {
   const solverPromptTemplateDraft = ref("")
   const runtimeConfigSaving = ref(false)
   const runtimeConfigError = ref("")
+  const runtimeConfigNotice = ref("")
 
   const snapshot = computed(() => runtime.snapshot.value)
   const providerOptions = computed(() =>
@@ -133,6 +136,7 @@ export function useRuntimeSettingsPage(workspaceId: string) {
 
   async function applyModelPool() {
     modelPoolError.value = ""
+    modelPoolNotice.value = ""
     modelPoolSaving.value = true
 
     try {
@@ -161,6 +165,7 @@ export function useRuntimeSettingsPage(workspaceId: string) {
 
       await runtime.updateModelPool(normalized)
       syncModelPoolDraftFromSnapshot()
+      modelPoolNotice.value = "Model pool updated"
     } catch (error) {
       modelPoolError.value = error instanceof Error ? error.message : String(error)
     } finally {
@@ -195,10 +200,12 @@ export function useRuntimeSettingsPage(workspaceId: string) {
 
   async function saveProviderConfig() {
     providerConfigError.value = ""
+    providerConfigNotice.value = ""
     providerConfigSaving.value = true
     try {
       await runtime.updateProviderConfig(providerConfigDraft.value)
       await loadSettings()
+      providerConfigNotice.value = "providers.json saved"
     } catch (error) {
       providerConfigError.value = error instanceof Error ? error.message : String(error)
     } finally {
@@ -208,6 +215,7 @@ export function useRuntimeSettingsPage(workspaceId: string) {
 
   async function saveRuntimeConfig() {
     runtimeConfigError.value = ""
+    runtimeConfigNotice.value = ""
     runtimeConfigSaving.value = true
     try {
       let platformConfig: RuntimePlatformConfig | undefined
@@ -225,6 +233,7 @@ export function useRuntimeSettingsPage(workspaceId: string) {
       })
 
       await loadSettings()
+      runtimeConfigNotice.value = "Runtime config saved"
     } catch (error) {
       runtimeConfigError.value = error instanceof Error ? error.message : String(error)
     } finally {
@@ -239,15 +248,18 @@ export function useRuntimeSettingsPage(workspaceId: string) {
     providerConfigDraft,
     providerConfigSaving,
     providerConfigError,
+    providerConfigNotice,
     modelPoolDraft,
     modelPoolSaving,
     modelPoolError,
+    modelPoolNotice,
     autoOrchestrateDraft,
     pluginIdDraft,
     pluginConfigDraft,
     solverPromptTemplateDraft,
     runtimeConfigSaving,
     runtimeConfigError,
+    runtimeConfigNotice,
     providerOptions,
     addModelPoolRow,
     removeModelPoolRow,

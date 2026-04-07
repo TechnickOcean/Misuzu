@@ -1,4 +1,4 @@
-import { computed, onMounted, onUnmounted, watch } from "vue"
+import { computed, onMounted, onUnmounted, ref, watch } from "vue"
 import { useRoute, useRouter } from "vue-router"
 import type { RuntimeWorkspaceSnapshot } from "@shared/protocol.ts"
 import { useRuntimeWorkspace } from "@/features/workspace-runtime/composables/use-runtime-workspace.ts"
@@ -35,6 +35,8 @@ export function useRuntimeLayoutPage() {
   const selectedAgentId = computed(() =>
     typeof route.params.agentId === "string" ? route.params.agentId : undefined,
   )
+  const runtimeActionNotice = ref("")
+  const runtimeActionError = ref("")
   const defaultAgentId = computed(() => {
     const agents = summary.value?.agents ?? []
     return agents.find((agent) => agent.id === "environment")?.id ?? agents[0]?.id
@@ -204,6 +206,37 @@ export function useRuntimeLayoutPage() {
     void router.push({ name: "workspace-create" })
   }
 
+  async function syncChallenges() {
+    await runRuntimeAction(() => runtime.syncChallenges(), "Challenge sync completed")
+  }
+
+  async function syncNotices() {
+    await runRuntimeAction(() => runtime.syncNotices(), "Notice sync completed")
+  }
+
+  async function startFlow() {
+    await runRuntimeAction(() => runtime.startDispatch(true), "Runtime flow started")
+  }
+
+  async function pauseFlow() {
+    await runRuntimeAction(() => runtime.pauseDispatch(), "Runtime flow paused")
+  }
+
+  async function ensureEnvironmentAgent() {
+    await runRuntimeAction(() => runtime.ensureEnvironmentAgent(), "Environment Agent is ready")
+  }
+
+  async function runRuntimeAction(action: () => Promise<unknown>, successMessage: string) {
+    runtimeActionNotice.value = ""
+    runtimeActionError.value = ""
+    try {
+      await action()
+      runtimeActionNotice.value = successMessage
+    } catch (error) {
+      runtimeActionError.value = error instanceof Error ? error.message : String(error)
+    }
+  }
+
   async function enforceSetupLock() {
     if (!isSetupLocked.value) {
       return
@@ -246,6 +279,13 @@ export function useRuntimeLayoutPage() {
     openSettings,
     openHome,
     openCreateWorkspace,
+    syncChallenges,
+    syncNotices,
+    startFlow,
+    pauseFlow,
+    ensureEnvironmentAgent,
+    runtimeActionNotice,
+    runtimeActionError,
     statusLabel,
     statusBadgeVariant,
   }

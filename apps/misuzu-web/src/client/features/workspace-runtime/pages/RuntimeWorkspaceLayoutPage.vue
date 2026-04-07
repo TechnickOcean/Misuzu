@@ -43,6 +43,13 @@ const {
   openSettings,
   openHome,
   openCreateWorkspace,
+  syncChallenges,
+  syncNotices,
+  startFlow,
+  pauseFlow,
+  ensureEnvironmentAgent,
+  runtimeActionNotice,
+  runtimeActionError,
   statusLabel,
   statusBadgeVariant,
 } = useRuntimeLayoutPage()
@@ -119,25 +126,25 @@ const {
         <SidebarGroupContent>
           <SidebarMenu v-if="runtimeReady">
             <SidebarMenuItem>
-              <SidebarMenuButton @click="runtime.syncChallenges">
+              <SidebarMenuButton @click="syncChallenges">
                 <RefreshCcwIcon />
                 <span>Sync Challenges</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarMenuButton @click="runtime.syncNotices">
+              <SidebarMenuButton @click="syncNotices">
                 <RefreshCcwIcon />
                 <span>Sync Notices</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem v-if="summary?.paused">
-              <SidebarMenuButton @click="runtime.startDispatch(true)">
+              <SidebarMenuButton @click="startFlow">
                 <PlayCircleIcon />
                 <span>Start Flow</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem v-else>
-              <SidebarMenuButton @click="runtime.pauseDispatch">
+              <SidebarMenuButton @click="pauseFlow">
                 <PauseCircleIcon />
                 <span>Pause Flow</span>
               </SidebarMenuButton>
@@ -146,7 +153,7 @@ const {
 
           <SidebarMenu v-else>
             <SidebarMenuItem v-if="!summary?.environmentAgentReady">
-              <SidebarMenuButton @click="runtime.ensureEnvironmentAgent">
+              <SidebarMenuButton @click="ensureEnvironmentAgent">
                 <ShieldCheckIcon />
                 <span>Add Environment Agent</span>
               </SidebarMenuButton>
@@ -239,6 +246,12 @@ const {
     </header>
 
     <section class="px-3 py-3 md:px-4" :class="contentClass">
+      <p v-if="runtimeActionNotice" class="mb-2 text-sm text-muted-foreground">
+        {{ runtimeActionNotice }}
+      </p>
+      <p v-if="runtimeActionError" class="mb-2 text-sm text-destructive">
+        {{ runtimeActionError }}
+      </p>
       <div
         v-if="summary?.setupPhase === 'env_agent_ready_for_settings'"
         class="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 bg-card p-3"

@@ -22,15 +22,18 @@ const {
   providerConfigDraft,
   providerConfigSaving,
   providerConfigError,
+  providerConfigNotice,
   modelPoolDraft,
   modelPoolSaving,
   modelPoolError,
+  modelPoolNotice,
   autoOrchestrateDraft,
   pluginIdDraft,
   pluginConfigDraft,
   solverPromptTemplateDraft,
   runtimeConfigSaving,
   runtimeConfigError,
+  runtimeConfigNotice,
   providerOptions,
   addModelPoolRow,
   removeModelPoolRow,
@@ -119,6 +122,9 @@ const {
             <p v-if="runtimeConfigError" class="text-sm text-destructive">
               {{ runtimeConfigError }}
             </p>
+            <p v-if="runtimeConfigNotice" class="text-sm text-muted-foreground">
+              {{ runtimeConfigNotice }}
+            </p>
           </TabsContent>
 
           <TabsContent value="providers" class="space-y-3">
@@ -143,6 +149,9 @@ const {
             </p>
             <p v-if="providerConfigError" class="text-sm text-destructive">
               {{ providerConfigError }}
+            </p>
+            <p v-if="providerConfigNotice" class="text-sm text-muted-foreground">
+              {{ providerConfigNotice }}
             </p>
           </TabsContent>
 
@@ -207,6 +216,9 @@ const {
               Pause flow first to update model pool safely.
             </p>
             <p v-if="modelPoolError" class="text-sm text-destructive">{{ modelPoolError }}</p>
+            <p v-if="modelPoolNotice" class="text-sm text-muted-foreground">
+              {{ modelPoolNotice }}
+            </p>
           </TabsContent>
         </Tabs>
       </CardContent>

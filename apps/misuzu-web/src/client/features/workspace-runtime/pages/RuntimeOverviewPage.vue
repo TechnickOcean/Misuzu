@@ -21,8 +21,10 @@ const {
   selectedPluginId,
   pluginDraft,
   initError,
+  initNotice,
   queueActionChallengeId,
   queueActionError,
+  queueActionNotice,
   initializeRuntime,
   openSolverAgent,
   badgeVariantForStatus,
@@ -76,6 +78,7 @@ const {
           <Button @click="initializeRuntime">Initialize Runtime</Button>
           <p v-if="initError" class="text-sm text-destructive">{{ initError }}</p>
         </div>
+        <p v-if="initNotice" class="text-sm text-muted-foreground">{{ initNotice }}</p>
       </CardContent>
     </Card>
 
@@ -285,6 +288,9 @@ const {
           />
 
           <p v-if="queueActionError" class="text-sm text-destructive">{{ queueActionError }}</p>
+          <p v-if="queueActionNotice" class="text-sm text-muted-foreground">
+            {{ queueActionNotice }}
+          </p>
         </div>
       </CardContent>
     </Card>
