@@ -54,6 +54,7 @@ const {
   providerConfigDraft,
   selectedPluginId,
   pluginDraft,
+  solverPromptTemplateDraft,
   solverProvider,
   solverModelId,
   solverSystemPrompt,

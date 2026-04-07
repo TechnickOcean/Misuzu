@@ -24,7 +24,10 @@ import {
 import { marked } from "marked"
 import type { PluginCatalogItem } from "@shared/protocol.ts"
 import type { PluginConfigDraft } from "@/features/workspace-runtime/composables/plugin-config-form.ts"
-import { useAppServices } from "@/shared/di/app-services.ts"
+import {
+  usePluginCatalogQuery,
+  usePluginReadmeQuery,
+} from "@/shared/composables/workspace-requests.ts"
 
 const props = defineProps<{
   pluginId: string
@@ -35,9 +38,12 @@ const emit = defineEmits<{
   "update:pluginId": [value: string]
 }>()
 
-const { apiClient } = useAppServices()
+const pluginCatalogQuery = usePluginCatalogQuery()
+const pluginReadmeQuery = usePluginReadmeQuery()
 
-const plugins = ref<PluginCatalogItem[]>([])
+pluginCatalogQuery.paramsRef.value.query = ""
+
+const plugins = computed<PluginCatalogItem[]>(() => pluginCatalogQuery.data.value ?? [])
 const pluginReadmeHtml = ref("")
 const pluginComboboxOpen = ref(false)
 
@@ -56,8 +62,24 @@ onMounted(async () => {
 })
 
 watch(
+  () => plugins.value,
+  (nextPlugins) => {
+    if (!props.pluginId && nextPlugins.length > 0) {
+      emit("update:pluginId", nextPlugins[0].id)
+      return
+    }
+
+    if (nextPlugins.length > 0 && !nextPlugins.some((plugin) => plugin.id === props.pluginId)) {
+      emit("update:pluginId", nextPlugins[0].id)
+    }
+  },
+  { immediate: true },
+)
+
+watch(
   () => props.pluginId,
   async (newPluginId) => {
+    pluginReadmeQuery.paramsRef.value.pluginId = newPluginId
     if (!newPluginId) {
       pluginReadmeHtml.value = ""
       return
@@ -68,18 +90,18 @@ watch(
 )
 
 async function loadPlugins() {
-  plugins.value = await apiClient.listPlugins()
-  if (!props.pluginId && plugins.value.length > 0) {
-    emit("update:pluginId", plugins.value[0].id)
-    return
-  }
-  if (!plugins.value.some((plugin) => plugin.id === props.pluginId)) {
-    emit("update:pluginId", plugins.value[0]?.id ?? "")
-  }
+  await pluginCatalogQuery.refetch(true)
 }
 
 async function loadPluginReadme(id: string) {
-  const readme = await apiClient.getPluginReadme(id)
+  pluginReadmeQuery.paramsRef.value.pluginId = id
+  await pluginReadmeQuery.refetch(true)
+  const readme = pluginReadmeQuery.data.value
+  if (!readme) {
+    pluginReadmeHtml.value = ""
+    return
+  }
+
   pluginReadmeHtml.value = await marked.parse(readme.markdown)
 }
 

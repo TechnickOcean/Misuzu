@@ -12,7 +12,7 @@ import {
   toPluginConfig,
   type PluginConfigDraft,
 } from "@/features/workspace-runtime/composables/plugin-config-form.ts"
-import { useAppServices } from "@/shared/di/app-services.ts"
+import { useRuntimeSettingsQuery } from "@/shared/composables/workspace-requests.ts"
 
 interface ModelPoolRow {
   id: string
@@ -23,7 +23,8 @@ interface ModelPoolRow {
 
 export function useRuntimeSettingsPage(workspaceId: string) {
   const runtime = useRuntimeWorkspace(workspaceId)
-  const { apiClient } = useAppServices()
+  const runtimeSettingsQuery = useRuntimeSettingsQuery()
+  runtimeSettingsQuery.paramsRef.value.workspaceId = workspaceId
 
   const settingsLoading = ref(false)
   const settingsError = ref("")
@@ -172,7 +173,12 @@ export function useRuntimeSettingsPage(workspaceId: string) {
     settingsError.value = ""
 
     try {
-      const settings = await apiClient.getRuntimeSettings(workspaceId)
+      await runtimeSettingsQuery.refetch(true)
+      const settings = runtimeSettingsQuery.data.value
+      if (!settings) {
+        throw new Error("Runtime settings are unavailable")
+      }
+
       providerCatalog.value = settings.providerCatalog
       providerConfigDraft.value = settings.providerConfig
       autoOrchestrateDraft.value = settings.autoOrchestrate

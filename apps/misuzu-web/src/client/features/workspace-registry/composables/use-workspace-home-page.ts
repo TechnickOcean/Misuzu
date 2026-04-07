@@ -1,38 +1,63 @@
 import { computed, watch } from "vue"
 import { useRouter } from "vue-router"
 import type { WorkspaceRegistryEntry } from "@shared/protocol.ts"
-import { useWorkspaceRegistryStore } from "@/features/workspace-registry/stores/workspace-registry-store.ts"
+import { useWorkspaceRegistryQuery } from "@/shared/composables/workspace-requests.ts"
 import { useAppServices } from "@/shared/di/app-services.ts"
+
+const registryUnsubscribers = new Set<() => void>()
 
 export function useWorkspaceHomePage() {
   const router = useRouter()
   const appServices = useAppServices()
 
-  const registryStore = useWorkspaceRegistryStore()
-  registryStore.bindServices(appServices)
+  const registryQuery = useWorkspaceRegistryQuery()
+  const entries = computed(() => registryQuery.data.value ?? [])
+  const loading = computed(() => registryQuery.asyncStatus.value === "loading")
 
   const runtimeCount = computed(
-    () => registryStore.entries.filter((entry) => entry.kind === "ctf-runtime").length,
+    () => entries.value.filter((entry) => entry.kind === "ctf-runtime").length,
   )
   const solverCount = computed(
-    () => registryStore.entries.filter((entry) => entry.kind === "solver").length,
+    () => entries.value.filter((entry) => entry.kind === "solver").length,
   )
   const initializedRuntimeCount = computed(
     () =>
-      registryStore.entries.filter(
-        (entry) => entry.kind === "ctf-runtime" && entry.runtime?.initialized,
-      ).length,
+      entries.value.filter((entry) => entry.kind === "ctf-runtime" && entry.runtime?.initialized)
+        .length,
   )
   const pendingRuntimeCount = computed(() => runtimeCount.value - initializedRuntimeCount.value)
-  const latestWorkspace = computed(() => registryStore.entries[0])
+  const latestWorkspace = computed(() => entries.value[0])
+
+  function connectRegistryFeed() {
+    if (registryUnsubscribers.size > 0) {
+      return
+    }
+
+    const unsubscribe = appServices.realtimeClient.connect("registry", (message) => {
+      if (message.type !== "registry.updated") {
+        return
+      }
+
+      void registryQuery.refetch()
+    })
+
+    registryUnsubscribers.add(unsubscribe)
+  }
+
+  function disconnectRegistryFeed() {
+    for (const unsubscribe of registryUnsubscribers) {
+      unsubscribe()
+    }
+    registryUnsubscribers.clear()
+  }
 
   watch(
     () => 0,
     (_, __, onCleanup) => {
-      void registryStore.loadEntries()
-      registryStore.connectRegistryFeed()
+      void registryQuery.refetch()
+      connectRegistryFeed()
       onCleanup(() => {
-        registryStore.disconnectRegistryFeed()
+        disconnectRegistryFeed()
       })
     },
     { immediate: true },
@@ -62,7 +87,9 @@ export function useWorkspaceHomePage() {
   }
 
   return {
-    registryStore,
+    entries,
+    loading,
+    refreshEntries: () => registryQuery.refetch(),
     runtimeCount,
     solverCount,
     initializedRuntimeCount,

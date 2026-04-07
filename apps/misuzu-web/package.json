@@ -15,6 +15,7 @@
   "dependencies": {
     "@hono/node-server": "^1.14.4",
     "@hono/node-ws": "^1.2.0",
+    "@pinia/colada": "catalog:",
     "@vueuse/core": "catalog:",
     "class-variance-authority": "catalog:",
     "clsx": "catalog:",

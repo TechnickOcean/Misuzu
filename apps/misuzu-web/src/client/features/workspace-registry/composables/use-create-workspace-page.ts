@@ -13,8 +13,11 @@ import {
   type ContestMode,
   type PluginConfigDraft,
 } from "@/features/workspace-runtime/composables/plugin-config-form.ts"
-import { useWorkspaceRegistryStore } from "@/features/workspace-registry/stores/workspace-registry-store.ts"
-import { useAppServices } from "@/shared/di/app-services.ts"
+import {
+  useCreateRuntimeWorkspaceMutation,
+  useCreateSolverWorkspaceMutation,
+  useProviderCatalogQuery,
+} from "@/shared/composables/workspace-requests.ts"
 
 interface ModelPoolRow {
   id: string
@@ -26,10 +29,11 @@ interface ModelPoolRow {
 export function useCreateWorkspacePage() {
   const router = useRouter()
 
-  const appServices = useAppServices()
-  const { apiClient } = appServices
-  const registryStore = useWorkspaceRegistryStore()
-  registryStore.bindServices(appServices)
+  const providerCatalogQuery = useProviderCatalogQuery()
+  providerCatalogQuery.paramsRef.value.workspaceId = ""
+
+  const createRuntimeWorkspaceMutation = useCreateRuntimeWorkspaceMutation()
+  const createSolverWorkspaceMutation = useCreateSolverWorkspaceMutation()
 
   const steps = ["Workspace", "Configuration", "Review"]
   const step = ref(1)
@@ -42,7 +46,9 @@ export function useCreateWorkspacePage() {
 
   const runtimeWithPlugin = ref(true)
   const runtimeAutoOrchestrate = ref(false)
-  const providerCatalog = ref<ProviderCatalogItem[]>([])
+  const providerCatalog = computed<ProviderCatalogItem[]>(
+    () => providerCatalogQuery.data.value ?? [],
+  )
   const modelPool = ref<ModelPoolRow[]>([createModelPoolRow()])
   const providerConfigEnabled = ref(false)
   const providerConfigDraft = ref<ProviderConfigEntry[]>([])
@@ -70,7 +76,7 @@ export function useCreateWorkspacePage() {
   })
 
   onMounted(async () => {
-    providerCatalog.value = await apiClient.listProviderCatalog()
+    await providerCatalogQuery.refetch()
   })
 
   function createModelPoolRow(): ModelPoolRow {
@@ -165,7 +171,7 @@ export function useCreateWorkspacePage() {
       validateStep(2)
 
       if (kind.value === "ctf-runtime") {
-        const snapshot = await registryStore.createRuntimeWorkspace({
+        const snapshot = await createRuntimeWorkspaceMutation.mutateAsync({
           name: name.value,
           rootDir: rootDir.value,
           providerConfig: providerConfigEnabled.value ? providerConfigDraft.value : undefined,
@@ -199,7 +205,7 @@ export function useCreateWorkspacePage() {
         return
       }
 
-      const solverSnapshot = await registryStore.createSolverWorkspace({
+      const solverSnapshot = await createSolverWorkspaceMutation.mutateAsync({
         name: name.value,
         rootDir: rootDir.value,
         providerConfig: providerConfigEnabled.value ? providerConfigDraft.value : undefined,

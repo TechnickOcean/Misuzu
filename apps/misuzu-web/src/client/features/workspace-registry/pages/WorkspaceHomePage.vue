@@ -14,7 +14,9 @@ import { useWorkspaceHomePage } from "@/features/workspace-registry/composables/
 import AppLayout from "@/layouts/AppLayout.vue"
 
 const {
-  registryStore,
+  entries,
+  loading,
+  refreshEntries,
   runtimeCount,
   solverCount,
   initializedRuntimeCount,
@@ -44,7 +46,7 @@ const {
         <SidebarGroupContent>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton @click="registryStore.loadEntries">
+              <SidebarMenuButton @click="refreshEntries">
                 <RefreshCcwIcon />
                 <span>Refresh Registry</span>
               </SidebarMenuButton>
@@ -65,7 +67,7 @@ const {
           <div class="grid grid-cols-2 gap-2 text-xs">
             <div class="rounded-md border border-sidebar-border/70 bg-sidebar p-2">
               <p class="text-sidebar-foreground/70">Total</p>
-              <p class="mt-1 text-sm font-semibold">{{ registryStore.entries.length }}</p>
+              <p class="mt-1 text-sm font-semibold">{{ entries.length }}</p>
             </div>
             <div class="rounded-md border border-sidebar-border/70 bg-sidebar p-2">
               <p class="text-sidebar-foreground/70">Solver</p>
@@ -103,7 +105,7 @@ const {
       <SidebarMenuItem>
         <SidebarMenuButton>
           <WorkflowIcon />
-          <span>{{ registryStore.entries.length }} Registry Entries</span>
+          <span>{{ entries.length }} Registry Entries</span>
         </SidebarMenuButton>
       </SidebarMenuItem>
     </template>
@@ -115,20 +117,18 @@ const {
           Persisted entries restored from backend storage.
         </p>
       </div>
-      <Badge variant="secondary">{{ registryStore.entries.length }} entries</Badge>
+      <Badge variant="secondary">{{ entries.length }} entries</Badge>
     </header>
 
     <section class="space-y-3 px-3 py-3 md:px-4">
-      <p v-if="registryStore.loading" class="text-sm text-muted-foreground">
-        Loading workspace registry...
-      </p>
-      <p v-else-if="registryStore.entries.length === 0" class="text-sm text-muted-foreground">
+      <p v-if="loading" class="text-sm text-muted-foreground">Loading workspace registry...</p>
+      <p v-else-if="entries.length === 0" class="text-sm text-muted-foreground">
         No workspace found. Start by creating one.
       </p>
 
       <div class="grid gap-3">
         <WorkspaceCard
-          v-for="entry in registryStore.entries"
+          v-for="entry in entries"
           :key="entry.id"
           :entry="entry"
           @open="openWorkspace"

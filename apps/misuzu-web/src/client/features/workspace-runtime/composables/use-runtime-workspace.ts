@@ -1,4 +1,4 @@
-import { computed } from "vue"
+import { computed, ref } from "vue"
 import type {
   ModelPoolInput,
   PromptMode,
@@ -6,55 +6,151 @@ import type {
   RuntimeConfigUpdateRequest,
   RuntimeInitRequest,
 } from "@shared/protocol.ts"
+import {
+  useDequeueRuntimeChallengeMutation,
+  useEnqueueRuntimeChallengeMutation,
+  useEnsureRuntimeEnvironmentAgentMutation,
+  useInitializeRuntimeMutation,
+  usePauseRuntimeDispatchMutation,
+  usePromptRuntimeAgentMutation,
+  useResetRuntimeSolverMutation,
+  useRuntimeAgentStateQuery,
+  useRuntimeWorkspaceQuery,
+  useStartRuntimeDispatchMutation,
+  useSyncRuntimeChallengesMutation,
+  useSyncRuntimeNoticesMutation,
+  useUpdateRuntimeConfigMutation,
+  useUpdateRuntimeModelPoolMutation,
+  useUpdateRuntimeProviderConfigMutation,
+} from "@/shared/composables/workspace-requests.ts"
 import { useAppServices } from "@/shared/di/app-services.ts"
-import { useRuntimeWorkspaceStore } from "@/features/workspace-runtime/stores/runtime-workspace-store.ts"
+
+const runtimeUnsubscribers = new Map<string, () => void>()
+const agentRefreshTimers = new Map<string, number>()
+const activeAgentIds = ref<Record<string, string>>({})
 
 export function useRuntimeWorkspace(workspaceId: string) {
-  const store = useRuntimeWorkspaceStore()
-  store.bindServices(useAppServices())
+  const appServices = useAppServices()
+  const runtimeWorkspaceQuery = useRuntimeWorkspaceQuery()
+  const runtimeAgentStateQuery = useRuntimeAgentStateQuery()
 
-  const snapshot = computed(() => store.snapshots[workspaceId])
-  const activeAgentId = computed(() => store.activeAgentIds[workspaceId])
+  runtimeWorkspaceQuery.paramsRef.value.workspaceId = workspaceId
+
+  const initializeRuntimeMutation = useInitializeRuntimeMutation()
+  const ensureRuntimeEnvironmentAgentMutation = useEnsureRuntimeEnvironmentAgentMutation()
+  const pauseRuntimeDispatchMutation = usePauseRuntimeDispatchMutation()
+  const startRuntimeDispatchMutation = useStartRuntimeDispatchMutation()
+  const updateRuntimeModelPoolMutation = useUpdateRuntimeModelPoolMutation()
+  const syncRuntimeChallengesMutation = useSyncRuntimeChallengesMutation()
+  const syncRuntimeNoticesMutation = useSyncRuntimeNoticesMutation()
+  const enqueueRuntimeChallengeMutation = useEnqueueRuntimeChallengeMutation()
+  const dequeueRuntimeChallengeMutation = useDequeueRuntimeChallengeMutation()
+  const resetRuntimeSolverMutation = useResetRuntimeSolverMutation()
+  const updateRuntimeProviderConfigMutation = useUpdateRuntimeProviderConfigMutation()
+  const updateRuntimeConfigMutation = useUpdateRuntimeConfigMutation()
+  const promptRuntimeAgentMutation = usePromptRuntimeAgentMutation()
+
+  const snapshot = computed(() => runtimeWorkspaceQuery.data.value)
+  const activeAgentId = computed(() => activeAgentIds.value[workspaceId])
   const activeAgentState = computed(() => {
-    const agentId = store.activeAgentIds[workspaceId]
-    if (!agentId) {
+    if (!activeAgentId.value) {
       return undefined
     }
 
-    return store.agentStates[workspaceId]?.[agentId]
+    return runtimeAgentStateQuery.data.value
   })
+
+  let feedConnected = false
+
+  function connectWorkspaceFeed() {
+    if (runtimeUnsubscribers.has(workspaceId)) {
+      return
+    }
+
+    const unsubscribe = appServices.realtimeClient.connect(`runtime:${workspaceId}`, (message) => {
+      if (message.type === "runtime.snapshot" && message.payload.workspaceId === workspaceId) {
+        void runtimeWorkspaceQuery.refetch()
+        return
+      }
+
+      if (message.type !== "agent.event" || message.payload.workspaceId !== workspaceId) {
+        return
+      }
+
+      const refreshKey = `${workspaceId}:${message.payload.agentId}`
+      window.clearTimeout(agentRefreshTimers.get(refreshKey))
+
+      const timerId = window.setTimeout(() => {
+        if (activeAgentId.value === message.payload.agentId) {
+          void runtimeAgentStateQuery.refetch()
+        }
+      }, 220)
+
+      agentRefreshTimers.set(refreshKey, timerId)
+    })
+
+    runtimeUnsubscribers.set(workspaceId, unsubscribe)
+  }
 
   return {
     snapshot,
     activeAgentId,
     activeAgentState,
-    error: computed(() => store.error),
-    loading: computed(() => store.loading),
-    open: () => store.openWorkspace(workspaceId),
-    setActiveAgent: (agentId: string) => store.setActiveAgent(workspaceId, agentId),
+    error: computed(() => runtimeWorkspaceQuery.error.value?.message ?? null),
+    loading: computed(() => runtimeWorkspaceQuery.asyncStatus.value === "loading"),
+    open: async () => {
+      connectWorkspaceFeed()
+      feedConnected = true
+      await runtimeWorkspaceQuery.refetch()
+    },
+    setActiveAgent: async (agentId: string) => {
+      activeAgentIds.value[workspaceId] = agentId
+      runtimeAgentStateQuery.paramsRef.value.workspaceId = workspaceId
+      runtimeAgentStateQuery.paramsRef.value.agentId = agentId
+      await runtimeAgentStateQuery.refetch()
+    },
     promptActiveAgent: (prompt: string, mode: PromptMode = "followup") => {
-      const agentId = store.activeAgentIds[workspaceId]
+      const agentId = activeAgentId.value
       if (!agentId) {
         throw new Error("No runtime agent selected")
       }
 
-      return store.promptAgent(workspaceId, agentId, prompt, mode)
+      return promptRuntimeAgentMutation.mutateAsync({ workspaceId, agentId, prompt, mode })
     },
-    pauseDispatch: () => store.pauseDispatch(workspaceId),
-    startDispatch: (autoEnqueue = false) => store.startDispatch(workspaceId, autoEnqueue),
-    updateModelPool: (modelPool: ModelPoolInput[]) => store.updateModelPool(workspaceId, modelPool),
-    syncChallenges: () => store.syncChallenges(workspaceId),
-    syncNotices: () => store.syncNotices(workspaceId),
-    ensureEnvironmentAgent: () => store.ensureEnvironmentAgent(workspaceId),
+    pauseDispatch: () => pauseRuntimeDispatchMutation.mutateAsync(workspaceId),
+    startDispatch: (autoEnqueue = false) =>
+      startRuntimeDispatchMutation.mutateAsync({ workspaceId, autoEnqueue }),
+    updateModelPool: (modelPool: ModelPoolInput[]) =>
+      updateRuntimeModelPoolMutation.mutateAsync({
+        workspaceId,
+        request: { modelPool },
+      }),
+    syncChallenges: () => syncRuntimeChallengesMutation.mutateAsync(workspaceId),
+    syncNotices: () => syncRuntimeNoticesMutation.mutateAsync(workspaceId),
+    ensureEnvironmentAgent: () => ensureRuntimeEnvironmentAgentMutation.mutateAsync(workspaceId),
     initializeRuntime: (pluginId: string, pluginConfig: RuntimeInitRequest["pluginConfig"]) =>
-      store.initializeRuntime(workspaceId, { pluginId, pluginConfig }),
-    enqueueChallenge: (challengeId: number) => store.enqueueChallenge(workspaceId, challengeId),
-    dequeueChallenge: (challengeId: number) => store.dequeueChallenge(workspaceId, challengeId),
-    resetSolver: (challengeId: number) => store.resetSolver(workspaceId, challengeId),
+      initializeRuntimeMutation.mutateAsync({
+        workspaceId,
+        request: { pluginId, pluginConfig },
+      }),
+    enqueueChallenge: (challengeId: number) =>
+      enqueueRuntimeChallengeMutation.mutateAsync({ workspaceId, challengeId }),
+    dequeueChallenge: (challengeId: number) =>
+      dequeueRuntimeChallengeMutation.mutateAsync({ workspaceId, challengeId }),
+    resetSolver: (challengeId: number) =>
+      resetRuntimeSolverMutation.mutateAsync({ workspaceId, challengeId }),
     updateProviderConfig: (providerConfig: ProviderConfigEntry[]) =>
-      store.updateProviderConfig(workspaceId, providerConfig),
+      updateRuntimeProviderConfigMutation.mutateAsync({ workspaceId, providerConfig }),
     updateRuntimeConfig: (request: RuntimeConfigUpdateRequest) =>
-      store.updateRuntimeConfig(workspaceId, request),
-    disconnect: () => store.disconnectWorkspaceFeed(workspaceId),
+      updateRuntimeConfigMutation.mutateAsync({ workspaceId, request }),
+    disconnect: () => {
+      if (!feedConnected) {
+        return
+      }
+
+      runtimeUnsubscribers.get(workspaceId)?.()
+      runtimeUnsubscribers.delete(workspaceId)
+      feedConnected = false
+    },
   }
 }
