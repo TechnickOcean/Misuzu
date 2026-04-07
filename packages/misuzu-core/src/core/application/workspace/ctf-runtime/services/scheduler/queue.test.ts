@@ -93,21 +93,25 @@ describe("ctf runtime fifo scheduler", () => {
     expect(workspace.getSchedulerState().paused).toBe(false)
   })
 
-  test("aborts active solver task when queue is paused", async () => {
+  test("retries active solver task after pause and resume", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
 
     const observedTaskIds: string[] = []
     let rejectActiveTask: ((error?: unknown) => void) | undefined
+    let activeTaskAttempt = 0
 
     workspace.registerSolver({
       solverId: "solver-abort",
       solve: async (task) => {
         observedTaskIds.push(task.taskId)
         if (task.taskId === "task-active") {
-          return new Promise((_resolve, reject) => {
-            rejectActiveTask = reject
-          })
+          activeTaskAttempt += 1
+          if (activeTaskAttempt === 1) {
+            return new Promise((_resolve, reject) => {
+              rejectActiveTask = reject
+            })
+          }
         }
 
         return `done:${task.taskId}`
@@ -123,14 +127,20 @@ describe("ctf runtime fifo scheduler", () => {
     await new Promise((resolve) => setTimeout(resolve, 30))
     workspace.pauseTaskDispatch()
 
-    await expect(activeTask).rejects.toThrow("task aborted")
+    let activeTaskSettled = false
+    void activeTask.finally(() => {
+      activeTaskSettled = true
+    })
+
     await new Promise((resolve) => setTimeout(resolve, 30))
     expect(observedTaskIds).toEqual(["task-active"])
     expect(workspace.getSchedulerState().paused).toBe(true)
+    expect(activeTaskSettled).toBe(false)
 
     workspace.resumeTaskDispatch()
+    await expect(activeTask).resolves.toMatchObject({ taskId: "task-active" })
     await expect(queuedTask).resolves.toMatchObject({ taskId: "task-queued" })
-    expect(observedTaskIds).toEqual(["task-active", "task-queued"])
+    expect(observedTaskIds).toEqual(["task-active", "task-queued", "task-active"])
   })
 
   test("cancels pending scheduler task by task id", async () => {

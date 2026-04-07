@@ -671,7 +671,7 @@ describe("ctf runtime platform integration", () => {
     await workspace.shutdown()
   })
 
-  test("aborts active solver loop when dispatch is paused", async () => {
+  test("retries active solver loop when dispatch resumes after pause", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
 
@@ -701,11 +701,15 @@ describe("ctf runtime platform integration", () => {
 
     let rejectPrompt: ((error?: unknown) => void) | undefined
     let abortCallCount = 0
+    let promptCallCount = 0
 
     solver!.prompt = async () => {
-      await new Promise<void>((_resolve, reject) => {
-        rejectPrompt = reject
-      })
+      promptCallCount += 1
+      if (promptCallCount === 1) {
+        await new Promise<void>((_resolve, reject) => {
+          rejectPrompt = reject
+        })
+      }
     }
     solver!.abort = () => {
       abortCallCount += 1
@@ -718,10 +722,20 @@ describe("ctf runtime platform integration", () => {
 
     workspace.pauseTaskDispatch()
 
-    await expect(runningTask).rejects.toThrow("solver aborted by pause")
+    let runningTaskSettled = false
+    void runningTask.finally(() => {
+      runningTaskSettled = true
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 30))
     await waitForCondition(() => workspace.getSolverActivationState(122)?.status === "inactive")
     expect(abortCallCount).toBe(1)
     expect(workspace.isTaskDispatchPaused()).toBe(true)
+    expect(runningTaskSettled).toBe(false)
+
+    workspace.resumeTaskDispatch()
+    await expect(runningTask).resolves.toMatchObject({ solverId: "solver-122" })
+    expect(promptCallCount).toBe(2)
 
     await workspace.shutdown()
   })

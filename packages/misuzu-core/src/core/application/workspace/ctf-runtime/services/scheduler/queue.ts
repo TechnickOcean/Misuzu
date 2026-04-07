@@ -57,6 +57,7 @@ export class QueueService {
   private readonly busySolverIds = new Set<string>()
   private readonly inflightTasks = new Map<string, SolverTask>()
   private readonly deferredTaskIds = new Set<string>()
+  private readonly pausedAbortRetryTaskIds = new Set<string>()
   private taskSequence = 0
   private paused = false
   private onStateChanged: QueueStateChangeListener = () => {}
@@ -84,6 +85,13 @@ export class QueueService {
       this.idleSolverQueue.splice(solverIndex, 1)
     }
 
+    this.busySolverIds.delete(solverId)
+
+    const inflightTask = this.inflightTasks.get(solverId)
+    if (inflightTask) {
+      this.pausedAbortRetryTaskIds.delete(inflightTask.taskId)
+    }
+
     this.inflightTasks.delete(solverId)
     this.notifyStateChanged()
   }
@@ -109,6 +117,7 @@ export class QueueService {
     }
 
     this.paused = true
+    this.markRunningTasksForPauseRetry()
     this.abortRunningTasks()
     this.notifyStateChanged()
   }
@@ -219,6 +228,7 @@ export class QueueService {
         continue
       }
 
+      this.pausedAbortRetryTaskIds.delete(taskId)
       this.solverRegistry.get(solverId)?.abortActiveTask?.()
       return "inflight"
     }
@@ -358,6 +368,7 @@ export class QueueService {
   ) {
     void Promise.resolve(solver.solve(pendingTask.task, context))
       .then((output) => {
+        this.pausedAbortRetryTaskIds.delete(pendingTask.task.taskId)
         this.releaseSolver(solverId)
         this.scheduleDispatch()
 
@@ -378,9 +389,23 @@ export class QueueService {
           return
         }
 
+        if (this.pausedAbortRetryTaskIds.delete(pendingTask.task.taskId)) {
+          this.deferredTaskIds.delete(pendingTask.task.taskId)
+          this.pendingTaskQueue.push(pendingTask)
+          this.notifyStateChanged()
+          this.scheduleDispatch()
+          return
+        }
+
         this.scheduleDispatch()
         pendingTask.reject(error)
       })
+  }
+
+  private markRunningTasksForPauseRetry() {
+    for (const task of this.inflightTasks.values()) {
+      this.pausedAbortRetryTaskIds.add(task.taskId)
+    }
   }
 
   private releaseSolver(solverId: string) {
