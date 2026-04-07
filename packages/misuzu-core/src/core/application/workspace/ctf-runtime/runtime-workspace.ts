@@ -626,11 +626,43 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
       return !this.solverHub.isChallengeSolved(challengeId)
     }
 
+    const restoredTaskBudget = this.resolveRestoredTaskBudget()
+    let remainingBudget = restoredTaskBudget
+    const limitedInflightTasks: PersistedCTFRuntimeQueueState["inflightTasks"] = []
+    const limitedPendingTasks: PersistedCTFRuntimeQueueState["pendingTasks"] = []
+
+    for (const task of state.inflightTasks) {
+      if (!shouldKeepTask(task.payload) || remainingBudget <= 0) {
+        continue
+      }
+
+      limitedInflightTasks.push(task)
+      remainingBudget -= 1
+    }
+
+    for (const task of state.pendingTasks) {
+      if (!shouldKeepTask(task.payload) || remainingBudget <= 0) {
+        continue
+      }
+
+      limitedPendingTasks.push(task)
+      remainingBudget -= 1
+    }
+
     return {
       ...state,
-      pendingTasks: state.pendingTasks.filter((task) => shouldKeepTask(task.payload)),
-      inflightTasks: state.inflightTasks.filter((task) => shouldKeepTask(task.payload)),
+      pendingTasks: limitedPendingTasks,
+      inflightTasks: limitedInflightTasks,
     }
+  }
+
+  private resolveRestoredTaskBudget() {
+    const modelCapacity = this.modelPool.getState().totalCapacity
+    if (!Number.isFinite(modelCapacity) || modelCapacity <= 0) {
+      return 0
+    }
+
+    return Math.max(1, Math.floor(modelCapacity))
   }
 
   private buildRuntimeRestoreContext(

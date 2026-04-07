@@ -965,6 +965,92 @@ describe("ctf runtime platform integration", () => {
     await restoredWorkspace.shutdown()
   })
 
+  test("caps restored queue tasks by model pool capacity", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const runtime = {
+      plugin: new MockPlatformPlugin([
+        {
+          id: 161,
+          title: "restore-cap-1",
+          category: "misc",
+          score: 100,
+          solvedCount: 0,
+        },
+        {
+          id: 162,
+          title: "restore-cap-2",
+          category: "web",
+          score: 120,
+          solvedCount: 0,
+        },
+        {
+          id: 163,
+          title: "restore-cap-3",
+          category: "pwn",
+          score: 150,
+          solvedCount: 0,
+        },
+      ]),
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" as const },
+        auth: { mode: "manual" as const },
+      },
+      startPaused: true,
+    }
+
+    const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir, runtime })
+    await firstWorkspace.setModelPoolItems([resolveDefaultPoolItem(1)])
+
+    void firstWorkspace.enqueueTask({ challenge: 161 }, "task-161").catch(() => {})
+    void firstWorkspace.enqueueTask({ challenge: 162 }, "task-162").catch(() => {})
+    void firstWorkspace.enqueueTask({ challenge: 163 }, "task-163").catch(() => {})
+
+    expect(firstWorkspace.listPendingSchedulerTasks().map((task) => task.taskId)).toEqual([
+      "task-161",
+      "task-162",
+      "task-163",
+    ])
+
+    await firstWorkspace.shutdown()
+
+    const restoredWorkspace = await createCTFRuntimeWorkspace({
+      rootDir,
+      runtime: {
+        ...runtime,
+        plugin: new MockPlatformPlugin([
+          {
+            id: 161,
+            title: "restore-cap-1",
+            category: "misc",
+            score: 100,
+            solvedCount: 0,
+          },
+          {
+            id: 162,
+            title: "restore-cap-2",
+            category: "web",
+            score: 120,
+            solvedCount: 0,
+          },
+          {
+            id: 163,
+            title: "restore-cap-3",
+            category: "pwn",
+            score: 150,
+            solvedCount: 0,
+          },
+        ]),
+      },
+    })
+
+    expect(restoredWorkspace.listPendingSchedulerTasks().map((task) => task.taskId)).toEqual([
+      "task-161",
+    ])
+
+    await restoredWorkspace.shutdown()
+  })
+
   test("restores solved progress and skips solver recreation for solved challenges", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
     const challengeId = 181
