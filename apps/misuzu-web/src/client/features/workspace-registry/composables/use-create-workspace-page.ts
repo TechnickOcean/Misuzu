@@ -7,17 +7,15 @@ import {
   type PluginConfigDraft,
 } from "@/features/workspace-runtime/composables/plugin-config-form.ts"
 import {
+  createModelPoolRow,
+  normalizeModelPoolRows,
+  type ModelPoolRow,
+} from "@/features/workspace-runtime/composables/model-pool-form.ts"
+import {
   useCreateRuntimeWorkspaceMutation,
   useProviderCatalogQuery,
   useStartRuntimeDispatchMutation,
 } from "@/shared/composables/workspace-requests.ts"
-
-interface ModelPoolRow {
-  id: string
-  provider: string
-  modelId: string
-  maxConcurrency: string
-}
 
 type ProviderConfigMode = "form" | "upload"
 
@@ -72,15 +70,6 @@ export function useCreateWorkspacePage() {
   onMounted(async () => {
     await providerCatalogQuery.refetch(true)
   })
-
-  function createModelPoolRow(): ModelPoolRow {
-    return {
-      id: crypto.randomUUID(),
-      provider: "",
-      modelId: "",
-      maxConcurrency: "1",
-    }
-  }
 
   function listModelsForProvider(provider: string) {
     return providerCatalog.value.find((item) => item.provider === provider)?.models ?? []
@@ -188,7 +177,7 @@ export function useCreateWorkspacePage() {
       }
 
       validateProviderConfigDraft()
-      validateRuntimeModelPool()
+      void normalizeModelPoolRows(modelPool.value)
       return
     }
 
@@ -202,22 +191,6 @@ export function useCreateWorkspacePage() {
       }
 
       void toPluginConfig(pluginDraft)
-    }
-  }
-
-  function validateRuntimeModelPool() {
-    if (normalizedModelPool.value.length === 0) {
-      throw new Error("At least one model pool item is required")
-    }
-
-    for (const model of normalizedModelPool.value) {
-      if (!model.provider || !model.modelId) {
-        throw new Error("Model pool provider/model id cannot be empty")
-      }
-
-      if (!Number.isInteger(model.maxConcurrency) || model.maxConcurrency <= 0) {
-        throw new Error("Model pool maxConcurrency must be a positive integer")
-      }
     }
   }
 

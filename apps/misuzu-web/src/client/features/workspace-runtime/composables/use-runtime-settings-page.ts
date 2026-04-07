@@ -1,6 +1,5 @@
 import { computed, onMounted, reactive, ref, watch } from "vue"
 import type {
-  ModelPoolInput,
   ProviderCatalogItem,
   ProviderConfigEntry,
   RuntimePlatformConfig,
@@ -12,14 +11,12 @@ import {
   toPluginConfig,
   type PluginConfigDraft,
 } from "@/features/workspace-runtime/composables/plugin-config-form.ts"
+import {
+  createModelPoolRow,
+  normalizeModelPoolRows,
+  type ModelPoolRow,
+} from "@/features/workspace-runtime/composables/model-pool-form.ts"
 import { useRuntimeSettingsQuery } from "@/shared/composables/workspace-requests.ts"
-
-interface ModelPoolRow {
-  id: string
-  provider: string
-  modelId: string
-  maxConcurrency: string
-}
 
 export function useRuntimeSettingsPage(workspaceId: string) {
   const runtime = useRuntimeWorkspace(workspaceId)
@@ -70,18 +67,6 @@ export function useRuntimeSettingsPage(workspaceId: string) {
       syncModelPoolDraftFromSnapshot()
     },
   )
-
-  function createModelPoolRow(input?: Partial<ModelPoolInput>): ModelPoolRow {
-    const fallbackProvider = providerCatalog.value[0]?.provider ?? "openai"
-    const fallbackModelId = providerCatalog.value[0]?.models[0]?.modelId ?? "gpt-4.1"
-
-    return {
-      id: crypto.randomUUID(),
-      provider: input?.provider ?? fallbackProvider,
-      modelId: input?.modelId ?? fallbackModelId,
-      maxConcurrency: String(input?.maxConcurrency ?? 1),
-    }
-  }
 
   function syncModelPoolDraftFromSnapshot() {
     const items = snapshot.value?.modelPool.items ?? []
@@ -144,24 +129,7 @@ export function useRuntimeSettingsPage(workspaceId: string) {
         throw new Error("Pause flow before updating model pool")
       }
 
-      const normalized = modelPoolDraft.value.map((item) => {
-        const provider = item.provider.trim()
-        const modelId = item.modelId.trim()
-        const maxConcurrency = Number(item.maxConcurrency)
-        if (!provider || !modelId) {
-          throw new Error("Model pool provider/model id cannot be empty")
-        }
-
-        if (!Number.isInteger(maxConcurrency) || maxConcurrency <= 0) {
-          throw new Error("Model pool maxConcurrency must be a positive integer")
-        }
-
-        return {
-          provider,
-          modelId,
-          maxConcurrency,
-        }
-      })
+      const normalized = normalizeModelPoolRows(modelPoolDraft.value)
 
       await runtime.updateModelPool(normalized)
       syncModelPoolDraftFromSnapshot()
