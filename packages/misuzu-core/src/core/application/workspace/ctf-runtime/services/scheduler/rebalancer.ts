@@ -95,6 +95,11 @@ export class RuntimeRankOrchestrator {
     this.syncRankStates()
   }
 
+  listRankedCandidatesSnapshot() {
+    this.syncRankStates()
+    return this.computeRankedCandidates(Date.now())
+  }
+
   scheduleRebalance(immediate = false) {
     if (this.rankRebalanceRunning) {
       return

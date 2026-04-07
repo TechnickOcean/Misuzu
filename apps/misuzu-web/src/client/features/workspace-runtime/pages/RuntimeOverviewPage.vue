@@ -103,6 +103,9 @@ const {
                   <p class="text-xs text-muted-foreground">
                     {{ challenge.category }} · {{ challenge.score }} pts · solved
                     {{ challenge.solvedCount }}
+                    <template v-if="typeof challenge.rank === 'number'">
+                      · rank {{ Math.round(challenge.rank) }}
+                    </template>
                   </p>
                 </div>
                 <Badge :variant="badgeVariantForStatus(challenge.status)">
@@ -161,6 +164,9 @@ const {
                     <p class="text-xs text-muted-foreground">
                       {{ challenge.category }} · {{ challenge.score }} pts · solved
                       {{ challenge.solvedCount }}
+                      <template v-if="typeof challenge.rank === 'number'">
+                        · rank {{ Math.round(challenge.rank) }}
+                      </template>
                     </p>
                   </div>
                   <Badge :variant="badgeVariantForStatus(challenge.status)">
@@ -219,6 +225,9 @@ const {
                   <p class="text-xs text-muted-foreground">
                     {{ challenge.category }} · {{ challenge.score }} pts · solved
                     {{ challenge.solvedCount }}
+                    <template v-if="typeof challenge.rank === 'number'">
+                      · rank {{ Math.round(challenge.rank) }}
+                    </template>
                   </p>
                   <p v-if="challenge.statusReason" class="text-xs text-muted-foreground">
                     {{ challenge.statusReason }}

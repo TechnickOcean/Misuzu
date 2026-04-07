@@ -88,7 +88,14 @@ const {
                   <ShieldCheckIcon v-if="agent.role === 'environment'" />
                   <BotIcon v-else />
                   <span>{{ agent.name }}</span>
-                  <Badge class="ml-auto" :variant="statusBadgeVariant(agent.status)">
+                  <Badge
+                    v-if="agent.role === 'solver' && typeof agent.rank === 'number'"
+                    variant="outline"
+                    class="ml-auto"
+                  >
+                    Rank {{ Math.round(agent.rank) }}
+                  </Badge>
+                  <Badge :variant="statusBadgeVariant(agent.status)">
                     {{ statusLabel(agent.status) }}
                   </Badge>
                 </SidebarMenuButton>

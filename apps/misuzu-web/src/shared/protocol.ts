@@ -115,12 +115,14 @@ export interface ChallengeSummaryView {
   queuedTaskId?: string
   statusReason?: string
   modelId?: string
+  rank?: number
 }
 
 export interface RuntimeWorkspaceSnapshot {
   id: string
   rootDir: string
   initialized: boolean
+  setupPhase: "plugin_pending" | "env_agent_adapting" | "env_agent_ready_for_settings" | "ready"
   pluginId?: string
   paused: boolean
   queue: {
@@ -139,6 +141,7 @@ export interface RuntimeWorkspaceSnapshot {
     challengeId?: number
   }>
   environmentAgentReady: boolean
+  environmentAgentAdapted: boolean
   autoOrchestrate: boolean
 }
 

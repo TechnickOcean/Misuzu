@@ -26,6 +26,7 @@ export {
   RuntimeRankOrchestrator,
   type RuntimeRankOrchestratorHost,
 } from "./scheduler/rebalancer.ts"
+export { type RankedCandidate } from "./scheduler/rank.ts"
 export {
   WorkspaceModelPool,
   ModelPoolError,

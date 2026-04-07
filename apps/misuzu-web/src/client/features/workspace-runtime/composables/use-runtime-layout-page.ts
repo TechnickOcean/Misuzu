@@ -12,7 +12,10 @@ type AgentSidebarStatus =
   | "solved"
   | "model_unassigned"
 
-type SidebarAgent = RuntimeWorkspaceSnapshot["agents"][number] & { status: AgentSidebarStatus }
+type SidebarAgent = RuntimeWorkspaceSnapshot["agents"][number] & {
+  status: AgentSidebarStatus
+  rank?: number
+}
 
 export function useRuntimeLayoutPage() {
   const route = useRoute()
@@ -57,12 +60,24 @@ export function useRuntimeLayoutPage() {
       .map((agent) => ({
         ...agent,
         status: resolveAgentStatus(snapshot, agent, challengeById.get(agent.challengeId ?? -1)),
+        rank: challengeById.get(agent.challengeId ?? -1)?.rank,
       }))
-      .sort(
-        (left, right) =>
+      .sort((left, right) => {
+        if (left.role !== right.role) {
+          return left.role === "environment" ? -1 : 1
+        }
+
+        const leftRank = left.rank ?? Number.NEGATIVE_INFINITY
+        const rightRank = right.rank ?? Number.NEGATIVE_INFINITY
+        if (leftRank !== rightRank) {
+          return rightRank - leftRank
+        }
+
+        return (
           agentStatusWeight(left.status) - agentStatusWeight(right.status) ||
-          left.name.localeCompare(right.name),
-      )
+          left.name.localeCompare(right.name)
+        )
+      })
   })
 
   onMounted(async () => {

@@ -729,6 +729,16 @@ export class WorkspaceManager {
   }
 
   private toRuntimeSnapshot(session: RuntimeWorkspaceSession): RuntimeWorkspaceSnapshot {
+    const rankEntries = (
+      session.workspace as {
+        listChallengeRanks?: () => Array<{ challengeId: number; rank: number }>
+      }
+    ).listChallengeRanks?.()
+
+    const rankByChallengeId = new Map<number, number>(
+      (rankEntries ?? []).map((entry) => [entry.challengeId, entry.rank] as const),
+    )
+
     const activationByChallengeId = new Map<number, ChallengeSummaryView>()
     for (const activation of session.workspace.listSolverActivationStates()) {
       const status =
@@ -748,6 +758,7 @@ export class WorkspaceManager {
         status,
         activeTaskId: activation.activeTaskId,
         modelId: activation.modelId,
+        rank: rankByChallengeId.get(activation.challengeId),
       })
     }
 
@@ -795,14 +806,23 @@ export class WorkspaceManager {
               ? "Solver has no model assignment from model pool yet"
               : undefined,
         modelId: existing?.modelId,
+        rank: rankByChallengeId.get(challenge.challengeId),
       })
     }
 
     const challenges = [...activationByChallengeId.values()].sort(
       (left, right) =>
         challengeStatusWeight(left.status) - challengeStatusWeight(right.status) ||
+        (right.rank ?? Number.NEGATIVE_INFINITY) - (left.rank ?? Number.NEGATIVE_INFINITY) ||
         left.challengeId - right.challengeId,
     )
+
+    const environmentAgentAdapted = isEnvironmentAgentAdapted(session.environmentAgent)
+    const setupPhase = resolveRuntimeSetupPhase({
+      initialized: session.runtimeInitialized,
+      environmentAgentReady: Boolean(session.environmentAgent),
+      environmentAgentAdapted,
+    })
 
     const agents: RuntimeWorkspaceSnapshot["agents"] = []
     if (session.environmentAgent) {
@@ -830,6 +850,7 @@ export class WorkspaceManager {
       id: session.id,
       rootDir: session.workspace.rootDir,
       initialized: session.runtimeInitialized,
+      setupPhase,
       pluginId: session.runtimeInitialized
         ? (session.workspace.getPersistedRuntimeOptions()?.pluginId ??
           session.entry.runtime?.pluginId)
@@ -840,6 +861,7 @@ export class WorkspaceManager {
       challenges,
       agents,
       environmentAgentReady: Boolean(session.environmentAgent),
+      environmentAgentAdapted,
       autoOrchestrate: session.autoOrchestrate,
     }
   }
@@ -1193,6 +1215,35 @@ function resolveChallengeStatus(input: {
   }
 
   return "idle"
+}
+
+function isEnvironmentAgentAdapted(agent: RuntimeWorkspaceSession["environmentAgent"]) {
+  if (!agent) {
+    return false
+  }
+
+  const isRunning = Boolean((agent.state as { isRunning?: boolean }).isRunning)
+  return !isRunning && agent.state.messages.length > 0
+}
+
+function resolveRuntimeSetupPhase(input: {
+  initialized: boolean
+  environmentAgentReady: boolean
+  environmentAgentAdapted: boolean
+}): RuntimeWorkspaceSnapshot["setupPhase"] {
+  if (input.initialized) {
+    return "ready"
+  }
+
+  if (input.environmentAgentAdapted) {
+    return "env_agent_ready_for_settings"
+  }
+
+  if (input.environmentAgentReady) {
+    return "env_agent_adapting"
+  }
+
+  return "plugin_pending"
 }
 
 function resolveChallengeIdFromPayload(payload: unknown) {

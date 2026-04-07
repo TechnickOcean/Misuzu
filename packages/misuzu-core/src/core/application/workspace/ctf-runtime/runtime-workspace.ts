@@ -36,6 +36,7 @@ import {
   type ModelPoolCatalogProvider,
   type ModelPoolItem,
   type ModelPoolStateSnapshot,
+  type RankedCandidate,
   type ChallengeSolverActivationState,
   type ChallengeSolverProgressState,
   type UnexpectedSolverStopEvent,
@@ -261,6 +262,10 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
 
   listSolverProgressStates() {
     return this.solverHub.listChallengeProgressStates()
+  }
+
+  listChallengeRanks(): RankedCandidate[] {
+    return this.rankOrchestrator.listRankedCandidatesSnapshot()
   }
 
   async initializeRuntime(options: RuntimeInitOptions) {
