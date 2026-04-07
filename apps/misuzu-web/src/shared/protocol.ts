@@ -68,6 +68,7 @@ export interface RuntimeCreateRequest {
   rootDir?: string
   providerConfig?: ProviderConfigEntry[]
   pluginId?: string
+  solverPromptTemplate?: string
   pluginConfig?: {
     baseUrl: string
     contest:
@@ -222,6 +223,7 @@ export interface RuntimeResetSolverRequest {
 export interface RuntimePlatformConfig {
   pluginId: string
   pluginConfig: NonNullable<RuntimeCreateRequest["pluginConfig"]>
+  solverPromptTemplate?: string
   cron?: {
     noticePollIntervalMs?: number
     challengeSyncIntervalMs?: number

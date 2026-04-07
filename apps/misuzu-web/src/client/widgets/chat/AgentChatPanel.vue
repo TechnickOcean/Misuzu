@@ -3,6 +3,8 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue"
 import { SendHorizontalIcon } from "lucide-vue-next"
 import type { AgentMessagePart, AgentStateSnapshot, PromptMode } from "@shared/protocol.ts"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Skeleton } from "@/components/ui/skeleton"
+import EmptyPlaceholder from "@/components/ui/empty-placeholder/EmptyPlaceholder.vue"
 import {
   InputGroup,
   InputGroupAddon,
@@ -442,25 +444,28 @@ watch(
     </div>
 
     <div ref="scrollContainer" class="min-h-0 flex-1">
-      <ScrollArea class="h-full rounded-xl bg-card/80 px-3 py-2 pb-30">
+      <ScrollArea class="h-full rounded-xl bg-card/80 px-3 py-2">
         <div class="mx-auto grid w-full gap-3 pb-5 pt-2 text-left xl:max-w-[50vw]">
-          <div v-if="loadingOlderMessages" class="text-center text-xs text-muted-foreground">
-            Loading older messages...
+          <div v-if="loadingOlderMessages" class="space-y-4 px-3 py-2">
+            <div class="flex flex-col gap-2">
+              <Skeleton class="h-4 w-[150px]" />
+              <Skeleton class="h-20 w-full rounded-2xl" />
+            </div>
+            <div class="flex flex-col gap-2">
+              <Skeleton class="h-4 w-[150px]" />
+              <Skeleton class="h-16 w-[80%] rounded-2xl" />
+            </div>
           </div>
 
-          <div
+          <EmptyPlaceholder
             v-if="!state || state.messages.length === 0"
-            class="mx-auto mt-8 grid w-full max-w-2xl gap-2 rounded-xl border border-dashed bg-muted/20 px-5 py-7 text-center"
-          >
-            <p class="text-sm font-medium">Empty holder</p>
-            <p class="text-xs text-muted-foreground">
-              {{
-                !state
-                  ? "Select an agent to open this conversation."
-                  : "No messages yet. Start with a follow-up prompt or steer an active run."
-              }}
-            </p>
-          </div>
+            title="Empty holder"
+            :description="
+              !state
+                ? 'Select an agent to open this conversation.'
+                : 'No messages yet. Start with a follow-up prompt or steer an active run.'
+            "
+          />
 
           <article
             v-for="(message, index) in visibleMessages"
@@ -568,58 +573,59 @@ watch(
               </div>
             </div>
           </article>
-          <form
-            class="shrink-0 fixed bottom-0 pb-2 pt-1 xl:max-w-[50vw] bg-background w-full"
-            @submit.prevent="submitPrompt"
-          >
-            <div class="mx-auto w-full">
-              <InputGroup class="h-auto rounded-2xl">
-                <InputGroupTextarea
-                  v-model="promptInput"
-                  :rows="compact ? 1 : 2"
-                  class="max-h-44 min-h-14 border-0 text-sm"
-                  :placeholder="composerPlaceholder"
-                  :disabled="loading"
-                  @keydown="handleComposerKeydown"
-                />
-
-                <InputGroupAddon align="block-end" class="border-t">
-                  <div class="flex w-full flex-wrap items-center justify-between gap-2">
-                    <div class="flex items-center gap-1">
-                      <InputGroupButton
-                        type="button"
-                        size="sm"
-                        :variant="promptMode === 'followup' ? 'secondary' : 'ghost'"
-                        @click="promptMode = 'followup'"
-                      >
-                        Followup
-                      </InputGroupButton>
-                      <InputGroupButton
-                        type="button"
-                        size="sm"
-                        :variant="promptMode === 'steer' ? 'secondary' : 'ghost'"
-                        @click="promptMode = 'steer'"
-                      >
-                        Steer
-                      </InputGroupButton>
-                    </div>
-
-                    <InputGroupButton
-                      type="submit"
-                      size="sm"
-                      variant="default"
-                      :disabled="loading || !promptInput.trim()"
-                    >
-                      <SendHorizontalIcon class="size-4" />
-                      {{ loading ? "Sending..." : promptMode === "steer" ? "Steer" : "Send" }}
-                    </InputGroupButton>
-                  </div>
-                </InputGroupAddon>
-              </InputGroup>
-            </div>
-          </form>
         </div>
       </ScrollArea>
     </div>
+
+    <form
+      class="mx-auto w-full shrink-0 px-2 pb-2 pt-1 xl:max-w-[50vw]"
+      @submit.prevent="submitPrompt"
+    >
+      <div class="mx-auto w-full">
+        <InputGroup class="h-auto rounded-2xl">
+          <InputGroupTextarea
+            v-model="promptInput"
+            :rows="compact ? 1 : 2"
+            class="max-h-44 min-h-14 border-0 text-sm"
+            :placeholder="composerPlaceholder"
+            :disabled="loading"
+            @keydown="handleComposerKeydown"
+          />
+
+          <InputGroupAddon align="block-end" class="border-t">
+            <div class="flex w-full flex-wrap items-center justify-between gap-2">
+              <div class="flex items-center gap-1">
+                <InputGroupButton
+                  type="button"
+                  size="sm"
+                  :variant="promptMode === 'followup' ? 'secondary' : 'ghost'"
+                  @click="promptMode = 'followup'"
+                >
+                  Followup
+                </InputGroupButton>
+                <InputGroupButton
+                  type="button"
+                  size="sm"
+                  :variant="promptMode === 'steer' ? 'secondary' : 'ghost'"
+                  @click="promptMode = 'steer'"
+                >
+                  Steer
+                </InputGroupButton>
+              </div>
+
+              <InputGroupButton
+                type="submit"
+                size="sm"
+                variant="default"
+                :disabled="loading || !promptInput.trim()"
+              >
+                <SendHorizontalIcon class="size-4" />
+                {{ loading ? "Sending..." : promptMode === "steer" ? "Steer" : "Send" }}
+              </InputGroupButton>
+            </div>
+          </InputGroupAddon>
+        </InputGroup>
+      </div>
+    </form>
   </div>
 </template>

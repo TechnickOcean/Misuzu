@@ -46,6 +46,43 @@ export function toPluginConfig(
   }
 }
 
+export function fromPluginConfig(config: any): PluginConfigDraft {
+  const draft = createDefaultPluginConfigDraft()
+  if (!config) {
+    return draft
+  }
+
+  if (config.baseUrl) {
+    draft.baseUrl = config.baseUrl
+  }
+
+  if (config.contest) {
+    draft.contestMode = config.contest.mode || "auto"
+    if (draft.contestMode !== "auto") {
+      draft.contestValue = String(config.contest.value || "")
+    }
+  }
+
+  if (config.auth) {
+    draft.authMode = config.auth.mode || "manual"
+    if (draft.authMode === "credentials") {
+      draft.username = config.auth.username || ""
+      draft.password = config.auth.password || ""
+    }
+    if (config.auth.loginUrl) {
+      draft.loginUrl = config.auth.loginUrl
+    }
+    if (config.auth.authCheckUrl) {
+      draft.authCheckUrl = config.auth.authCheckUrl
+    }
+    if (config.auth.timeoutSec) {
+      draft.timeoutSec = String(config.auth.timeoutSec)
+    }
+  }
+
+  return draft
+}
+
 function resolveContestConfig(draft: PluginConfigDraft) {
   if (draft.contestMode === "auto") {
     return { mode: "auto" } as const

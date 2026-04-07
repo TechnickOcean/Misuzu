@@ -1,9 +1,7 @@
-import { computed, onMounted, reactive, ref, watch } from "vue"
-import { marked } from "marked"
+import { computed, onMounted, reactive, ref } from "vue"
 import { useRouter } from "vue-router"
 import type {
   ModelPoolInput,
-  PluginCatalogItem,
   ProviderCatalogItem,
   ProviderConfigEntry,
   WorkspaceKind,
@@ -49,33 +47,19 @@ export function useCreateWorkspacePage() {
   const providerConfigEnabled = ref(false)
   const providerConfigDraft = ref<ProviderConfigEntry[]>([])
 
-  const plugins = ref<PluginCatalogItem[]>([])
   const selectedPluginId = ref("")
-  const pluginReadmeHtml = ref("")
-  const pluginComboboxOpen = ref(false)
-
   const pluginDraft = reactive<PluginConfigDraft>(createDefaultPluginConfigDraft())
+  const solverPromptTemplateDraft = ref("")
 
   const solverProvider = ref("openai")
   const solverModelId = ref("gpt-4.1")
   const solverSystemPrompt = ref("")
 
-  const selectedPlugin = computed(() =>
-    plugins.value.find((plugin) => plugin.id === selectedPluginId.value),
-  )
   const providerOptions = computed(() =>
     providerCatalog.value
       .map((item) => item.provider)
       .sort((left, right) => left.localeCompare(right)),
   )
-  const selectedPluginLabel = computed(() => {
-    const plugin = selectedPlugin.value
-    if (!plugin) {
-      return "Select plugin"
-    }
-
-    return `${plugin.name} (${plugin.id})`
-  })
 
   const normalizedModelPool = computed<ModelPoolInput[]>(() => {
     return modelPool.value.map((item) => ({
@@ -87,17 +71,6 @@ export function useCreateWorkspacePage() {
 
   onMounted(async () => {
     providerCatalog.value = await apiClient.listProviderCatalog()
-    await loadPlugins()
-  })
-
-  watch(selectedPluginId, async (pluginId) => {
-    if (!pluginId) {
-      pluginReadmeHtml.value = ""
-      return
-    }
-
-    await loadPluginReadme(pluginId)
-    pluginComboboxOpen.value = false
   })
 
   function createModelPoolRow(): ModelPoolRow {
@@ -114,24 +87,6 @@ export function useCreateWorkspacePage() {
 
   function listModelsForProvider(provider: string) {
     return providerCatalog.value.find((item) => item.provider === provider)?.models ?? []
-  }
-
-  async function loadPlugins() {
-    plugins.value = await apiClient.listPlugins()
-
-    if (!selectedPluginId.value && plugins.value.length > 0) {
-      selectedPluginId.value = plugins.value[0].id
-      return
-    }
-
-    if (!plugins.value.some((plugin) => plugin.id === selectedPluginId.value)) {
-      selectedPluginId.value = plugins.value[0]?.id ?? ""
-    }
-  }
-
-  async function loadPluginReadme(pluginId: string) {
-    const readme = await apiClient.getPluginReadme(pluginId)
-    pluginReadmeHtml.value = await marked.parse(readme.markdown)
   }
 
   function addModelPoolRow() {
@@ -217,6 +172,9 @@ export function useCreateWorkspacePage() {
           modelPool: normalizedModelPool.value,
           pluginId: runtimeWithPlugin.value ? selectedPluginId.value : undefined,
           pluginConfig: runtimeWithPlugin.value ? toPluginConfig(pluginDraft) : undefined,
+          solverPromptTemplate: runtimeWithPlugin.value
+            ? solverPromptTemplateDraft.value
+            : undefined,
           autoOrchestrate: runtimeAutoOrchestrate.value,
           createEnvironmentAgent: !runtimeWithPlugin.value,
         })
@@ -291,21 +249,15 @@ export function useCreateWorkspacePage() {
     modelPool,
     providerConfigEnabled,
     providerConfigDraft,
-    plugins,
     selectedPluginId,
-    pluginReadmeHtml,
-    pluginComboboxOpen,
     pluginDraft,
+    solverPromptTemplateDraft,
     solverProvider,
     solverModelId,
     solverSystemPrompt,
-    selectedPlugin,
     providerOptions,
-    selectedPluginLabel,
     normalizedModelPool,
     listModelsForProvider,
-    loadPlugins,
-    loadPluginReadme,
     addModelPoolRow,
     removeModelPoolRow,
     nextStep,

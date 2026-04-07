@@ -2,7 +2,7 @@
 import type { HTMLAttributes, Ref } from "vue"
 import { defaultDocument, useEventListener, useMediaQuery, useVModel } from "@vueuse/core"
 import { TooltipProvider } from "reka-ui"
-import { computed, ref } from "vue"
+import { computed, ref, watch } from "vue"
 import { cn } from "@/lib/utils"
 import {
   provideSidebarContext,
@@ -30,12 +30,21 @@ const emits = defineEmits<{
 }>()
 
 const isMobile = useMediaQuery("(max-width: 768px)")
+const isNarrow = useMediaQuery("(max-width: 1024px)")
 const openMobile = ref(false)
 
 const open = useVModel(props, "open", emits, {
   defaultValue: props.defaultOpen ?? false,
   passive: (props.open === undefined) as false,
 }) as Ref<boolean>
+
+watch(isNarrow, (narrow) => {
+  if (narrow && open.value) {
+    setOpen(false)
+  } else if (!narrow && !open.value) {
+    setOpen(true)
+  }
+})
 
 function setOpen(value: boolean) {
   open.value = value // emits('update:open', value)

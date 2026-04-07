@@ -18,6 +18,7 @@ export interface RuntimeCronOptions {
 export interface RuntimeInitOptions {
   pluginId?: string
   pluginConfig: PluginConfig
+  solverPromptTemplate?: string
   plugin?: CTFPlatformPlugin
   cron?: RuntimeCronOptions
   startPaused?: boolean

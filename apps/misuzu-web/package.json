@@ -37,6 +37,7 @@
     "tsx": "catalog:",
     "tw-animate-css": "catalog:",
     "typescript": "catalog:",
+    "vite-plugin-vue-devtools": "catalog:",
     "vite-plus": "catalog:"
   }
 }

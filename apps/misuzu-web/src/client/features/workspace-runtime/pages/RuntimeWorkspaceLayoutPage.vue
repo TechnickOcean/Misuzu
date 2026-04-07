@@ -19,9 +19,11 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { useRuntimeLayoutPage } from "@/features/workspace-runtime/composables/use-runtime-layout-page.ts"
 import AppLayout from "@/layouts/AppLayout.vue"
+import EmptyPlaceholder from "@/components/ui/empty-placeholder/EmptyPlaceholder.vue"
 
 const {
   runtime,
@@ -73,11 +75,11 @@ const {
     </template>
 
     <template #sidebar-content>
-      <SidebarGroup>
+      <SidebarGroup class="flex-1">
         <SidebarGroupLabel>Agents</SidebarGroupLabel>
-        <SidebarGroupContent>
-          <ScrollArea class="h-[260px]">
-            <SidebarMenu>
+        <SidebarGroupContent class="h-full flex flex-col">
+          <ScrollArea class="flex-1">
+            <SidebarMenu v-if="sidebarAgents.length > 0">
               <SidebarMenuItem v-for="agent in sidebarAgents" :key="agent.id">
                 <SidebarMenuButton
                   :is-active="selectedAgentId === agent.id && !isOverviewRoute"
@@ -92,6 +94,13 @@ const {
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
+            <div v-else class="p-4">
+              <EmptyPlaceholder
+                title="No agents active"
+                description="Agents will appear here when they are assigned tasks."
+                class="py-6"
+              />
+            </div>
           </ScrollArea>
         </SidebarGroupContent>
       </SidebarGroup>
@@ -187,6 +196,7 @@ const {
 
     <header class="flex items-center justify-between gap-2 border-b px-4 py-3">
       <div class="flex min-w-0 items-center gap-2">
+        <SidebarTrigger class="md:hidden" />
         <p class="truncate text-sm font-semibold">
           {{ isOverviewRoute ? "Queue & Setup" : isSettingsRoute ? "Settings" : activeAgentName }}
         </p>

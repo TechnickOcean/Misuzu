@@ -22,6 +22,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarTrigger,
 } from "@/components/ui/sidebar"
 import {
   Select,
@@ -33,6 +34,7 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import PlatformPluginForm from "@/features/workspace-runtime/components/PlatformPluginForm.vue"
 import { useCreateWorkspacePage } from "@/features/workspace-registry/composables/use-create-workspace-page.ts"
 import ProviderConfigEditor from "@/features/workspace-runtime/components/ProviderConfigEditor.vue"
 import AppLayout from "@/layouts/AppLayout.vue"
@@ -50,29 +52,20 @@ const {
   modelPool,
   providerConfigEnabled,
   providerConfigDraft,
-  plugins,
   selectedPluginId,
-  pluginReadmeHtml,
-  pluginComboboxOpen,
   pluginDraft,
   solverProvider,
   solverModelId,
   solverSystemPrompt,
-  selectedPlugin,
   providerOptions,
-  selectedPluginLabel,
   normalizedModelPool,
   listModelsForProvider,
-  loadPlugins,
-  loadPluginReadme,
   addModelPoolRow,
   removeModelPoolRow,
   nextStep,
   previousStep,
   createWorkspace,
   openHome,
-  setContestMode,
-  setAuthMode,
 } = useCreateWorkspacePage()
 </script>
 
@@ -111,9 +104,12 @@ const {
     </template>
 
     <header class="flex items-center justify-between gap-2 border-b px-4 py-3">
-      <div>
-        <p class="text-sm font-semibold">Create Workspace</p>
-        <p class="text-xs text-muted-foreground">Guided setup for runtime or solver workspace.</p>
+      <div class="flex items-center gap-2">
+        <SidebarTrigger class="md:hidden" />
+        <div>
+          <p class="text-sm font-semibold">Create Workspace</p>
+          <p class="text-xs text-muted-foreground">Guided setup for runtime or solver workspace.</p>
+        </div>
       </div>
       <Button variant="outline" @click="openHome">Back Home</Button>
     </header>
@@ -261,157 +257,24 @@ const {
                       Platform Plugin
                     </h3>
 
-                    <Combobox
-                      v-model="selectedPluginId"
-                      :open="pluginComboboxOpen"
-                      @update:open="(value) => (pluginComboboxOpen = Boolean(value))"
-                    >
-                      <ComboboxAnchor class="w-full">
-                        <Button
-                          variant="outline"
-                          type="button"
-                          class="w-full justify-between font-normal"
-                        >
-                          <span class="truncate">{{ selectedPluginLabel }}</span>
-                          <ChevronsUpDownIcon class="size-4 shrink-0 opacity-50" />
-                        </Button>
-                      </ComboboxAnchor>
+                    <PlatformPluginForm
+                      v-model:plugin-id="selectedPluginId"
+                      :plugin-draft="pluginDraft"
+                    />
+                  </div>
 
-                      <ComboboxList class="w-[var(--reka-popper-anchor-width)] p-0">
-                        <ComboboxInput placeholder="Search plugin by name or id..." />
-                        <ComboboxEmpty>No plugin found.</ComboboxEmpty>
-
-                        <ComboboxViewport>
-                          <ComboboxGroup>
-                            <ComboboxItem
-                              v-for="plugin in plugins"
-                              :key="plugin.id"
-                              :value="plugin.id"
-                              class="justify-between"
-                            >
-                              <span class="truncate">{{ plugin.name }} ({{ plugin.id }})</span>
-                              <ComboboxItemIndicator>
-                                <CheckIcon class="size-4" />
-                              </ComboboxItemIndicator>
-                            </ComboboxItem>
-                          </ComboboxGroup>
-                        </ComboboxViewport>
-                      </ComboboxList>
-                    </Combobox>
-
-                    <div class="flex flex-wrap gap-2">
-                      <Button type="button" variant="outline" class="w-fit" @click="loadPlugins">
-                        Refresh Plugins
-                      </Button>
-                      <Button
-                        v-if="selectedPluginId"
-                        type="button"
-                        variant="secondary"
-                        class="w-fit"
-                        @click="loadPluginReadme(selectedPluginId)"
-                      >
-                        Refresh README
-                      </Button>
-                    </div>
-
-                    <article v-if="selectedPlugin" class="rounded-md border bg-muted/30 p-3">
-                      <h4 class="mb-2 text-sm font-medium">{{ selectedPlugin.name }} README</h4>
-                      <div class="markdown-content text-sm" v-html="pluginReadmeHtml" />
-                    </article>
-
-                    <div class="grid gap-4 md:grid-cols-2">
-                      <div class="grid gap-2 md:col-span-2">
-                        <label class="text-sm font-medium">Base URL</label>
-                        <Input
-                          v-model="pluginDraft.baseUrl"
-                          placeholder="https://ctf.example.com"
-                        />
-                      </div>
-
-                      <div class="grid gap-2">
-                        <label class="text-sm font-medium">Contest Mode</label>
-                        <Select
-                          :model-value="pluginDraft.contestMode"
-                          @update:model-value="setContestMode"
-                        >
-                          <SelectTrigger class="w-full">
-                            <SelectValue placeholder="Select contest mode" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="auto">auto</SelectItem>
-                            <SelectItem value="id">id</SelectItem>
-                            <SelectItem value="title">title</SelectItem>
-                            <SelectItem value="url">url</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div v-if="pluginDraft.contestMode !== 'auto'" class="grid gap-2">
-                        <label class="text-sm font-medium">Contest Value</label>
-                        <Input
-                          v-model="pluginDraft.contestValue"
-                          :placeholder="
-                            pluginDraft.contestMode === 'id' ? '12345' : 'contest value'
-                          "
-                        />
-                      </div>
-
-                      <div class="grid gap-2 md:col-span-2">
-                        <label class="text-sm font-medium">Auth Mode</label>
-                        <Select
-                          :model-value="pluginDraft.authMode"
-                          @update:model-value="setAuthMode"
-                        >
-                          <SelectTrigger class="w-full">
-                            <SelectValue placeholder="Select auth mode" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="manual">manual</SelectItem>
-                            <SelectItem value="credentials">credentials</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <p class="text-xs text-muted-foreground md:col-span-2">
-                        Recommended: start with <code>manual</code> so EnvironmentAgent can assist
-                        plugin development and recovery when adapter logic changes.
-                      </p>
-
-                      <template v-if="pluginDraft.authMode === 'credentials'">
-                        <div class="grid gap-2">
-                          <label class="text-sm font-medium">Username</label>
-                          <Input v-model="pluginDraft.username" placeholder="username" />
-                        </div>
-                        <div class="grid gap-2">
-                          <label class="text-sm font-medium">Password</label>
-                          <Input
-                            v-model="pluginDraft.password"
-                            type="password"
-                            placeholder="password"
-                          />
-                        </div>
-                        <div class="grid gap-2">
-                          <label class="text-sm font-medium">Login URL</label>
-                          <Input v-model="pluginDraft.loginUrl" placeholder="https://.../login" />
-                        </div>
-                        <div class="grid gap-2">
-                          <label class="text-sm font-medium">Auth Check URL</label>
-                          <Input
-                            v-model="pluginDraft.authCheckUrl"
-                            placeholder="https://.../api/me"
-                          />
-                        </div>
-                        <div class="grid gap-2">
-                          <label class="text-sm font-medium">Timeout (sec)</label>
-                          <Input
-                            v-model="pluginDraft.timeoutSec"
-                            type="number"
-                            min="1"
-                            placeholder="120"
-                          />
-                        </div>
-                      </template>
-                    </div>
+                  <div class="grid gap-2 mt-4">
+                    <label class="text-sm font-medium">Solver Prompt Template</label>
+                    <p class="text-xs text-muted-foreground">
+                      Optional template for dispatching tasks to solver agents. Use variables like
+                      <code>{challenge.title}</code>, <code>{challenge.score}</code>,
+                      <code>{payload}</code>.
+                    </p>
+                    <Textarea
+                      v-model="solverPromptTemplateDraft"
+                      placeholder="You are assigned to challenge {challenge.id} {challenge.title}..."
+                      class="min-h-32 text-sm"
+                    />
                   </div>
                 </template>
               </template>

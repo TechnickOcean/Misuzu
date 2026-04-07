@@ -1,4 +1,4 @@
-import { computed, onMounted, ref, watch } from "vue"
+import { computed, onMounted, reactive, ref, watch } from "vue"
 import type {
   ModelPoolInput,
   ProviderCatalogItem,
@@ -6,6 +6,12 @@ import type {
   RuntimePlatformConfig,
 } from "@shared/protocol.ts"
 import { useRuntimeWorkspace } from "@/features/workspace-runtime/composables/use-runtime-workspace.ts"
+import {
+  createDefaultPluginConfigDraft,
+  fromPluginConfig,
+  toPluginConfig,
+  type PluginConfigDraft,
+} from "@/features/workspace-runtime/composables/plugin-config-form.ts"
 import { useAppServices } from "@/shared/di/app-services.ts"
 
 interface ModelPoolRow {
@@ -32,7 +38,9 @@ export function useRuntimeSettingsPage(workspaceId: string) {
   const modelPoolError = ref("")
 
   const autoOrchestrateDraft = ref(false)
-  const runtimeConfigText = ref("")
+  const pluginIdDraft = ref("")
+  const pluginConfigDraft = reactive<PluginConfigDraft>(createDefaultPluginConfigDraft())
+  const solverPromptTemplateDraft = ref("")
   const runtimeConfigSaving = ref(false)
   const runtimeConfigError = ref("")
 
@@ -168,9 +176,10 @@ export function useRuntimeSettingsPage(workspaceId: string) {
       providerCatalog.value = settings.providerCatalog
       providerConfigDraft.value = settings.providerConfig
       autoOrchestrateDraft.value = settings.autoOrchestrate
-      runtimeConfigText.value = settings.platformConfig
-        ? JSON.stringify(settings.platformConfig, null, 2)
-        : ""
+
+      pluginIdDraft.value = settings.platformConfig?.pluginId ?? ""
+      Object.assign(pluginConfigDraft, fromPluginConfig(settings.platformConfig?.pluginConfig))
+      solverPromptTemplateDraft.value = settings.platformConfig?.solverPromptTemplate ?? ""
     } catch (error) {
       settingsError.value = error instanceof Error ? error.message : String(error)
     } finally {
@@ -196,20 +205,11 @@ export function useRuntimeSettingsPage(workspaceId: string) {
     runtimeConfigSaving.value = true
     try {
       let platformConfig: RuntimePlatformConfig | undefined
-      if (runtimeConfigText.value.trim().length > 0) {
-        const parsed = JSON.parse(runtimeConfigText.value) as RuntimePlatformConfig
-        if (
-          !parsed.pluginId?.trim() ||
-          !parsed.pluginConfig ||
-          typeof parsed.pluginConfig !== "object"
-        ) {
-          throw new Error("Runtime config must include pluginId and pluginConfig")
-        }
-
+      if (pluginIdDraft.value.trim()) {
         platformConfig = {
-          pluginId: parsed.pluginId.trim(),
-          pluginConfig: parsed.pluginConfig,
-          cron: parsed.cron,
+          pluginId: pluginIdDraft.value.trim(),
+          pluginConfig: toPluginConfig(pluginConfigDraft),
+          solverPromptTemplate: solverPromptTemplateDraft.value,
         }
       }
 
@@ -237,7 +237,9 @@ export function useRuntimeSettingsPage(workspaceId: string) {
     modelPoolSaving,
     modelPoolError,
     autoOrchestrateDraft,
-    runtimeConfigText,
+    pluginIdDraft,
+    pluginConfigDraft,
+    solverPromptTemplateDraft,
     runtimeConfigSaving,
     runtimeConfigError,
     providerOptions,

@@ -78,6 +78,7 @@ export class SolverHub {
   private platformPluginId?: string
   private platformBaseUrl?: string
   private platformNoticeCursor?: string
+  private solverPromptTemplate?: string
   private readonly challengeSolvers = new Map<number, ChallengeSolverBinding>()
   private readonly challengeProgress = new Map<number, ChallengeSolverProgressState>()
 
@@ -137,6 +138,7 @@ export class SolverHub {
       restoredContestId: options.restore?.contestId,
     })
     this.platformNoticeCursor = options.restore?.noticeCursor
+    this.solverPromptTemplate = options.solverPromptTemplate
 
     await this.ensureRuntimeContext()
     this.notifyStateChanged()
@@ -487,7 +489,9 @@ export class SolverHub {
         if (shouldContinueSolverTask(task.payload, solver.state.messages.length > 0)) {
           await solver.continue()
         } else {
-          await solver.prompt(buildSolverTaskPrompt(binding.challenge, task.payload))
+          await solver.prompt(
+            buildSolverTaskPrompt(binding.challenge, task.payload, this.solverPromptTemplate),
+          )
         }
       } catch (error) {
         if (progress.status === "solved" || isAbortLikeError(error)) {
@@ -884,8 +888,18 @@ function sanitizeAttachmentFileName(name: string, attachmentIndex: number) {
   return safe.length > 0 ? safe : `attachment-${String(attachmentIndex)}`
 }
 
-function buildSolverTaskPrompt(challenge: ChallengeSummary, payload: unknown) {
+function buildSolverTaskPrompt(challenge: ChallengeSummary, payload: unknown, template?: string) {
   const payloadText = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2)
+
+  if (template?.trim()) {
+    return template
+      .replaceAll("{challenge.id}", String(challenge.id))
+      .replaceAll("{challenge.title}", challenge.title)
+      .replaceAll("{challenge.category}", challenge.category)
+      .replaceAll("{challenge.score}", String(challenge.score))
+      .replaceAll("{challenge.solvedCount}", String(challenge.solvedCount))
+      .replaceAll("{payload}", payloadText)
+  }
 
   return [
     `You are assigned to challenge [${challenge.id}] ${challenge.title}.`,

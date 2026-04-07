@@ -4,6 +4,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { Skeleton } from "@/components/ui/skeleton"
+import PlatformPluginForm from "@/features/workspace-runtime/components/PlatformPluginForm.vue"
 import ProviderConfigEditor from "@/features/workspace-runtime/components/ProviderConfigEditor.vue"
 import { useRuntimeSettingsPage } from "@/features/workspace-runtime/composables/use-runtime-settings-page.ts"
 
@@ -22,7 +24,8 @@ const {
   modelPoolSaving,
   modelPoolError,
   autoOrchestrateDraft,
-  runtimeConfigText,
+  pluginIdDraft,
+  pluginConfigDraft,
   runtimeConfigSaving,
   runtimeConfigError,
   providerOptions,
@@ -40,7 +43,13 @@ const {
 </script>
 
 <template>
-  <div class="grid gap-4">
+  <div v-if="settingsLoading && !providerOptions.length" class="grid gap-4">
+    <Skeleton class="h-[200px] w-full rounded-xl" />
+    <Skeleton class="h-[200px] w-full rounded-xl" />
+    <Skeleton class="h-[200px] w-full rounded-xl" />
+  </div>
+
+  <div v-else class="grid gap-4">
     <Card>
       <CardHeader>
         <CardTitle>Model Pool</CardTitle>
@@ -131,11 +140,20 @@ const {
         </div>
 
         <div class="grid gap-2">
-          <label class="text-sm font-medium">platform.json</label>
+          <label class="text-sm font-medium">Platform Plugin</label>
+          <PlatformPluginForm v-model:plugin-id="pluginIdDraft" :plugin-draft="pluginConfigDraft" />
+        </div>
+
+        <div class="grid gap-2">
+          <label class="text-sm font-medium">Solver Prompt Template</label>
+          <p class="text-xs text-muted-foreground">
+            Optional template for dispatching tasks to solver agents. Use variables like
+            <code>{challenge.title}</code>, <code>{challenge.score}</code>, <code>{payload}</code>.
+          </p>
           <Textarea
-            v-model="runtimeConfigText"
-            class="min-h-44 font-mono text-xs"
-            placeholder='{"pluginId":"ctfd","pluginConfig":{...}}'
+            v-model="solverPromptTemplateDraft"
+            placeholder="You are assigned to challenge {challenge.id} {challenge.title}..."
+            class="min-h-32 text-sm"
           />
         </div>
 
