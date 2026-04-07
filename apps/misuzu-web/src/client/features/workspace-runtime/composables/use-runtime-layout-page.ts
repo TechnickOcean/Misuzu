@@ -25,6 +25,11 @@ export function useRuntimeLayoutPage() {
   const runtime = useRuntimeWorkspace(workspaceId.value)
 
   const summary = computed(() => runtime.snapshot.value)
+  const isSetupLocked = computed(
+    () =>
+      Boolean(summary.value) && !summary.value!.initialized && summary.value!.environmentAgentReady,
+  )
+  const runtimeReady = computed(() => summary.value?.setupPhase === "ready")
   const isOverviewRoute = computed(() => route.name === "runtime-overview")
   const isSettingsRoute = computed(() => route.name === "runtime-settings")
   const selectedAgentId = computed(() =>
@@ -90,10 +95,12 @@ export function useRuntimeLayoutPage() {
 
     if (selectedAgentId.value) {
       await runtime.setActiveAgent(selectedAgentId.value)
+      await enforceSetupLock()
       return
     }
 
     await openDefaultAgent()
+    await enforceSetupLock()
   })
 
   onUnmounted(() => {
@@ -111,7 +118,19 @@ export function useRuntimeLayoutPage() {
     },
   )
 
+  watch(
+    () => [summary.value?.setupPhase, route.name, route.params.agentId] as const,
+    () => {
+      void enforceSetupLock()
+    },
+  )
+
   async function openDefaultAgent() {
+    if (isSetupLocked.value) {
+      await openAgent("environment")
+      return
+    }
+
     const agentId = defaultAgentId.value
     if (!agentId) {
       await openOverview()
@@ -132,6 +151,11 @@ export function useRuntimeLayoutPage() {
   }
 
   async function openOverview() {
+    if (isSetupLocked.value) {
+      await openSettings()
+      return
+    }
+
     if (isOverviewRoute.value) {
       return
     }
@@ -143,6 +167,11 @@ export function useRuntimeLayoutPage() {
   }
 
   async function openAgent(agentId: string) {
+    if (isSetupLocked.value && agentId !== "environment") {
+      await openAgent("environment")
+      return
+    }
+
     if (route.name === "runtime-agent" && selectedAgentId.value === agentId) {
       return
     }
@@ -175,10 +204,36 @@ export function useRuntimeLayoutPage() {
     void router.push({ name: "workspace-create" })
   }
 
+  async function enforceSetupLock() {
+    if (!isSetupLocked.value) {
+      return
+    }
+
+    const inSettings = route.name === "runtime-settings"
+    const inEnvironmentAgent =
+      route.name === "runtime-agent" &&
+      typeof route.params.agentId === "string" &&
+      route.params.agentId === "environment"
+
+    if (inSettings || inEnvironmentAgent) {
+      return
+    }
+
+    await router.replace({
+      name: "runtime-agent",
+      params: {
+        id: workspaceId.value,
+        agentId: "environment",
+      },
+    })
+  }
+
   return {
     runtime,
     workspaceId,
     summary,
+    isSetupLocked,
+    runtimeReady,
     isOverviewRoute,
     isSettingsRoute,
     selectedAgentId,

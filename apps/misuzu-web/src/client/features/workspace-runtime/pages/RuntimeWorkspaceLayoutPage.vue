@@ -29,6 +29,8 @@ const {
   runtime,
   workspaceId,
   summary,
+  isSetupLocked,
+  runtimeReady,
   isOverviewRoute,
   isSettingsRoute,
   selectedAgentId,
@@ -59,7 +61,7 @@ const {
             <span>Chat</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
-        <SidebarMenuItem>
+        <SidebarMenuItem v-if="!isSetupLocked">
           <SidebarMenuButton :is-active="isOverviewRoute" @click="openOverview">
             <ListChecksIcon />
             <span>Queue & Setup</span>
@@ -115,7 +117,7 @@ const {
       <SidebarGroup>
         <SidebarGroupLabel>Runtime Controls</SidebarGroupLabel>
         <SidebarGroupContent>
-          <SidebarMenu>
+          <SidebarMenu v-if="runtimeReady">
             <SidebarMenuItem>
               <SidebarMenuButton @click="runtime.syncChallenges">
                 <RefreshCcwIcon />
@@ -140,13 +142,27 @@ const {
                 <span>Pause Flow</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
-            <SidebarMenuItem v-if="!summary?.initialized && !summary?.environmentAgentReady">
+          </SidebarMenu>
+
+          <SidebarMenu v-else>
+            <SidebarMenuItem v-if="!summary?.environmentAgentReady">
               <SidebarMenuButton @click="runtime.ensureEnvironmentAgent">
                 <ShieldCheckIcon />
                 <span>Add Environment Agent</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
+
+            <SidebarMenuItem v-if="summary?.setupPhase === 'env_agent_ready_for_settings'">
+              <SidebarMenuButton @click="openSettings">
+                <Settings2Icon />
+                <span>Finish Plugin Setup</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
           </SidebarMenu>
+
+          <p v-if="isSetupLocked" class="px-1 pt-2 text-xs text-muted-foreground">
+            Workspace is locked to Environment Agent and Settings until plugin setup completes.
+          </p>
         </SidebarGroupContent>
       </SidebarGroup>
 
@@ -216,10 +232,26 @@ const {
         <Badge variant="outline" class="hidden sm:inline-flex">
           Pending {{ summary?.queue.pendingTaskCount ?? 0 }}
         </Badge>
+        <Badge variant="secondary" class="hidden sm:inline-flex">
+          {{ summary?.setupPhase ?? "loading" }}
+        </Badge>
       </div>
     </header>
 
     <section class="px-3 py-3 md:px-4" :class="contentClass">
+      <div
+        v-if="summary?.setupPhase === 'env_agent_ready_for_settings'"
+        class="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 bg-card p-3"
+      >
+        <p class="text-sm text-muted-foreground">
+          Environment Agent adaptation appears complete. Open Settings to finalize plugin config and
+          unlock the workspace.
+        </p>
+        <SidebarMenuButton class="w-fit" @click="openSettings">
+          <Settings2Icon />
+          <span>Open Settings</span>
+        </SidebarMenuButton>
+      </div>
       <RouterView />
     </section>
   </AppLayout>
