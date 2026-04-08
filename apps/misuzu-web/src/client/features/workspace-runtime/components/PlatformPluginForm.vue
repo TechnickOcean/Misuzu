@@ -169,11 +169,14 @@ function setAuthMode(value: string) {
       </Button>
     </div>
 
-    <article v-if="pluginReadmeHtml" class="rounded-md border bg-muted/30 p-3">
-      <h4 v-if="selectedPlugin" class="mb-2 text-sm font-medium">
+    <article v-if="pluginReadmeHtml" class="rounded-md border bg-muted/30 p-4">
+      <h4 v-if="selectedPlugin" class="mb-4 text-sm font-medium">
         {{ selectedPlugin.name }} README
       </h4>
-      <div class="markdown-content text-sm" v-html="pluginReadmeHtml" />
+      <div
+        class="prose dark:prose-invert max-w-none text-xs prose-p:text-xs prose-li:text-xs prose-headings:text-sm prose-h1:text-base prose-h2:text-sm prose-h3:text-sm prose-code:text-[11px] prose-pre:text-[11px] prose-a:text-xs"
+        v-html="pluginReadmeHtml"
+      />
     </article>
 
     <div class="grid gap-4 md:grid-cols-2">

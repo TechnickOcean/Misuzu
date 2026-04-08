@@ -24,6 +24,8 @@ interface MockChallengeSeed {
   score: number
   solvedCount: number
   requiresContainer?: boolean
+  containerEntry?: string
+  containerCloseTime?: number | null
 }
 
 async function createRuntimeWorkspaceDir() {
@@ -85,6 +87,8 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
   constructor(private challenges: ChallengeSummary[]) {}
 
   seedChallengeDetail(seed: MockChallengeSeed) {
+    const hasContainer =
+      typeof seed.containerEntry === "string" && seed.containerEntry.trim().length > 0
     this.detailsByChallengeId.set(seed.id, {
       id: seed.id,
       title: seed.title,
@@ -95,6 +99,14 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
       requiresContainer: Boolean(seed.requiresContainer),
       attempts: 0,
       attachments: [],
+      ...(hasContainer
+        ? {
+            container: {
+              entry: seed.containerEntry,
+              closeTime: seed.containerCloseTime,
+            },
+          }
+        : {}),
     })
   }
 
@@ -565,6 +577,199 @@ describe("ctf runtime platform integration", () => {
 
     expect(activeChallengeIds.length).toBe(3)
     expect(activeContainerCount).toBe(1)
+
+    workspace.pauseTaskDispatch()
+    await workspace.shutdown()
+  })
+
+  test("reserves container slots for pre-existing remote containers", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+    const plugin = createPlugin([
+      {
+        id: 651,
+        title: "pwn-remote-container",
+        category: "pwn",
+        score: 100,
+        solvedCount: 0,
+        requiresContainer: true,
+        containerEntry: "remote-651",
+        containerCloseTime: Date.now() + 10 * 60_000,
+      },
+      {
+        id: 652,
+        title: "web-needs-new-container",
+        category: "web",
+        score: 100,
+        solvedCount: 0,
+        requiresContainer: true,
+      },
+      {
+        id: 653,
+        title: "misc-no-container",
+        category: "misc",
+        score: 100,
+        solvedCount: 0,
+        requiresContainer: false,
+      },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "manual" },
+        maxConcurrentContainers: 1,
+      },
+      startPaused: true,
+    })
+    await workspace.setModelPoolItems([resolveDefaultPoolItem(2)])
+
+    for (const challengeId of [651, 652, 653]) {
+      const solver = workspace.getChallengeSolver(challengeId)
+      expect(solver).toBeDefined()
+      holdSolverExecution(solver!)
+    }
+
+    workspace.setAutoDispatchManaged(true)
+    workspace.resumeTaskDispatch()
+
+    await waitForCondition(() => workspace.getSchedulerState().busySolverCount >= 2)
+
+    const activeChallengeIds = workspace
+      .listSolverActivationStates()
+      .filter((state) => state.status === "active")
+      .map((state) => state.challengeId)
+
+    expect(activeChallengeIds).toContain(651)
+    expect(activeChallengeIds).toContain(653)
+    expect(activeChallengeIds).not.toContain(652)
+
+    workspace.pauseTaskDispatch()
+    await workspace.shutdown()
+  })
+
+  test("ignores expired remote containers when computing available container slots", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+    const plugin = createPlugin([
+      {
+        id: 661,
+        title: "pwn-expired-container",
+        category: "pwn",
+        score: 100,
+        solvedCount: 0,
+        requiresContainer: true,
+        containerEntry: "expired-661",
+        containerCloseTime: Date.now() - 1_000,
+      },
+      {
+        id: 662,
+        title: "web-new-container",
+        category: "web",
+        score: 100,
+        solvedCount: 0,
+        requiresContainer: true,
+      },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "manual" },
+        maxConcurrentContainers: 1,
+      },
+      startPaused: true,
+    })
+    await workspace.setModelPoolItems([resolveDefaultPoolItem(1)])
+
+    for (const challengeId of [661, 662]) {
+      const solver = workspace.getChallengeSolver(challengeId)
+      expect(solver).toBeDefined()
+      holdSolverExecution(solver!)
+    }
+
+    workspace.setAutoDispatchManaged(true)
+    workspace.resumeTaskDispatch()
+
+    await waitForCondition(() => workspace.getSchedulerState().busySolverCount >= 1)
+
+    const activeChallengeIds = workspace
+      .listSolverActivationStates()
+      .filter((state) => state.status === "active")
+      .map((state) => state.challengeId)
+
+    expect(activeChallengeIds).toContain(662)
+
+    workspace.pauseTaskDispatch()
+    await workspace.shutdown()
+  })
+
+  test("manually blocked solver is not dispatched until unblocked", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+    const plugin = createPlugin([
+      {
+        id: 671,
+        title: "blocked-challenge",
+        category: "web",
+        score: 100,
+        solvedCount: 0,
+        requiresContainer: false,
+      },
+      {
+        id: 672,
+        title: "active-challenge",
+        category: "misc",
+        score: 100,
+        solvedCount: 0,
+        requiresContainer: false,
+      },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "manual" },
+        maxConcurrentContainers: 1,
+      },
+      startPaused: true,
+    })
+    await workspace.setModelPoolItems([resolveDefaultPoolItem(1)])
+
+    for (const challengeId of [671, 672]) {
+      const solver = workspace.getChallengeSolver(challengeId)
+      expect(solver).toBeDefined()
+      holdSolverExecution(solver!)
+    }
+
+    expect(workspace.blockChallengeSolver(671)).toBe(true)
+    expect(workspace.isChallengeManuallyBlocked(671)).toBe(true)
+
+    expect(() => workspace.enqueueTask({ challenge: 671 }, "task-blocked-manual")).toThrow(
+      /blocked/i,
+    )
+
+    workspace.setAutoDispatchManaged(true)
+    workspace.resumeTaskDispatch()
+
+    await waitForCondition(() => workspace.getSchedulerState().busySolverCount >= 1)
+
+    const activeChallengeIds = workspace
+      .listSolverActivationStates()
+      .filter((state) => state.status === "active")
+      .map((state) => state.challengeId)
+
+    expect(activeChallengeIds).toContain(672)
+    expect(activeChallengeIds).not.toContain(671)
+
+    expect(workspace.unblockChallengeSolver(671)).toBe(true)
+    expect(workspace.isChallengeManuallyBlocked(671)).toBe(false)
 
     workspace.pauseTaskDispatch()
     await workspace.shutdown()

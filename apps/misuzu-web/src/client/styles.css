@@ -1,6 +1,7 @@
 @import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap");
 
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
@@ -127,30 +128,4 @@
     font-family: var(--font-mono);
     white-space: pre-wrap;
   }
-}
-
-.markdown-content {
-  display: grid;
-  gap: 0.5rem;
-}
-
-.markdown-content h1,
-.markdown-content h2,
-.markdown-content h3 {
-  font-size: 1rem;
-  font-weight: 700;
-}
-
-.markdown-content p,
-.markdown-content li,
-.markdown-content code,
-.markdown-content pre {
-  font-size: 0.85rem;
-}
-
-.markdown-content code {
-  border-radius: 0.4rem;
-  border: 1px solid var(--color-border);
-  background: var(--color-muted);
-  padding: 0.05rem 0.3rem;
 }

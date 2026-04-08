@@ -44,13 +44,15 @@ const {
   providerConfigSaved,
   providerConfigError,
   modelPool,
-  runtimeAutoOrchestrate,
   selectedPluginId,
   pluginDraft,
   solverPromptTemplateDraft,
+  isSolverPromptTemplateDefault,
+  resetSolverPromptTemplateDraft,
   skipPluginSetup,
   startFlowAfterCreate,
   providerOptions,
+  baseProviderOptions,
   normalizedModelPool,
   listModelsForProvider,
   addModelPoolRow,
@@ -209,6 +211,7 @@ function handleProviderFileChange(event: Event) {
                 <ProviderConfigEditor
                   :model-value="providerConfigDraft"
                   :provider-options="providerOptions"
+                  :base-provider-options="baseProviderOptions"
                   @update:model-value="markProviderConfigDirty"
                 />
 
@@ -359,24 +362,17 @@ function handleProviderFileChange(event: Event) {
 
                   <div class="grid gap-2">
                     <label class="text-sm font-medium">Solver Prompt Template</label>
-                    <Textarea
-                      v-model="solverPromptTemplateDraft"
-                      placeholder="You are assigned to challenge {challenge.id} {challenge.title}..."
-                      class="min-h-28 text-sm"
-                    />
-                  </div>
-
-                  <div class="flex items-center justify-between rounded-md border p-3">
-                    <div>
-                      <p class="text-sm font-medium">Enable auto orchestration</p>
-                      <p class="text-xs text-muted-foreground">
-                        Automatically rebalance managed challenges after sync.
-                      </p>
+                    <Textarea v-model="solverPromptTemplateDraft" class="min-h-28 text-sm" />
+                    <div class="flex justify-end">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        :disabled="isSolverPromptTemplateDefault"
+                        @click="resetSolverPromptTemplateDraft"
+                      >
+                        Reset to default
+                      </Button>
                     </div>
-                    <Switch
-                      :checked="runtimeAutoOrchestrate"
-                      @update:checked="(checked) => (runtimeAutoOrchestrate = Boolean(checked))"
-                    />
                   </div>
                 </div>
 
@@ -413,9 +409,6 @@ function handleProviderFileChange(event: Event) {
                   <p>
                     <strong>Plugin setup:</strong>
                     {{ skipPluginSetup ? "skip for now" : "configured" }}
-                  </p>
-                  <p>
-                    <strong>Auto orchestration:</strong> {{ runtimeAutoOrchestrate ? "yes" : "no" }}
                   </p>
                 </div>
 

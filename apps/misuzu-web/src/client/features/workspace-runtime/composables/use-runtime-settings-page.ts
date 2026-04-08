@@ -1,4 +1,5 @@
 import { computed, onMounted, reactive, ref, watch } from "vue"
+import { useRouter } from "vue-router"
 import type {
   ProviderCatalogItem,
   ProviderConfigEntry,
@@ -16,12 +17,21 @@ import {
   normalizeModelPoolRows,
   type ModelPoolRow,
 } from "@/features/workspace-runtime/composables/model-pool-form.ts"
-import { useRuntimeSettingsQuery } from "@/shared/composables/workspace-requests.ts"
+import { DEFAULT_SOLVER_PROMPT_TEMPLATE } from "@/features/workspace-runtime/composables/solver-prompt-template.ts"
+import {
+  useDeleteWorkspaceMutation,
+  useProviderCatalogQuery,
+  useRuntimeSettingsQuery,
+} from "@/shared/composables/workspace-requests.ts"
 
 export function useRuntimeSettingsPage(workspaceId: string) {
+  const router = useRouter()
   const runtime = useRuntimeWorkspace(workspaceId)
   const runtimeSettingsQuery = useRuntimeSettingsQuery()
+  const providerCatalogQuery = useProviderCatalogQuery()
+  const deleteWorkspaceMutation = useDeleteWorkspaceMutation()
   runtimeSettingsQuery.paramsRef.value.workspaceId = workspaceId
+  providerCatalogQuery.paramsRef.value.workspaceId = ""
 
   const settingsLoading = ref(false)
   const settingsError = ref("")
@@ -37,13 +47,21 @@ export function useRuntimeSettingsPage(workspaceId: string) {
   const modelPoolError = ref("")
   const modelPoolNotice = ref("")
 
-  const autoOrchestrateDraft = ref(false)
   const pluginIdDraft = ref("")
   const pluginConfigDraft = reactive<PluginConfigDraft>(createDefaultPluginConfigDraft())
-  const solverPromptTemplateDraft = ref("")
+  const defaultSolverPromptTemplate = ref(DEFAULT_SOLVER_PROMPT_TEMPLATE)
+  const solverPromptTemplateDraft = ref(DEFAULT_SOLVER_PROMPT_TEMPLATE)
   const runtimeConfigSaving = ref(false)
   const runtimeConfigError = ref("")
   const runtimeConfigNotice = ref("")
+  const isSolverPromptTemplateDefault = computed(
+    () => solverPromptTemplateDraft.value.trim() === defaultSolverPromptTemplate.value.trim(),
+  )
+  const deleteFilesDraft = ref(false)
+  const deleteConfirmDraft = ref("")
+  const workspaceDeleting = ref(false)
+  const workspaceDeleteError = ref("")
+  const canDeleteWorkspace = computed(() => deleteConfirmDraft.value.trim() === workspaceId)
 
   const snapshot = computed(() => runtime.snapshot.value)
   const providerOptions = computed(() =>
@@ -51,9 +69,14 @@ export function useRuntimeSettingsPage(workspaceId: string) {
       .map((item) => item.provider)
       .sort((left, right) => left.localeCompare(right)),
   )
+  const baseProviderOptions = computed(() =>
+    (providerCatalogQuery.data.value ?? [])
+      .map((item) => item.provider)
+      .sort((left, right) => left.localeCompare(right)),
+  )
 
   onMounted(async () => {
-    await loadSettings()
+    await Promise.all([loadSettings(), providerCatalogQuery.refetch(true)])
     syncModelPoolDraftFromSnapshot()
   })
 
@@ -154,11 +177,13 @@ export function useRuntimeSettingsPage(workspaceId: string) {
 
       providerCatalog.value = settings.providerCatalog
       providerConfigDraft.value = settings.providerConfig
-      autoOrchestrateDraft.value = settings.autoOrchestrate
+      defaultSolverPromptTemplate.value =
+        settings.defaultSolverPromptTemplate?.trim() || DEFAULT_SOLVER_PROMPT_TEMPLATE
 
       pluginIdDraft.value = settings.platformConfig?.pluginId ?? ""
       Object.assign(pluginConfigDraft, fromPluginConfig(settings.platformConfig?.pluginConfig))
-      solverPromptTemplateDraft.value = settings.platformConfig?.solverPromptTemplate ?? ""
+      solverPromptTemplateDraft.value =
+        settings.platformConfig?.solverPromptTemplate?.trim() || defaultSolverPromptTemplate.value
     } catch (error) {
       settingsError.value = error instanceof Error ? error.message : String(error)
     } finally {
@@ -188,17 +213,22 @@ export function useRuntimeSettingsPage(workspaceId: string) {
     try {
       const shouldInitializeAfterSave =
         snapshot.value?.setupPhase === "env_agent_ready_for_settings"
+      const normalizedSolverPromptTemplate = solverPromptTemplateDraft.value.trim()
+      const solverPromptTemplate =
+        normalizedSolverPromptTemplate &&
+        normalizedSolverPromptTemplate !== defaultSolverPromptTemplate.value.trim()
+          ? normalizedSolverPromptTemplate
+          : undefined
       let platformConfig: RuntimePlatformConfig | undefined
       if (pluginIdDraft.value.trim()) {
         platformConfig = {
           pluginId: pluginIdDraft.value.trim(),
           pluginConfig: toPluginConfig(pluginConfigDraft),
-          solverPromptTemplate: solverPromptTemplateDraft.value,
+          solverPromptTemplate,
         }
       }
 
       await runtime.updateRuntimeConfig({
-        autoOrchestrate: autoOrchestrateDraft.value,
         platformConfig,
       })
 
@@ -217,6 +247,34 @@ export function useRuntimeSettingsPage(workspaceId: string) {
     }
   }
 
+  function resetSolverPromptTemplateDraft() {
+    solverPromptTemplateDraft.value = defaultSolverPromptTemplate.value
+  }
+
+  async function deleteWorkspace() {
+    workspaceDeleteError.value = ""
+
+    if (!canDeleteWorkspace.value) {
+      workspaceDeleteError.value = "Type workspace id to confirm deletion"
+      return
+    }
+
+    workspaceDeleting.value = true
+    try {
+      await deleteWorkspaceMutation.mutateAsync({
+        workspaceId,
+        request: {
+          deleteFiles: deleteFilesDraft.value,
+        },
+      })
+      await router.replace({ name: "home" })
+    } catch (error) {
+      workspaceDeleteError.value = error instanceof Error ? error.message : String(error)
+    } finally {
+      workspaceDeleting.value = false
+    }
+  }
+
   return {
     snapshot,
     settingsLoading,
@@ -229,14 +287,22 @@ export function useRuntimeSettingsPage(workspaceId: string) {
     modelPoolSaving,
     modelPoolError,
     modelPoolNotice,
-    autoOrchestrateDraft,
     pluginIdDraft,
     pluginConfigDraft,
     solverPromptTemplateDraft,
+    isSolverPromptTemplateDefault,
+    resetSolverPromptTemplateDraft,
+    deleteFilesDraft,
+    deleteConfirmDraft,
+    workspaceDeleting,
+    workspaceDeleteError,
+    canDeleteWorkspace,
+    deleteWorkspace,
     runtimeConfigSaving,
     runtimeConfigError,
     runtimeConfigNotice,
     providerOptions,
+    baseProviderOptions,
     addModelPoolRow,
     removeModelPoolRow,
     incrementConcurrency,

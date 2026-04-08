@@ -139,7 +139,7 @@ export class FeaturedAgent {
       await this.agent.prompt(...args)
       this.logger.info(`Prompt finished, duration(ms): ${Date.now() - startTime}`)
     } catch (error) {
-      this.logger.error("Agent prompt failed", error)
+      this.logger.error("Agent prompt failed", summarizeUnknownError(error), error)
       throw error
     }
   }
@@ -203,4 +203,24 @@ export class FeaturedAgent {
       throw e
     }
   }
+}
+
+function summarizeUnknownError(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    }
+  }
+
+  if (error && typeof error === "object") {
+    try {
+      return { value: JSON.stringify(error) }
+    } catch {
+      return { value: Object.prototype.toString.call(error) }
+    }
+  }
+
+  return { value: String(error) }
 }

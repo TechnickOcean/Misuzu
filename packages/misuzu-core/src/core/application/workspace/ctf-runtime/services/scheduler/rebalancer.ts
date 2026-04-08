@@ -160,6 +160,13 @@ export class RuntimeRankOrchestrator {
       throw new Error("Manual dispatch requires payload.challenge as finite number")
     }
 
+    const progress = this.host
+      .listSolverProgressStates()
+      .find((state) => state.challengeId === challengeId)
+    if (progress?.status === "blocked") {
+      throw new Error(`Challenge #${String(challengeId)} is blocked and cannot be queued`)
+    }
+
     const nextTaskId = taskId ?? `task-${String(++this.taskCounter)}`
     this.pendingIntents.set(nextTaskId, {
       taskId: nextTaskId,
@@ -273,6 +280,9 @@ export class RuntimeRankOrchestrator {
     this.syncRankStates()
     const now = Date.now()
     const managedChallenges = this.host.listManagedChallenges()
+    const progressByChallengeId = new Map(
+      this.host.listSolverProgressStates().map((state) => [state.challengeId, state] as const),
+    )
     const managedByChallengeId = new Map(
       managedChallenges.map((challenge) => [challenge.challengeId, challenge] as const),
     )
@@ -280,6 +290,12 @@ export class RuntimeRankOrchestrator {
       managedChallenges.map((challenge) => [
         challenge.challengeId,
         challenge.requiresContainer !== false,
+      ]),
+    )
+    const containerActiveByChallengeId = new Map(
+      managedChallenges.map((challenge) => [
+        challenge.challengeId,
+        challenge.containerActive === true,
       ]),
     )
 
@@ -302,16 +318,30 @@ export class RuntimeRankOrchestrator {
     const inflightTasks = this.host.listInflightDispatchTasks()
     const inflightByChallengeId = new Set(inflightTasks.map((task) => task.challengeId))
     const inflightTaskIds = new Set(inflightTasks.map((task) => task.taskId))
-    const targetConcurrency = this.resolveTargetConcurrency(this.rankByChallenge.size)
-    const availableSlots = Math.max(0, targetConcurrency - inflightTasks.length)
+    const availableSlots = this.resolveAvailableDispatchSlots({
+      candidateCount: this.rankByChallenge.size,
+      inflightCount: inflightTasks.length,
+    })
     const containerLimit = this.resolveContainerLimit()
+    const reservedContainerChallenges = new Set(
+      managedChallenges
+        .filter((challenge) => challenge.containerActive === true)
+        .map((challenge) => challenge.challengeId),
+    )
     const inflightContainerCount = this.countInflightContainerTasks(
       inflightTasks,
       requiresContainerByChallengeId,
+      containerActiveByChallengeId,
     )
     let availableContainerSlots = Number.isFinite(containerLimit)
-      ? Math.max(0, containerLimit - inflightContainerCount)
+      ? Math.max(0, containerLimit - reservedContainerChallenges.size - inflightContainerCount)
       : Number.POSITIVE_INFINITY
+
+    this.trimAutoContainerIntents(
+      requiresContainerByChallengeId,
+      containerActiveByChallengeId,
+      availableContainerSlots,
+    )
 
     this.preemptLongRunningTasks(now, inflightTasks)
 
@@ -329,13 +359,24 @@ export class RuntimeRankOrchestrator {
         continue
       }
 
+      const progress = progressByChallengeId.get(intent.challengeId)
+      if (progress?.status === "blocked") {
+        this.pendingIntents.delete(intent.taskId)
+        this.pendingResolvers
+          .get(intent.taskId)
+          ?.reject(new Error(`Challenge #${String(intent.challengeId)} is blocked`))
+        this.pendingResolvers.delete(intent.taskId)
+        continue
+      }
+
       const managed = managedByChallengeId.get(intent.challengeId)
       if (!managed) {
         continue
       }
 
       const requiresContainer = requiresContainerByChallengeId.get(intent.challengeId) ?? true
-      if (requiresContainer && availableContainerSlots <= 0) {
+      const hasActiveContainer = containerActiveByChallengeId.get(intent.challengeId) ?? false
+      if (requiresContainer && !hasActiveContainer && availableContainerSlots <= 0) {
         continue
       }
 
@@ -350,7 +391,7 @@ export class RuntimeRankOrchestrator {
         createdAt: intent.createdAt,
         reason: intent.reason,
       })
-      if (requiresContainer && Number.isFinite(availableContainerSlots)) {
+      if (requiresContainer && !hasActiveContainer && Number.isFinite(availableContainerSlots)) {
         availableContainerSlots -= 1
       }
       started += 1
@@ -573,8 +614,8 @@ export class RuntimeRankOrchestrator {
     return result
   }
 
-  private resolveTargetConcurrency(candidateCount: number) {
-    if (candidateCount <= 0) {
+  private resolveAvailableDispatchSlots(input: { candidateCount: number; inflightCount: number }) {
+    if (input.candidateCount <= 0) {
       return 0
     }
 
@@ -584,16 +625,24 @@ export class RuntimeRankOrchestrator {
       return 0
     }
 
-    const modelState = this.host.getModelPoolState()
-    const modelCapacity =
-      typeof modelState.totalAvailable === "number"
-        ? modelState.totalAvailable
-        : modelState.totalCapacity
-    if (modelCapacity <= 0) {
+    const solverAvailableSlots = Math.max(0, solverCapacity - input.inflightCount)
+    if (solverAvailableSlots <= 0) {
       return 0
     }
 
-    return Math.min(candidateCount, solverCapacity, modelCapacity)
+    const modelState = this.host.getModelPoolState()
+    const resolvedModelAvailable =
+      typeof modelState.totalAvailable === "number"
+        ? modelState.totalAvailable
+        : Math.max(0, modelState.totalCapacity - input.inflightCount)
+    const modelAvailableSlots = Math.max(0, Math.floor(resolvedModelAvailable))
+    if (modelAvailableSlots <= 0) {
+      return 0
+    }
+
+    const candidateAvailableSlots = Math.max(0, input.candidateCount - input.inflightCount)
+
+    return Math.min(candidateAvailableSlots, solverAvailableSlots, modelAvailableSlots)
   }
 
   private resolveContainerLimit() {
@@ -608,15 +657,54 @@ export class RuntimeRankOrchestrator {
   private countInflightContainerTasks(
     inflightTasks: DispatchTask[],
     requiresContainerByChallengeId: Map<number, boolean>,
+    containerActiveByChallengeId: Map<number, boolean>,
   ) {
     let containerTaskCount = 0
     for (const task of inflightTasks) {
-      if (requiresContainerByChallengeId.get(task.challengeId) ?? true) {
+      const requiresContainer = requiresContainerByChallengeId.get(task.challengeId) ?? true
+      const hasActiveContainer = containerActiveByChallengeId.get(task.challengeId) ?? false
+      if (requiresContainer && !hasActiveContainer) {
         containerTaskCount += 1
       }
     }
 
     return containerTaskCount
+  }
+
+  private trimAutoContainerIntents(
+    requiresContainerByChallengeId: Map<number, boolean>,
+    containerActiveByChallengeId: Map<number, boolean>,
+    maxNewContainerIntents: number,
+  ) {
+    if (!Number.isFinite(maxNewContainerIntents)) {
+      return
+    }
+
+    let remaining = Math.max(0, Math.floor(maxNewContainerIntents))
+    let changed = false
+    for (const intent of this.listPendingIntentsSnapshot()) {
+      if (intent.source !== "auto") {
+        continue
+      }
+
+      const requiresContainer = requiresContainerByChallengeId.get(intent.challengeId) ?? true
+      const hasActiveContainer = containerActiveByChallengeId.get(intent.challengeId) ?? false
+      if (!requiresContainer || hasActiveContainer) {
+        continue
+      }
+
+      if (remaining > 0) {
+        remaining -= 1
+        continue
+      }
+
+      this.pendingIntents.delete(intent.taskId)
+      changed = true
+    }
+
+    if (changed) {
+      this.host.notifyStateChanged()
+    }
   }
 
   private isAutoQueueEligible(challengeId: number) {

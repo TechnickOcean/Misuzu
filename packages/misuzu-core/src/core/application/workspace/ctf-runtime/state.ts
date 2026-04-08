@@ -19,6 +19,7 @@ export interface PersistedEnvironmentAgentRuntimeState extends Record<string, un
 export interface PersistedCTFRuntimeConfig {
   pluginId: string
   pluginConfig: PluginConfig
+  solverPromptTemplate?: string
   cron?: {
     noticePollIntervalMs?: number
     challengeSyncIntervalMs?: number
@@ -78,6 +79,7 @@ export interface PersistedCTFRuntimeManagedChallenge {
   title: string
   category: string
   requiresContainer?: boolean
+  containerActive?: boolean
   score: number
   solvedCount: number
 }
@@ -86,6 +88,7 @@ export interface PersistedCTFRuntimeChallengeProgress {
   challengeId: number
   solverId: string
   status: "idle" | "writeup_required" | "solved" | "blocked"
+  manualBlocked?: boolean
   flagAccepted: boolean
   writeUpReady: boolean
   blockedReason?: string

@@ -13,6 +13,7 @@ export {
   createCTFRuntimeWorkspaceWithoutPersistence,
   getCTFRuntimeWorkspace,
 } from "./factory.ts"
+export { DEFAULT_SOLVER_PROMPT_TEMPLATE } from "./services/index.ts"
 export type {
   ModelPoolCatalogProvider,
   ModelPoolItem,

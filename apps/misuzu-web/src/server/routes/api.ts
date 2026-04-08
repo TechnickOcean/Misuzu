@@ -7,10 +7,14 @@ import type {
   RuntimeDispatchRequest,
   RuntimeEnqueueRequest,
   RuntimeInitRequest,
+  RuntimeBlockSolverRequest,
+  RuntimeMarkSolvedRequest,
   RuntimeModelPoolUpdateRequest,
   RuntimeResetSolverRequest,
+  RuntimeUnblockSolverRequest,
   ProviderConfigEntry,
   SolverCreateRequest,
+  WorkspaceDeleteRequest,
 } from "../../shared/protocol.ts"
 import { WorkspaceManager } from "../services/workspace-manager.ts"
 
@@ -19,6 +23,18 @@ export function registerApiRoutes(app: Hono, manager: WorkspaceManager) {
 
   api.get("/workspaces", (c) => {
     return c.json({ entries: manager.listRegistryEntries() })
+  })
+
+  api.delete("/workspaces/:workspaceId", async (c) => {
+    let request: WorkspaceDeleteRequest = {}
+    try {
+      request = await c.req.json<WorkspaceDeleteRequest>()
+    } catch {
+      request = {}
+    }
+
+    const removed = await manager.deleteWorkspace(c.req.param("workspaceId"), request)
+    return c.json({ removed })
   })
 
   api.post("/workspaces/runtime", async (c) => {
@@ -78,6 +94,11 @@ export function registerApiRoutes(app: Hono, manager: WorkspaceManager) {
     return c.json({ snapshot })
   })
 
+  api.get("/workspaces/runtime/:workspaceId/writeups/export", async (c) => {
+    const exportData = await manager.exportRuntimeWriteups(c.req.param("workspaceId"))
+    return c.json({ exportData })
+  })
+
   api.post("/workspaces/runtime/:workspaceId/queue/enqueue", async (c) => {
     const request = await c.req.json<RuntimeEnqueueRequest>()
     const snapshot = await manager.enqueueRuntimeChallenge(
@@ -101,6 +122,34 @@ export function registerApiRoutes(app: Hono, manager: WorkspaceManager) {
     const snapshot = await manager.resetRuntimeSolver(
       c.req.param("workspaceId"),
       Number(request.challengeId),
+    )
+    return c.json({ snapshot })
+  })
+
+  api.post("/workspaces/runtime/:workspaceId/solver/block", async (c) => {
+    const request = await c.req.json<RuntimeBlockSolverRequest>()
+    const snapshot = await manager.blockRuntimeSolver(
+      c.req.param("workspaceId"),
+      Number(request.challengeId),
+    )
+    return c.json({ snapshot })
+  })
+
+  api.post("/workspaces/runtime/:workspaceId/solver/unblock", async (c) => {
+    const request = await c.req.json<RuntimeUnblockSolverRequest>()
+    const snapshot = await manager.unblockRuntimeSolver(
+      c.req.param("workspaceId"),
+      Number(request.challengeId),
+    )
+    return c.json({ snapshot })
+  })
+
+  api.post("/workspaces/runtime/:workspaceId/solver/mark-solved", async (c) => {
+    const request = await c.req.json<RuntimeMarkSolvedRequest>()
+    const snapshot = await manager.markRuntimeSolverSolved(
+      c.req.param("workspaceId"),
+      Number(request.challengeId),
+      request.writeupMarkdown,
     )
     return c.json({ snapshot })
   })
@@ -136,6 +185,14 @@ export function registerApiRoutes(app: Hono, manager: WorkspaceManager) {
       c.req.param("agentId"),
     )
     return c.json({ state })
+  })
+
+  api.get("/workspaces/runtime/:workspaceId/agents/:agentId/writeup", async (c) => {
+    const writeup = await manager.getRuntimeAgentWriteup(
+      c.req.param("workspaceId"),
+      c.req.param("agentId"),
+    )
+    return c.json({ writeup })
   })
 
   api.post("/workspaces/runtime/:workspaceId/agents/:agentId/prompt", async (c) => {

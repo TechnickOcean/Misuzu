@@ -3,6 +3,7 @@ import { ref } from "vue"
 import type {
   RuntimeCreateRequest,
   SolverCreateRequest,
+  WorkspaceDeleteRequest,
   WorkspaceRegistryEntry,
 } from "@shared/protocol.ts"
 import { useAppServices } from "@/shared/di/app-services.ts"
@@ -41,6 +42,25 @@ export const useCreateSolverWorkspaceMutation = defineMutation(() => {
       const snapshot = await apiClient.createSolverWorkspace(request)
       await workspaceRegistryQuery.refetch()
       return snapshot
+    },
+  })
+})
+
+export const useDeleteWorkspaceMutation = defineMutation(() => {
+  const { apiClient } = useAppServices()
+  const workspaceRegistryQuery = useWorkspaceRegistryQuery()
+
+  return useMutation({
+    mutation: async ({
+      workspaceId,
+      request,
+    }: {
+      workspaceId: string
+      request?: WorkspaceDeleteRequest
+    }) => {
+      const removed = await apiClient.deleteWorkspace(workspaceId, request)
+      await workspaceRegistryQuery.refetch()
+      return removed
     },
   })
 })

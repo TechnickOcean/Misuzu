@@ -8,6 +8,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarTrigger,
 } from "@/components/ui/sidebar"
 import WorkspaceCard from "@/features/workspace-registry/components/WorkspaceCard.vue"
 import { useWorkspaceHomePage } from "@/features/workspace-registry/composables/use-workspace-home-page.ts"
@@ -112,9 +113,10 @@ const {
     </template>
 
     <header class="flex items-center justify-between gap-2 border-b px-4 py-3">
-      <div>
+      <div class="flex items-center gap-2">
+        <SidebarTrigger class="md:hidden" />
         <p class="text-sm font-semibold">Workspace Registry</p>
-        <p class="text-xs text-muted-foreground">
+        <p class="hidden text-xs text-muted-foreground sm:block">
           Persisted entries restored from backend storage.
         </p>
       </div>

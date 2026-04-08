@@ -28,9 +28,13 @@ const { workspaceId, snapshot, state, sending, sendPrompt, openHome, openCreateW
   <SidebarProvider class="min-h-screen">
     <Sidebar variant="inset" collapsible="none" class="border-r border-sidebar-border/70">
       <SidebarHeader>
-        <div class="px-2 py-1">
-          <p class="text-sm font-semibold tracking-[0.22em]">MISUZU</p>
-          <p class="text-[11px] text-sidebar-foreground/70">web console</p>
+        <div class="px-2 py-2 mb-1">
+          <p class="text-base font-bold tracking-widest text-primary">MISUZU</p>
+          <p
+            class="text-[10px] text-sidebar-foreground/60 uppercase tracking-wider mt-0.5 font-medium"
+          >
+            web console
+          </p>
         </div>
         <SidebarMenu>
           <SidebarMenuItem>
@@ -46,14 +50,34 @@ const { workspaceId, snapshot, state, sending, sendPrompt, openHome, openCreateW
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Workspace</SidebarGroupLabel>
+          <SidebarGroupLabel>Workspace Details</SidebarGroupLabel>
           <SidebarGroupContent>
             <div
-              class="space-y-1 rounded-md border border-sidebar-border/80 bg-sidebar-accent/30 p-2 text-xs"
+              class="flex flex-col gap-3 rounded-lg border border-sidebar-border/50 bg-sidebar-accent/40 p-3 text-xs shadow-sm mt-1"
             >
-              <p class="truncate">{{ snapshot?.rootDir ?? workspaceId }}</p>
-              <p>Model: {{ snapshot?.modelId ?? "No model" }}</p>
-              <p>Messages: {{ state?.messages.length ?? 0 }}</p>
+              <div class="space-y-1">
+                <span
+                  class="text-sidebar-foreground/60 font-medium uppercase tracking-wider text-[10px]"
+                  >Directory</span
+                >
+                <p class="truncate font-medium" :title="snapshot?.rootDir ?? workspaceId">
+                  {{ snapshot?.rootDir ?? workspaceId }}
+                </p>
+              </div>
+              <div class="space-y-1">
+                <span
+                  class="text-sidebar-foreground/60 font-medium uppercase tracking-wider text-[10px]"
+                  >Model</span
+                >
+                <p class="font-medium">{{ snapshot?.modelId ?? "No model" }}</p>
+              </div>
+              <div class="space-y-1">
+                <span
+                  class="text-sidebar-foreground/60 font-medium uppercase tracking-wider text-[10px]"
+                  >Messages</span
+                >
+                <p class="font-medium">{{ state?.messages.length ?? 0 }}</p>
+              </div>
             </div>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -81,16 +105,24 @@ const { workspaceId, snapshot, state, sending, sendPrompt, openHome, openCreateW
     </Sidebar>
 
     <SidebarInset>
-      <header class="flex items-center justify-between gap-2 border-b px-4 py-3">
-        <div class="flex min-w-0 items-center gap-2">
-          <p class="truncate text-sm font-semibold">Standalone Solver Agent</p>
+      <header
+        class="sticky top-0 z-10 flex h-14 items-center justify-between gap-2 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60 shadow-sm"
+      >
+        <div class="flex min-w-0 items-center gap-2.5">
+          <div class="rounded-md bg-primary/10 p-1.5">
+            <BotIcon class="h-4 w-4 text-primary" />
+          </div>
+          <h1 class="truncate text-sm font-semibold tracking-tight">Standalone Solver Agent</h1>
         </div>
 
-        <Badge variant="secondary">{{ snapshot?.modelId ?? "No model" }}</Badge>
+        <Badge variant="secondary" class="font-mono text-xs shadow-sm">{{
+          snapshot?.modelId ?? "No model"
+        }}</Badge>
       </header>
 
       <section class="min-h-0 flex-1 overflow-hidden px-3 py-3 md:px-4">
         <AgentChatPanel
+          :key="String(workspaceId)"
           title="Standalone Solver Agent"
           :state="state"
           :loading="sending"

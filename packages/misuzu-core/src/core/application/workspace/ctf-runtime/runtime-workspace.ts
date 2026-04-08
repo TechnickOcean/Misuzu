@@ -253,6 +253,10 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
       ?.solver
   }
 
+  getChallengeDetail(challengeId: number) {
+    return this.solverHub.getChallenge(challengeId)
+  }
+
   getSolverActivationState(challengeId: number) {
     return this.solverHub.getSolverActivationState(challengeId)
   }
@@ -400,6 +404,37 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     return this.solverHub.resetChallengeSolver(challengeId)
   }
 
+  blockChallengeSolver(challengeId: number) {
+    const blocked = this.solverHub.blockChallengeSolver(challengeId)
+    if (blocked) {
+      this.rankOrchestrator.scheduleRebalance(true)
+    }
+
+    return blocked
+  }
+
+  unblockChallengeSolver(challengeId: number) {
+    const unblocked = this.solverHub.unblockChallengeSolver(challengeId)
+    if (unblocked) {
+      this.rankOrchestrator.scheduleRebalance(true)
+    }
+
+    return unblocked
+  }
+
+  markChallengeSolved(challengeId: number) {
+    const marked = this.solverHub.markChallengeSolved(challengeId)
+    if (marked) {
+      this.rankOrchestrator.scheduleRebalance(true)
+    }
+
+    return marked
+  }
+
+  isChallengeManuallyBlocked(challengeId: number) {
+    return this.solverHub.isChallengeManuallyBlocked(challengeId)
+  }
+
   pauseTaskDispatch() {
     this.rankOrchestrator.setDispatchAutoManaged(false)
     this.rankOrchestrator.setDispatchPaused(true)
@@ -510,14 +545,16 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
   }
 
   getPersistedRuntimeOptions() {
-    if (!this.pendingRuntimeSnapshot) {
+    const runtimeConfig = this.runtimeConfig ?? this.pendingRuntimeSnapshot?.runtimeConfig
+    if (!runtimeConfig) {
       return undefined
     }
 
     return {
-      pluginId: this.pendingRuntimeSnapshot.runtimeConfig.pluginId,
-      pluginConfig: this.pendingRuntimeSnapshot.runtimeConfig.pluginConfig,
-      cron: this.pendingRuntimeSnapshot.runtimeConfig.cron,
+      pluginId: runtimeConfig.pluginId,
+      pluginConfig: runtimeConfig.pluginConfig,
+      solverPromptTemplate: runtimeConfig.solverPromptTemplate,
+      cron: runtimeConfig.cron,
     } satisfies RuntimeInitOptions
   }
 
@@ -713,7 +750,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
       }
 
       const challengeId = resolveChallengeIdFromTaskPayload(intent.payload)
-      if (challengeId !== undefined && this.solverHub.isChallengeSolved(challengeId)) {
+      if (challengeId !== undefined && this.isChallengeDispatchBlocked(challengeId)) {
         return false
       }
 
@@ -739,7 +776,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
         return true
       }
 
-      return !this.solverHub.isChallengeSolved(challengeId)
+      return !this.isChallengeDispatchBlocked(challengeId)
     }
 
     const restoredTaskBudget = this.resolveRestoredTaskBudget()
@@ -781,6 +818,11 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     return Math.max(1, Math.floor(modelCapacity))
   }
 
+  private isChallengeDispatchBlocked(challengeId: number) {
+    const progress = this.solverHub.getChallengeProgressState(challengeId)
+    return progress?.status === "solved" || progress?.status === "blocked"
+  }
+
   private resolveMaxConcurrentContainers() {
     const maxConcurrentContainers = this.runtimeConfig?.pluginConfig.maxConcurrentContainers
     if (typeof maxConcurrentContainers !== "number" || !Number.isFinite(maxConcurrentContainers)) {
@@ -801,9 +843,11 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
   }
 
   private finalizeRuntimeInitialization(options: RuntimeInitOptions) {
+    const solverPromptTemplate = options.solverPromptTemplate?.trim()
     this.runtimeConfig = {
       pluginId: this.solverHub.getPluginId(),
       pluginConfig: options.pluginConfig,
+      ...(solverPromptTemplate ? { solverPromptTemplate } : {}),
       cron: options.cron,
     }
     this.runtimeInitialized = true

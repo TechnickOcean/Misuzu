@@ -40,14 +40,22 @@ const {
   modelPoolSaving,
   modelPoolError,
   modelPoolNotice,
-  autoOrchestrateDraft,
   pluginIdDraft,
   pluginConfigDraft,
   solverPromptTemplateDraft,
+  isSolverPromptTemplateDefault,
+  resetSolverPromptTemplateDraft,
+  deleteFilesDraft,
+  deleteConfirmDraft,
+  workspaceDeleting,
+  workspaceDeleteError,
+  canDeleteWorkspace,
+  deleteWorkspace,
   runtimeConfigSaving,
   runtimeConfigError,
   runtimeConfigNotice,
   providerOptions,
+  baseProviderOptions,
   addModelPoolRow,
   removeModelPoolRow,
   incrementConcurrency,
@@ -83,26 +91,14 @@ const {
         </div>
 
         <Tabs default-value="runtime" class="space-y-4">
-          <TabsList class="grid w-full grid-cols-3">
+          <TabsList class="grid w-full grid-cols-4">
             <TabsTrigger value="runtime">Prompt & Plugin</TabsTrigger>
             <TabsTrigger value="providers">Providers</TabsTrigger>
             <TabsTrigger value="model-pool">Model Pool</TabsTrigger>
+            <TabsTrigger value="danger">Danger Zone</TabsTrigger>
           </TabsList>
 
           <TabsContent value="runtime" class="space-y-3">
-            <div class="flex items-center justify-between rounded-md border p-3">
-              <div>
-                <p class="text-sm font-medium">Enable auto orchestration</p>
-                <p class="text-xs text-muted-foreground">
-                  Automatically rebalance challenge dispatch.
-                </p>
-              </div>
-              <Switch
-                :checked="autoOrchestrateDraft"
-                @update:checked="(checked) => (autoOrchestrateDraft = Boolean(checked))"
-              />
-            </div>
-
             <div class="grid gap-2">
               <label class="text-sm font-medium">Platform Plugin</label>
               <PlatformPluginForm
@@ -116,11 +112,17 @@ const {
               <p class="text-xs text-muted-foreground">
                 Changes to prompt templates affect new dispatch rounds after runtime restart.
               </p>
-              <Textarea
-                v-model="solverPromptTemplateDraft"
-                placeholder="You are assigned to challenge {challenge.id} {challenge.title}..."
-                class="min-h-32 text-sm"
-              />
+              <Textarea v-model="solverPromptTemplateDraft" class="min-h-32 text-sm" />
+              <div class="flex justify-end">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  :disabled="runtimeConfigSaving || isSolverPromptTemplateDefault"
+                  @click="resetSolverPromptTemplateDraft"
+                >
+                  Reset to default
+                </Button>
+              </div>
             </div>
 
             <div class="flex items-center gap-2">
@@ -145,9 +147,10 @@ const {
               v-model="providerConfigDraft"
               :disabled="providerConfigSaving"
               :provider-options="providerOptions"
+              :base-provider-options="baseProviderOptions"
             />
 
-            <div class="flex items-center gap-2">
+            <div class="flex items-center justify-end gap-2">
               <Button :disabled="providerConfigSaving" @click="saveProviderConfig">
                 {{ providerConfigSaving ? "Saving..." : "Save providers.json" }}
               </Button>
@@ -292,6 +295,47 @@ const {
             <p v-if="modelPoolNotice" class="text-sm text-muted-foreground">
               {{ modelPoolNotice }}
             </p>
+          </TabsContent>
+
+          <TabsContent value="danger" class="space-y-3">
+            <div class="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3">
+              <div>
+                <p class="text-sm font-medium text-destructive">Delete Workspace</p>
+                <p class="text-xs text-muted-foreground">
+                  Delete this workspace from registry. Optionally remove local workspace files.
+                </p>
+              </div>
+
+              <div class="grid gap-2">
+                <label class="text-sm font-medium">Type workspace id to confirm</label>
+                <Input v-model="deleteConfirmDraft" :placeholder="props.workspaceId" />
+              </div>
+
+              <div class="flex items-center justify-between rounded-md border bg-background p-3">
+                <div>
+                  <p class="text-sm font-medium">Delete local files</p>
+                  <p class="text-xs text-muted-foreground">
+                    Remove workspace directory at {{ snapshot?.rootDir ?? "(unavailable)" }}
+                  </p>
+                </div>
+                <Switch
+                  :checked="deleteFilesDraft"
+                  @update:checked="(checked) => (deleteFilesDraft = Boolean(checked))"
+                />
+              </div>
+
+              <Button
+                variant="destructive"
+                :disabled="workspaceDeleting || !canDeleteWorkspace"
+                @click="deleteWorkspace"
+              >
+                {{ workspaceDeleting ? "Deleting..." : "Delete Workspace" }}
+              </Button>
+
+              <p v-if="workspaceDeleteError" class="text-sm text-destructive">
+                {{ workspaceDeleteError }}
+              </p>
+            </div>
           </TabsContent>
         </Tabs>
       </CardContent>

@@ -55,6 +55,8 @@ class PersistenceMockPlugin implements CTFPlatformPlugin {
     solvedCount: 0,
   }
 
+  constructor(private readonly includeChallengeInListing = true) {}
+
   async setup(_config: PluginConfig) {}
 
   async login() {
@@ -84,7 +86,7 @@ class PersistenceMockPlugin implements CTFPlatformPlugin {
       throw new Error("invalid context")
     }
 
-    return [this.challenge]
+    return this.includeChallengeInListing ? [this.challenge] : []
   }
 
   async getChallenge(context: {
@@ -307,9 +309,126 @@ describe("ctf runtime workspace persistence", () => {
     })
     await restoredWorkspace.setModelPoolItems([resolveDefaultPoolItem(1)])
 
+    expect(restoredWorkspace.getChallengeSolver(901)).toBeDefined()
     expect(restoredWorkspace.listPendingSchedulerTasks().map((task) => task.taskId)).toContain(
       "task-persisted",
     )
+    await restoredWorkspace.shutdown()
+  })
+
+  test("persists manual blocked solver state across workspace reopen", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const runtimeOptions = {
+      plugin: new PersistenceMockPlugin(),
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" as const },
+        auth: { mode: "manual" as const },
+        maxConcurrentContainers: 1,
+      },
+      startPaused: true,
+    }
+
+    const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir, runtime: runtimeOptions })
+    await firstWorkspace.setModelPoolItems([resolveDefaultPoolItem(1)])
+
+    expect(firstWorkspace.blockChallengeSolver(901)).toBe(true)
+    expect(firstWorkspace.isChallengeManuallyBlocked(901)).toBe(true)
+
+    await firstWorkspace.shutdown()
+
+    const restoredWorkspace = await createCTFRuntimeWorkspace({
+      rootDir,
+      runtime: {
+        ...runtimeOptions,
+        plugin: new PersistenceMockPlugin(),
+      },
+    })
+    await restoredWorkspace.setModelPoolItems([resolveDefaultPoolItem(1)])
+
+    expect(restoredWorkspace.isChallengeManuallyBlocked(901)).toBe(true)
+    expect(
+      restoredWorkspace.listSolverProgressStates().find((state) => state.challengeId === 901)
+        ?.status,
+    ).toBe("blocked")
+
+    expect(restoredWorkspace.unblockChallengeSolver(901)).toBe(true)
+    expect(restoredWorkspace.isChallengeManuallyBlocked(901)).toBe(false)
+    await restoredWorkspace.shutdown()
+  })
+
+  test("restores solved challenge in managed list after workspace reopen", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const runtimeOptions = {
+      plugin: new PersistenceMockPlugin(),
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" as const },
+        auth: { mode: "manual" as const },
+        maxConcurrentContainers: 1,
+      },
+      startPaused: true,
+    }
+
+    const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir, runtime: runtimeOptions })
+    await firstWorkspace.setModelPoolItems([resolveDefaultPoolItem(1)])
+
+    expect(firstWorkspace.markChallengeSolved(901)).toBe(true)
+    expect(
+      firstWorkspace.listSolverProgressStates().find((state) => state.challengeId === 901)?.status,
+    ).toBe("solved")
+    await firstWorkspace.shutdown()
+
+    const restoredWorkspace = await createCTFRuntimeWorkspace({
+      rootDir,
+      runtime: {
+        ...runtimeOptions,
+        plugin: new PersistenceMockPlugin(),
+      },
+    })
+    await restoredWorkspace.setModelPoolItems([resolveDefaultPoolItem(1)])
+
+    expect(restoredWorkspace.getManagedChallengeIds()).toContain(901)
+    expect(
+      restoredWorkspace.listSolverProgressStates().find((state) => state.challengeId === 901)
+        ?.status,
+    ).toBe("solved")
+    await restoredWorkspace.shutdown()
+  })
+
+  test("keeps solved challenge visible when platform listing no longer returns it", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const runtimeOptions = {
+      plugin: new PersistenceMockPlugin(),
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" as const },
+        auth: { mode: "manual" as const },
+        maxConcurrentContainers: 1,
+      },
+      startPaused: true,
+    }
+
+    const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir, runtime: runtimeOptions })
+    await firstWorkspace.setModelPoolItems([resolveDefaultPoolItem(1)])
+
+    expect(firstWorkspace.markChallengeSolved(901)).toBe(true)
+    await firstWorkspace.shutdown()
+
+    const restoredWorkspace = await createCTFRuntimeWorkspace({
+      rootDir,
+      runtime: {
+        ...runtimeOptions,
+        plugin: new PersistenceMockPlugin(false),
+      },
+    })
+    await restoredWorkspace.setModelPoolItems([resolveDefaultPoolItem(1)])
+
+    expect(restoredWorkspace.getManagedChallengeIds()).toContain(901)
+    expect(
+      restoredWorkspace.listSolverProgressStates().find((state) => state.challengeId === 901)
+        ?.status,
+    ).toBe("solved")
     await restoredWorkspace.shutdown()
   })
 

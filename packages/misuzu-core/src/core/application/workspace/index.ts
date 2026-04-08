@@ -19,6 +19,7 @@ export {
   type ModelPoolStateSnapshot,
   type RuntimeCronOptions,
   type RuntimeInitOptions,
+  DEFAULT_SOLVER_PROMPT_TEMPLATE,
   createCTFRuntimeWorkspace,
   createCTFRuntimeWorkspaceWithoutPersistence,
   getCTFRuntimeWorkspace,

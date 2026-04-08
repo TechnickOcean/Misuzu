@@ -4,16 +4,20 @@ import type {
   PluginCatalogItem,
   PluginReadmeResponse,
   PromptMode,
+  RuntimeAgentWriteupResponse,
   RuntimeConfigUpdateRequest,
   RuntimeCreateRequest,
   RuntimeDispatchRequest,
   RuntimeEnqueueRequest,
   RuntimeInitRequest,
+  RuntimeMarkSolvedRequest,
   RuntimeModelPoolUpdateRequest,
+  RuntimeWriteupExportResponse,
   RuntimeWorkspaceSettingsSnapshot,
   RuntimeWorkspaceSnapshot,
   SolverCreateRequest,
   SolverWorkspaceSnapshot,
+  WorkspaceDeleteRequest,
   WorkspaceRegistryEntry,
 } from "@shared/protocol.ts"
 
@@ -23,6 +27,17 @@ export class WorkspaceApiClient {
   async listWorkspaces() {
     const response = await this.request<{ entries: WorkspaceRegistryEntry[] }>("/api/workspaces")
     return response.entries
+  }
+
+  async deleteWorkspace(workspaceId: string, request: WorkspaceDeleteRequest = {}) {
+    const response = await this.request<{ removed: boolean }>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}`,
+      {
+        method: "DELETE",
+        body: JSON.stringify(request),
+      },
+    )
+    return response.removed
   }
 
   async listPlugins(query?: string) {
@@ -170,6 +185,46 @@ export class WorkspaceApiClient {
     return response.snapshot
   }
 
+  async exportRuntimeWriteups(workspaceId: string) {
+    const response = await this.request<{ exportData: RuntimeWriteupExportResponse }>(
+      `/api/workspaces/runtime/${encodeURIComponent(workspaceId)}/writeups/export`,
+    )
+    return response.exportData
+  }
+
+  async blockRuntimeSolver(workspaceId: string, challengeId: number) {
+    const response = await this.request<{ snapshot: RuntimeWorkspaceSnapshot }>(
+      `/api/workspaces/runtime/${encodeURIComponent(workspaceId)}/solver/block`,
+      {
+        method: "POST",
+        body: JSON.stringify({ challengeId }),
+      },
+    )
+    return response.snapshot
+  }
+
+  async unblockRuntimeSolver(workspaceId: string, challengeId: number) {
+    const response = await this.request<{ snapshot: RuntimeWorkspaceSnapshot }>(
+      `/api/workspaces/runtime/${encodeURIComponent(workspaceId)}/solver/unblock`,
+      {
+        method: "POST",
+        body: JSON.stringify({ challengeId }),
+      },
+    )
+    return response.snapshot
+  }
+
+  async markRuntimeSolverSolved(workspaceId: string, request: RuntimeMarkSolvedRequest) {
+    const response = await this.request<{ snapshot: RuntimeWorkspaceSnapshot }>(
+      `/api/workspaces/runtime/${encodeURIComponent(workspaceId)}/solver/mark-solved`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    )
+    return response.snapshot
+  }
+
   async getRuntimeSettings(workspaceId: string) {
     const response = await this.request<{ settings: RuntimeWorkspaceSettingsSnapshot }>(
       `/api/workspaces/runtime/${encodeURIComponent(workspaceId)}/settings`,
@@ -217,6 +272,13 @@ export class WorkspaceApiClient {
       `/api/workspaces/runtime/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId)}/state`,
     )
     return response.state
+  }
+
+  async getRuntimeAgentWriteup(workspaceId: string, agentId: string) {
+    const response = await this.request<{ writeup: RuntimeAgentWriteupResponse }>(
+      `/api/workspaces/runtime/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId)}/writeup`,
+    )
+    return response.writeup
   }
 
   async promptRuntimeAgent(

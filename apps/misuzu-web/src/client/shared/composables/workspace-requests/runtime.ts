@@ -7,7 +7,9 @@ import type {
   ProviderConfigEntry,
   RuntimeConfigUpdateRequest,
   RuntimeInitRequest,
+  RuntimeMarkSolvedRequest,
   RuntimeModelPoolUpdateRequest,
+  RuntimeWriteupExportResponse,
   RuntimeWorkspaceSettingsSnapshot,
   RuntimeWorkspaceSnapshot,
 } from "@shared/protocol.ts"
@@ -278,6 +280,71 @@ export const useResetRuntimeSolverMutation = defineMutation(() => {
   })
 })
 
+export const useExportRuntimeWriteupsMutation = defineMutation(() => {
+  const { apiClient } = useAppServices()
+
+  return useMutation({
+    mutation: async (workspaceId: string) => apiClient.exportRuntimeWriteups(workspaceId),
+  })
+})
+
+export const useBlockRuntimeSolverMutation = defineMutation(() => {
+  const { apiClient } = useAppServices()
+  const { refreshRuntimeWorkspace } = useRuntimeRefreshers()
+
+  return useMutation({
+    mutation: async ({
+      workspaceId,
+      challengeId,
+    }: {
+      workspaceId: string
+      challengeId: number
+    }) => {
+      const snapshot = await apiClient.blockRuntimeSolver(workspaceId, challengeId)
+      await refreshRuntimeWorkspace(workspaceId)
+      return snapshot
+    },
+  })
+})
+
+export const useUnblockRuntimeSolverMutation = defineMutation(() => {
+  const { apiClient } = useAppServices()
+  const { refreshRuntimeWorkspace } = useRuntimeRefreshers()
+
+  return useMutation({
+    mutation: async ({
+      workspaceId,
+      challengeId,
+    }: {
+      workspaceId: string
+      challengeId: number
+    }) => {
+      const snapshot = await apiClient.unblockRuntimeSolver(workspaceId, challengeId)
+      await refreshRuntimeWorkspace(workspaceId)
+      return snapshot
+    },
+  })
+})
+
+export const useMarkRuntimeSolverSolvedMutation = defineMutation(() => {
+  const { apiClient } = useAppServices()
+  const { refreshRuntimeWorkspace } = useRuntimeRefreshers()
+
+  return useMutation({
+    mutation: async ({
+      workspaceId,
+      request,
+    }: {
+      workspaceId: string
+      request: RuntimeMarkSolvedRequest
+    }) => {
+      const snapshot = await apiClient.markRuntimeSolverSolved(workspaceId, request)
+      await refreshRuntimeWorkspace(workspaceId)
+      return snapshot
+    },
+  })
+})
+
 export const useUpdateRuntimeProviderConfigMutation = defineMutation(() => {
   const { apiClient } = useAppServices()
   const { refreshRuntimeWorkspace, refreshRuntimeSettings } = useRuntimeRefreshers()
@@ -348,3 +415,4 @@ export type RuntimeWorkspaceData = RuntimeWorkspaceSnapshot
 export type RuntimeSettingsData = RuntimeWorkspaceSettingsSnapshot
 export type RuntimeAgentStateData = AgentStateSnapshot
 export type ProviderCatalogData = ProviderCatalogItem[]
+export type RuntimeWriteupExportData = RuntimeWriteupExportResponse

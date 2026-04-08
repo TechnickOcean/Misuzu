@@ -6,6 +6,7 @@ import {
   toPluginConfig,
   type PluginConfigDraft,
 } from "@/features/workspace-runtime/composables/plugin-config-form.ts"
+import { DEFAULT_SOLVER_PROMPT_TEMPLATE } from "@/features/workspace-runtime/composables/solver-prompt-template.ts"
 import {
   createModelPoolRow,
   normalizeModelPoolRows,
@@ -45,13 +46,15 @@ export function useCreateWorkspacePage() {
   const providerConfigError = ref("")
 
   const modelPool = ref<ModelPoolRow[]>([createModelPoolRow()])
-  const runtimeAutoOrchestrate = ref(false)
 
   const selectedPluginId = ref("")
   const pluginDraft = reactive<PluginConfigDraft>(createDefaultPluginConfigDraft())
-  const solverPromptTemplateDraft = ref("")
+  const solverPromptTemplateDraft = ref(DEFAULT_SOLVER_PROMPT_TEMPLATE)
   const skipPluginSetup = ref(false)
   const startFlowAfterCreate = ref(false)
+  const isSolverPromptTemplateDefault = computed(
+    () => solverPromptTemplateDraft.value.trim() === DEFAULT_SOLVER_PROMPT_TEMPLATE,
+  )
 
   const providerOptions = computed(() => {
     const set = new Set(providerCatalog.value.map((item) => item.provider))
@@ -62,6 +65,11 @@ export function useCreateWorkspacePage() {
     }
     return Array.from(set).sort((left, right) => left.localeCompare(right))
   })
+  const baseProviderOptions = computed(() =>
+    providerCatalog.value
+      .map((item) => item.provider)
+      .sort((left, right) => left.localeCompare(right)),
+  )
 
   const normalizedModelPool = computed<ModelPoolInput[]>(() => {
     return modelPool.value.map((item) => ({
@@ -237,6 +245,10 @@ export function useCreateWorkspacePage() {
     nextStep()
   }
 
+  function resetSolverPromptTemplateDraft() {
+    solverPromptTemplateDraft.value = DEFAULT_SOLVER_PROMPT_TEMPLATE
+  }
+
   async function createWorkspace() {
     creating.value = true
     formError.value = ""
@@ -253,8 +265,12 @@ export function useCreateWorkspacePage() {
         pluginConfig: skipPluginSetup.value ? undefined : toPluginConfig(pluginDraft),
         solverPromptTemplate: skipPluginSetup.value
           ? undefined
-          : solverPromptTemplateDraft.value.trim() || undefined,
-        autoOrchestrate: runtimeAutoOrchestrate.value,
+          : (() => {
+              const solverPromptTemplate = solverPromptTemplateDraft.value.trim()
+              return solverPromptTemplate && solverPromptTemplate !== DEFAULT_SOLVER_PROMPT_TEMPLATE
+                ? solverPromptTemplate
+                : undefined
+            })(),
         createEnvironmentAgent: skipPluginSetup.value,
       })
 
@@ -306,13 +322,15 @@ export function useCreateWorkspacePage() {
     providerConfigSaved,
     providerConfigError,
     modelPool,
-    runtimeAutoOrchestrate,
     selectedPluginId,
     pluginDraft,
     solverPromptTemplateDraft,
+    isSolverPromptTemplateDefault,
+    resetSolverPromptTemplateDraft,
     skipPluginSetup,
     startFlowAfterCreate,
     providerOptions,
+    baseProviderOptions,
     normalizedModelPool,
     listModelsForProvider,
     addModelPoolRow,

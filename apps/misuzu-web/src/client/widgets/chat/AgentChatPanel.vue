@@ -66,6 +66,7 @@ const visibleMessages = computed(() => {
 
   return allMessages.value.slice(allMessages.value.length - visibleMessageCount.value)
 })
+const hasMessages = computed(() => Boolean(props.state && props.state.messages.length > 0))
 const composerPlaceholder = computed(() =>
   promptMode.value === "steer"
     ? "Steer the currently running agent strategy..."
@@ -451,20 +452,20 @@ watch(
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col gap-2 overflow-hidden">
+  <div class="flex h-full min-h-0 min-w-0 flex-col gap-2 overflow-hidden">
     <div
-      class="mx-auto flex w-full items-center justify-between px-1 pt-1 text-xs text-muted-foreground xl:max-w-[50vw]"
+      class="mx-auto flex w-full min-w-0 flex-wrap items-center justify-between gap-2 px-1 pt-1 text-xs text-muted-foreground xl:max-w-[50vw]"
     >
-      <div class="flex items-center gap-4">
-        <span>Model: {{ state?.modelId ?? "Not selected" }}</span>
+      <div class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
+        <span class="break-all">Model: {{ state?.modelId ?? "Not selected" }}</span>
         <span v-if="typeof rank === 'number'">Rank: {{ Math.round(rank) }}</span>
       </div>
-      <span>Messages: {{ state?.messages.length ?? 0 }}</span>
+      <span class="shrink-0">Messages: {{ state?.messages.length ?? 0 }}</span>
     </div>
 
-    <div ref="scrollContainer" class="min-h-0 flex-1 overflow-hidden">
-      <ScrollArea class="h-full bg-card px-3 py-2 shadow-sm">
-        <div class="mx-auto grid w-full gap-3 pb-3 pt-2 text-left xl:max-w-[50vw]">
+    <div ref="scrollContainer" class="min-h-0 min-w-0 flex-1 overflow-hidden">
+      <ScrollArea class="h-full overflow-x-hidden bg-card px-3 py-2 shadow-sm">
+        <div class="mx-auto grid w-full min-w-0 gap-3 pb-3 pt-2 text-left xl:max-w-[50vw]">
           <div v-if="loadingOlderMessages" class="space-y-4 px-3 py-2">
             <div class="flex flex-col gap-2">
               <Skeleton class="h-4 w-[150px]" />
@@ -477,7 +478,7 @@ watch(
           </div>
 
           <EmptyPlaceholder
-            v-if="!state || state.messages.length === 0"
+            v-if="!hasMessages"
             title="Empty holder"
             :description="
               !state
@@ -486,136 +487,138 @@ watch(
             "
           />
 
-          <article
-            v-for="(message, index) in visibleMessages"
-            :key="`${message.timestamp ?? `${message.role}-${index}`}`"
-            class="grid justify-items-start"
-          >
-            <div
-              class="w-full max-w-full rounded-2xl border px-3 py-2"
-              :class="isUserRole(message.role) ? 'bg-primary/10' : 'bg-background/90'"
+          <template v-else>
+            <article
+              v-for="(message, index) in visibleMessages"
+              :key="`${message.timestamp ?? `${message.role}-${index}`}`"
+              class="grid min-w-0 justify-items-start"
             >
-              <header
-                class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+              <div
+                class="w-full min-w-0 max-w-full rounded-2xl border px-3 py-2"
+                :class="isUserRole(message.role) ? 'bg-primary/10' : 'bg-background/90'"
               >
-                {{ roleLabel(message.role) }}
-              </header>
+                <header
+                  class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+                >
+                  {{ roleLabel(message.role) }}
+                </header>
 
-              <p
-                v-if="messageParts(message).length === 0"
-                class="text-xs italic text-muted-foreground"
-              >
-                No text content.
-              </p>
+                <p
+                  v-if="messageParts(message).length === 0"
+                  class="text-xs italic text-muted-foreground"
+                >
+                  No text content.
+                </p>
 
-              <div class="space-y-2">
-                <template v-for="(part, partIndex) in messageParts(message)" :key="partIndex">
-                  <template v-if="part.kind === 'text'">
-                    <template v-if="shouldCollapseMessage(part.text)">
-                      <pre
-                        class="text-xs whitespace-pre-wrap break-all"
-                        v-html="renderAnsiHtml(collapsedPreview(part.text))"
-                      />
-                      <details class="text-xs">
-                        <summary class="cursor-pointer text-muted-foreground">
-                          Show full content
-                        </summary>
+                <div class="min-w-0 space-y-2">
+                  <template v-for="(part, partIndex) in messageParts(message)" :key="partIndex">
+                    <template v-if="part.kind === 'text'">
+                      <template v-if="shouldCollapseMessage(part.text)">
                         <pre
-                          class="mt-2 overflow-x-auto whitespace-pre-wrap break-all"
-                          v-html="renderAnsiHtml(part.text)"
+                          class="text-xs whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+                          v-html="renderAnsiHtml(collapsedPreview(part.text))"
                         />
-                      </details>
+                        <details class="text-xs">
+                          <summary class="cursor-pointer text-muted-foreground">
+                            Show full content
+                          </summary>
+                          <pre
+                            class="mt-2 overflow-x-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+                            v-html="renderAnsiHtml(part.text)"
+                          />
+                        </details>
+                      </template>
+                      <pre
+                        v-else
+                        class="overflow-x-auto whitespace-pre-wrap break-words text-xs [overflow-wrap:anywhere]"
+                        v-html="renderAnsiHtml(part.text)"
+                      />
                     </template>
-                    <pre
-                      v-else
-                      class="overflow-x-auto whitespace-pre-wrap break-all text-xs"
-                      v-html="renderAnsiHtml(part.text)"
-                    />
+
+                    <div v-else class="space-y-2 rounded-md border bg-muted/30 p-2 text-xs">
+                      <p class="font-medium">Tool · {{ part.name ?? part.toolType }}</p>
+
+                      <div v-if="part.argsText">
+                        <p class="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+                          Arguments
+                        </p>
+                        <template v-if="shouldCollapseMessage(part.argsText)">
+                          <pre
+                            class="whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+                            v-html="renderAnsiHtml(collapsedPreview(part.argsText))"
+                          />
+                          <details>
+                            <summary class="cursor-pointer text-muted-foreground">
+                              Show full args
+                            </summary>
+                            <pre
+                              class="mt-2 overflow-x-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+                              v-html="renderAnsiHtml(part.argsText)"
+                            />
+                          </details>
+                        </template>
+                        <pre
+                          v-else
+                          class="overflow-x-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+                          v-html="renderAnsiHtml(part.argsText)"
+                        />
+                      </div>
+
+                      <div v-if="part.resultText">
+                        <p class="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+                          Result
+                        </p>
+                        <template v-if="shouldCollapseMessage(part.resultText)">
+                          <pre
+                            class="whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+                            v-html="renderAnsiHtml(collapsedPreview(part.resultText))"
+                          />
+                          <details>
+                            <summary class="cursor-pointer text-muted-foreground">
+                              Show full result
+                            </summary>
+                            <pre
+                              class="mt-2 overflow-x-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+                              v-html="renderAnsiHtml(part.resultText)"
+                            />
+                          </details>
+                        </template>
+                        <pre
+                          v-else
+                          class="overflow-x-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+                          v-html="renderAnsiHtml(part.resultText)"
+                        />
+                      </div>
+                    </div>
                   </template>
-
-                  <div v-else class="space-y-2 rounded-md border bg-muted/30 p-2 text-xs">
-                    <p class="font-medium">Tool · {{ part.name ?? part.toolType }}</p>
-
-                    <div v-if="part.argsText">
-                      <p class="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
-                        Arguments
-                      </p>
-                      <template v-if="shouldCollapseMessage(part.argsText)">
-                        <pre
-                          class="whitespace-pre-wrap break-all"
-                          v-html="renderAnsiHtml(collapsedPreview(part.argsText))"
-                        />
-                        <details>
-                          <summary class="cursor-pointer text-muted-foreground">
-                            Show full args
-                          </summary>
-                          <pre
-                            class="mt-2 overflow-x-auto whitespace-pre-wrap break-all"
-                            v-html="renderAnsiHtml(part.argsText)"
-                          />
-                        </details>
-                      </template>
-                      <pre
-                        v-else
-                        class="overflow-x-auto whitespace-pre-wrap break-all"
-                        v-html="renderAnsiHtml(part.argsText)"
-                      />
-                    </div>
-
-                    <div v-if="part.resultText">
-                      <p class="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
-                        Result
-                      </p>
-                      <template v-if="shouldCollapseMessage(part.resultText)">
-                        <pre
-                          class="whitespace-pre-wrap break-all"
-                          v-html="renderAnsiHtml(collapsedPreview(part.resultText))"
-                        />
-                        <details>
-                          <summary class="cursor-pointer text-muted-foreground">
-                            Show full result
-                          </summary>
-                          <pre
-                            class="mt-2 overflow-x-auto whitespace-pre-wrap break-all"
-                            v-html="renderAnsiHtml(part.resultText)"
-                          />
-                        </details>
-                      </template>
-                      <pre
-                        v-else
-                        class="overflow-x-auto whitespace-pre-wrap break-all"
-                        v-html="renderAnsiHtml(part.resultText)"
-                      />
-                    </div>
-                  </div>
-                </template>
+                </div>
               </div>
-            </div>
-          </article>
+            </article>
+          </template>
         </div>
       </ScrollArea>
     </div>
 
     <form
-      class="sticky bottom-0 z-10 mx-auto w-full shrink-0 pb-2 xl:max-w-[50vw]"
+      class="sticky bottom-0 z-10 mx-auto w-full min-w-0 shrink-0 px-1 pb-2 xl:max-w-[50vw]"
       @submit.prevent="submitPrompt"
     >
       <div
-        class="mx-auto w-full rounded-2xl border border-border/80 bg-background/95 p-2 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-background/85"
+        class="mx-auto w-full min-w-0 rounded-2xl border border-border/80 bg-background/95 p-2 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-background/85"
       >
-        <InputGroup class="h-auto rounded-xl bg-card/95">
+        <InputGroup class="h-auto w-full min-w-0 rounded-xl bg-card/95">
           <InputGroupTextarea
             v-model="promptInput"
             :rows="compact ? 1 : 2"
-            class="max-h-44 min-h-14 border-0 text-sm"
+            class="max-h-44 min-h-14 min-w-0 border-0 text-sm"
             :placeholder="composerPlaceholder"
             :disabled="loading"
             @keydown="handleComposerKeydown"
           />
 
-          <InputGroupAddon align="block-end" class="border-t">
-            <div class="flex w-full flex-wrap items-center justify-between gap-2">
-              <div class="flex items-center gap-1">
+          <InputGroupAddon align="block-end" class="min-w-0 border-t">
+            <div class="flex w-full min-w-0 flex-wrap items-center justify-between gap-2">
+              <div class="flex min-w-0 flex-wrap items-center gap-1">
                 <InputGroupButton
                   type="button"
                   size="sm"
@@ -638,6 +641,7 @@ watch(
                 type="submit"
                 size="sm"
                 variant="default"
+                class="shrink-0"
                 :disabled="loading || !promptInput.trim()"
               >
                 <SendHorizontalIcon class="size-4" />

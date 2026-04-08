@@ -47,7 +47,7 @@ export const router = createRouter({
           name: "runtime-overview",
           component: RuntimeOverviewPage,
           meta: {
-            breadcrumb: "Overview",
+            breadcrumb: "Dashboard",
           },
           props: (route) => ({
             workspaceId: String(route.params.id),

@@ -5,6 +5,7 @@ export {
   type RuntimeCronOptions,
   type RuntimeInitOptions,
 } from "./platform/runtime.ts"
+export { DEFAULT_SOLVER_PROMPT_TEMPLATE } from "./platform/default-solver-prompt-template.ts"
 export {
   SolverHub,
   type ChallengeSolverBinding,

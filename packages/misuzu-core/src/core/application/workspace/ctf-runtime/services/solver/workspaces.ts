@@ -79,6 +79,10 @@ export class SolverWorkspaceService {
     return workspace
   }
 
+  resolveWorkspaceRootDir(solverId: string) {
+    return join(this.rootDir, "solvers", solverId)
+  }
+
   async shutdown() {
     const workspaces = [...this.solverWorkspaces.values()]
     this.solverWorkspaces.clear()

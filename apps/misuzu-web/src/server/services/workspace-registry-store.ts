@@ -110,7 +110,6 @@ function normalizeRegistryEntries(raw: unknown) {
               initialized: Boolean(entry.runtime.initialized),
               pluginId:
                 typeof entry.runtime.pluginId === "string" ? entry.runtime.pluginId : undefined,
-              autoOrchestrate: Boolean(entry.runtime.autoOrchestrate),
             }
           : undefined,
     })

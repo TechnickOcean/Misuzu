@@ -33,6 +33,7 @@ export {
   type CTFRuntimeWorkspaceOptions,
   type RuntimeCronOptions,
   type RuntimeInitOptions,
+  DEFAULT_SOLVER_PROMPT_TEMPLATE,
   type SolverWorkspaceOptions,
   type PersistedCTFRuntimeConfig,
   type PersistedCTFRuntimeSnapshot,

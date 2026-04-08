@@ -1,7 +1,20 @@
 <script setup lang="ts">
 import { computed } from "vue"
+import { CheckIcon, ChevronsUpDownIcon } from "lucide-vue-next"
 import type { ProviderConfigEntry } from "@shared/protocol.ts"
 import { Button } from "@/components/ui/button"
+import {
+  Combobox,
+  ComboboxAnchor,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxItemIndicator,
+  ComboboxList,
+  ComboboxTrigger,
+  ComboboxViewport,
+} from "@/components/ui/combobox"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -16,10 +29,12 @@ const props = withDefaults(
     modelValue: ProviderConfigEntry[]
     disabled?: boolean
     providerOptions?: string[]
+    baseProviderOptions?: string[]
   }>(),
   {
     disabled: false,
     providerOptions: () => [],
+    baseProviderOptions: () => [],
   },
 )
 
@@ -125,6 +140,16 @@ function setMappingsText(index: number, value: string | number) {
     modelMappings: mappings.length > 0 ? mappings : undefined,
   })
 }
+
+function listBaseProviderOptions(current: string | undefined) {
+  const options = new Set(props.baseProviderOptions)
+  const normalized = current?.trim()
+  if (normalized) {
+    options.add(normalized)
+  }
+
+  return [...options].sort((left, right) => left.localeCompare(right))
+}
 </script>
 
 <template>
@@ -192,13 +217,47 @@ function setMappingsText(index: number, value: string | number) {
         <template v-if="getEntryMode(entry) === 'proxy'">
           <div class="grid gap-2">
             <label class="text-sm font-medium">Base Provider</label>
-            <Input
-              :model-value="entry.baseProvider"
+            <Combobox
+              :model-value="entry.baseProvider ?? ''"
               :disabled="disabled"
-              list="provider-config-provider-options"
-              placeholder="e.g. openai"
-              @update:model-value="(value) => patchEntry(index, { baseProvider: String(value) })"
-            />
+              @update:model-value="
+                (value) => patchEntry(index, { baseProvider: String(value ?? '') })
+              "
+            >
+              <ComboboxAnchor class="w-full">
+                <ComboboxTrigger as-child>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    class="w-full justify-between font-normal"
+                    :disabled="disabled"
+                  >
+                    <span class="truncate">{{ entry.baseProvider || "Select base provider" }}</span>
+                    <ChevronsUpDownIcon class="size-4 shrink-0 opacity-50" />
+                  </Button>
+                </ComboboxTrigger>
+              </ComboboxAnchor>
+
+              <ComboboxList class="w-(--reka-popper-anchor-width) p-0">
+                <ComboboxInput placeholder="Search provider..." />
+                <ComboboxEmpty>No provider found.</ComboboxEmpty>
+                <ComboboxViewport>
+                  <ComboboxGroup>
+                    <ComboboxItem
+                      v-for="option in listBaseProviderOptions(entry.baseProvider)"
+                      :key="option"
+                      :value="option"
+                      class="justify-between"
+                    >
+                      <span class="truncate">{{ option }}</span>
+                      <ComboboxItemIndicator>
+                        <CheckIcon class="size-4" />
+                      </ComboboxItemIndicator>
+                    </ComboboxItem>
+                  </ComboboxGroup>
+                </ComboboxViewport>
+              </ComboboxList>
+            </Combobox>
           </div>
         </template>
       </div>

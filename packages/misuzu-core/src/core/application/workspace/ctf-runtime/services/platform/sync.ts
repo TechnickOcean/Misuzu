@@ -46,10 +46,6 @@ export class SyncService {
 
       const existing = this.solverHub.getChallengeBinding(challenge.id)
       if (!existing) {
-        if (this.solverHub.isChallengeSolved(challenge.id)) {
-          continue
-        }
-
         try {
           await this.solverHub.ensureChallengeSolver(challenge)
         } catch (error) {
@@ -68,7 +64,12 @@ export class SyncService {
         continue
       }
 
+      if (!existing.solver && !this.solverHub.isChallengeSolved(challenge.id)) {
+        await this.solverHub.ensureChallengeSolver(challenge)
+      }
+
       this.solverHub.updateChallengeMetadata(challenge)
+      await this.solverHub.refreshChallengeDetail(challenge.id)
     }
 
     for (const binding of this.solverHub.getChallengeBindings()) {

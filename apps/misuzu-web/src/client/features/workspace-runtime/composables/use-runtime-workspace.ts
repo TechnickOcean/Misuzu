@@ -8,12 +8,16 @@ import type {
 } from "@shared/protocol.ts"
 import {
   useDequeueRuntimeChallengeMutation,
+  useBlockRuntimeSolverMutation,
   useEnqueueRuntimeChallengeMutation,
   useEnsureRuntimeEnvironmentAgentMutation,
+  useExportRuntimeWriteupsMutation,
   useInitializeRuntimeMutation,
+  useMarkRuntimeSolverSolvedMutation,
   usePauseRuntimeDispatchMutation,
   usePromptRuntimeAgentMutation,
   useResetRuntimeSolverMutation,
+  useUnblockRuntimeSolverMutation,
   useRuntimeAgentStateQuery,
   useRuntimeWorkspaceQuery,
   useStartRuntimeDispatchMutation,
@@ -44,9 +48,13 @@ export function useRuntimeWorkspace(workspaceId: string) {
   const updateRuntimeModelPoolMutation = useUpdateRuntimeModelPoolMutation()
   const syncRuntimeChallengesMutation = useSyncRuntimeChallengesMutation()
   const syncRuntimeNoticesMutation = useSyncRuntimeNoticesMutation()
+  const exportRuntimeWriteupsMutation = useExportRuntimeWriteupsMutation()
   const enqueueRuntimeChallengeMutation = useEnqueueRuntimeChallengeMutation()
   const dequeueRuntimeChallengeMutation = useDequeueRuntimeChallengeMutation()
   const resetRuntimeSolverMutation = useResetRuntimeSolverMutation()
+  const blockRuntimeSolverMutation = useBlockRuntimeSolverMutation()
+  const unblockRuntimeSolverMutation = useUnblockRuntimeSolverMutation()
+  const markRuntimeSolverSolvedMutation = useMarkRuntimeSolverSolvedMutation()
   const updateRuntimeProviderConfigMutation = useUpdateRuntimeProviderConfigMutation()
   const updateRuntimeConfigMutation = useUpdateRuntimeConfigMutation()
   const promptRuntimeAgentMutation = usePromptRuntimeAgentMutation()
@@ -109,7 +117,11 @@ export function useRuntimeWorkspace(workspaceId: string) {
     activeAgentId,
     activeAgentState,
     error: computed(() => runtimeWorkspaceQuery.error.value?.message ?? null),
-    loading: computed(() => runtimeWorkspaceQuery.asyncStatus.value === "loading"),
+    loading: computed(
+      () =>
+        runtimeWorkspaceQuery.asyncStatus.value === "loading" &&
+        runtimeWorkspaceQuery.data.value === undefined,
+    ),
     open: async () => {
       connectWorkspaceFeed()
       feedConnected = true
@@ -139,6 +151,9 @@ export function useRuntimeWorkspace(workspaceId: string) {
       }),
     syncChallenges: () => syncRuntimeChallengesMutation.mutateAsync(workspaceId),
     syncNotices: () => syncRuntimeNoticesMutation.mutateAsync(workspaceId),
+    exportWriteups: () => exportRuntimeWriteupsMutation.mutateAsync(workspaceId),
+    getAgentWriteup: (agentId: string) =>
+      appServices.apiClient.getRuntimeAgentWriteup(workspaceId, agentId),
     ensureEnvironmentAgent: () => ensureRuntimeEnvironmentAgentMutation.mutateAsync(workspaceId),
     initializeRuntime: (pluginId: string, pluginConfig: RuntimeInitRequest["pluginConfig"]) =>
       initializeRuntimeMutation.mutateAsync({
@@ -151,6 +166,18 @@ export function useRuntimeWorkspace(workspaceId: string) {
       dequeueRuntimeChallengeMutation.mutateAsync({ workspaceId, challengeId }),
     resetSolver: (challengeId: number) =>
       resetRuntimeSolverMutation.mutateAsync({ workspaceId, challengeId }),
+    blockSolver: (challengeId: number) =>
+      blockRuntimeSolverMutation.mutateAsync({ workspaceId, challengeId }),
+    unblockSolver: (challengeId: number) =>
+      unblockRuntimeSolverMutation.mutateAsync({ workspaceId, challengeId }),
+    markSolverSolved: (challengeId: number, writeupMarkdown?: string) =>
+      markRuntimeSolverSolvedMutation.mutateAsync({
+        workspaceId,
+        request: {
+          challengeId,
+          ...(typeof writeupMarkdown === "string" ? { writeupMarkdown } : {}),
+        },
+      }),
     updateProviderConfig: (providerConfig: ProviderConfigEntry[]) =>
       updateRuntimeProviderConfigMutation.mutateAsync({ workspaceId, providerConfig }),
     updateRuntimeConfig: (request: RuntimeConfigUpdateRequest) =>

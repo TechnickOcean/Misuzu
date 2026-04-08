@@ -71,7 +71,7 @@ const {
         <SidebarMenuItem v-if="!isSetupLocked">
           <SidebarMenuButton :is-active="isOverviewRoute" @click="openOverview">
             <ListChecksIcon />
-            <span>Queue & Setup</span>
+            <span>Dashboard</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
         <SidebarMenuItem>
@@ -251,7 +251,7 @@ const {
       <div class="flex min-w-0 items-center gap-2">
         <SidebarTrigger class="md:hidden" />
         <p class="truncate text-sm font-semibold">
-          {{ isOverviewRoute ? "Queue & Setup" : isSettingsRoute ? "Settings" : activeAgentName }}
+          {{ isOverviewRoute ? "Dashboard" : isSettingsRoute ? "Settings" : activeAgentName }}
         </p>
       </div>
 

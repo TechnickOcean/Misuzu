@@ -24,6 +24,7 @@ import {
 import { SolverWorkspaceService } from "../solver/workspaces.ts"
 import { PlatformAuthManager } from "./auth.ts"
 import { PlatformContestManager } from "./contest.ts"
+import { DEFAULT_SOLVER_PROMPT_TEMPLATE } from "./default-solver-prompt-template.ts"
 import { RuntimePluginLoader } from "./plugin.ts"
 import { WorkspaceModelPool, isModelPoolError } from "../model/pool.ts"
 import type {
@@ -58,6 +59,7 @@ export interface ChallengeSolverProgressState {
   challengeId: number
   solverId: string
   status: ChallengeProgressStatus
+  manualBlocked: boolean
   flagAccepted: boolean
   writeUpReady: boolean
   blockedReason?: string
@@ -211,9 +213,59 @@ export class SolverHub {
   }
 
   restoreState(state: PersistedCTFRuntimeSolverHubState | undefined) {
+    this.challengeSolvers.clear()
     this.challengeProgress.clear()
 
-    if (!state?.challengeProgress?.length) {
+    if (!state) {
+      return
+    }
+
+    const managedByChallengeId = new Map<
+      number,
+      PersistedCTFRuntimeSolverHubState["managedChallenges"][number]
+    >()
+    for (const managed of state.managedChallenges ?? []) {
+      if (!Number.isFinite(managed.challengeId) || !managed.solverId) {
+        continue
+      }
+
+      managedByChallengeId.set(managed.challengeId, managed)
+      this.challengeSolvers.set(managed.challengeId, {
+        challenge: {
+          id: managed.challengeId,
+          title: managed.title,
+          category: managed.category,
+          score: managed.score,
+          solvedCount: managed.solvedCount,
+        },
+        detail:
+          typeof managed.requiresContainer === "boolean" || managed.containerActive !== undefined
+            ? {
+                id: managed.challengeId,
+                title: managed.title,
+                category: managed.category,
+                score: managed.score,
+                content: "",
+                hints: [],
+                requiresContainer: managed.requiresContainer ?? false,
+                attempts: 0,
+                attachments: [],
+                ...(managed.containerActive === true
+                  ? {
+                      container: {
+                        entry: "restored",
+                        closeTime: undefined,
+                      },
+                    }
+                  : {}),
+              }
+            : undefined,
+        solverId: managed.solverId,
+        rootDir: this.solverWorkspaces.resolveWorkspaceRootDir(managed.solverId),
+      })
+    }
+
+    if (!state.challengeProgress?.length) {
       return
     }
 
@@ -230,15 +282,40 @@ export class SolverHub {
         challengeId: progress.challengeId,
         solverId: progress.solverId,
         status: progress.status,
+        manualBlocked: Boolean(progress.manualBlocked),
         flagAccepted: Boolean(progress.flagAccepted),
         writeUpReady: Boolean(progress.writeUpReady),
         blockedReason: progress.blockedReason,
+      })
+
+      if (managedByChallengeId.has(progress.challengeId)) {
+        continue
+      }
+
+      if (this.challengeSolvers.has(progress.challengeId)) {
+        continue
+      }
+
+      this.challengeSolvers.set(progress.challengeId, {
+        challenge: {
+          id: progress.challengeId,
+          title: `challenge-${String(progress.challengeId)}`,
+          category: "unknown",
+          score: 0,
+          solvedCount: 0,
+        },
+        solverId: progress.solverId,
+        rootDir: this.solverWorkspaces.resolveWorkspaceRootDir(progress.solverId),
       })
     }
   }
 
   isChallengeSolved(challengeId: number) {
     return this.challengeProgress.get(challengeId)?.status === "solved"
+  }
+
+  isChallengeManuallyBlocked(challengeId: number) {
+    return this.challengeProgress.get(challengeId)?.manualBlocked === true
   }
 
   async listChallenges() {
@@ -295,10 +372,18 @@ export class SolverHub {
         throw new Error(`Platform plugin ${this.getPluginId()} does not support openContainer`)
       }
 
-      return plugin.openContainer({
+      const detail = await plugin.openContainer({
         ...context,
         challengeId,
       })
+
+      const binding = this.challengeSolvers.get(challengeId)
+      if (binding) {
+        binding.detail = detail
+        this.notifyStateChanged()
+      }
+
+      return detail
     })
   }
 
@@ -309,10 +394,18 @@ export class SolverHub {
         throw new Error(`Platform plugin ${this.getPluginId()} does not support destroyContainer`)
       }
 
-      return plugin.destroyContainer({
+      const detail = await plugin.destroyContainer({
         ...context,
         challengeId,
       })
+
+      const binding = this.challengeSolvers.get(challengeId)
+      if (binding) {
+        binding.detail = detail
+        this.notifyStateChanged()
+      }
+
+      return detail
     })
   }
 
@@ -324,6 +417,7 @@ export class SolverHub {
         title: binding.challenge.title,
         category: binding.challenge.category,
         requiresContainer: binding.detail?.requiresContainer,
+        containerActive: isContainerActive(binding.detail),
         score: binding.challenge.score,
         solvedCount: binding.challenge.solvedCount,
       })),
@@ -331,6 +425,7 @@ export class SolverHub {
         challengeId: state.challengeId,
         solverId: state.solverId,
         status: state.status,
+        manualBlocked: state.manualBlocked,
         flagAccepted: state.flagAccepted,
         writeUpReady: state.writeUpReady,
         blockedReason: state.blockedReason,
@@ -341,6 +436,15 @@ export class SolverHub {
   async ensureChallengeSolver(challenge: ChallengeSummary) {
     const existing = this.challengeSolvers.get(challenge.id)
     if (existing) {
+      existing.challenge = challenge
+      this.ensureChallengeProgressState(challenge.id, existing.solverId)
+
+      if (!existing.solver && !this.isChallengeSolved(challenge.id)) {
+        await this.tryHydrateSolverBinding(existing)
+      }
+
+      this.registerQueueSolver(existing)
+      this.notifyStateChanged()
       return existing
     }
 
@@ -368,11 +472,7 @@ export class SolverHub {
       await this.tryHydrateSolverBinding(binding)
     }
 
-    this.queue.registerSolver({
-      solverId,
-      solve: async (task, context) => this.solveWithBinding(binding, task, context),
-      abortActiveTask: () => binding.solver?.abort(),
-    })
+    this.registerQueueSolver(binding)
     this.notifyStateChanged()
 
     this.logger.info("Challenge solver created", {
@@ -405,8 +505,71 @@ export class SolverHub {
 
     const progress = this.ensureChallengeProgressState(challengeId, binding.solverId)
     progress.status = "idle"
+    progress.manualBlocked = false
     progress.flagAccepted = false
     progress.writeUpReady = false
+    progress.blockedReason = undefined
+
+    this.notifyStateChanged()
+    return true
+  }
+
+  blockChallengeSolver(challengeId: number) {
+    const binding = this.challengeSolvers.get(challengeId)
+    if (!binding) {
+      return false
+    }
+
+    const progress = this.ensureChallengeProgressState(challengeId, binding.solverId)
+    progress.manualBlocked = true
+    progress.status = "blocked"
+    progress.blockedReason = "Manually blocked by user"
+
+    this.notifyStateChanged()
+    return true
+  }
+
+  unblockChallengeSolver(challengeId: number) {
+    const binding = this.challengeSolvers.get(challengeId)
+    if (!binding) {
+      return false
+    }
+
+    const progress = this.ensureChallengeProgressState(challengeId, binding.solverId)
+    if (!progress.manualBlocked) {
+      return false
+    }
+
+    progress.manualBlocked = false
+    if (progress.flagAccepted) {
+      if (progress.writeUpReady) {
+        progress.status = "solved"
+        progress.blockedReason = undefined
+      } else {
+        progress.status = "writeup_required"
+        progress.blockedReason = "WriteUp.md is required before challenge completion"
+      }
+    } else {
+      progress.status = "idle"
+      progress.writeUpReady = false
+      progress.blockedReason = undefined
+    }
+
+    this.notifyStateChanged()
+    return true
+  }
+
+  markChallengeSolved(challengeId: number) {
+    const binding = this.challengeSolvers.get(challengeId)
+    if (!binding) {
+      return false
+    }
+
+    const progress = this.ensureChallengeProgressState(challengeId, binding.solverId)
+    progress.manualBlocked = false
+    progress.flagAccepted = true
+    progress.writeUpReady = true
+    progress.status = "solved"
     progress.blockedReason = undefined
 
     this.notifyStateChanged()
@@ -445,6 +608,39 @@ export class SolverHub {
     return true
   }
 
+  async refreshChallengeDetail(challengeId: number) {
+    const binding = this.challengeSolvers.get(challengeId)
+    if (!binding) {
+      return undefined
+    }
+
+    const detail = await this.getChallenge(challengeId)
+    const wasContainerActive = isContainerActive(binding.detail)
+    const isNowContainerActive = isContainerActive(detail)
+    binding.detail = detail
+    if (
+      binding.challenge.title !== detail.title ||
+      binding.challenge.category !== detail.category ||
+      binding.challenge.score !== detail.score ||
+      wasContainerActive !== isNowContainerActive
+    ) {
+      this.notifyStateChanged()
+    }
+
+    return detail
+  }
+
+  countActiveContainers() {
+    let count = 0
+    for (const binding of this.challengeSolvers.values()) {
+      if (isContainerActive(binding.detail)) {
+        count += 1
+      }
+    }
+
+    return count
+  }
+
   private async createSolver(solverId: string, options: SolverAgentOptions) {
     return this.solverWorkspaces.getOrCreateSolver(solverId, options)
   }
@@ -463,6 +659,14 @@ export class SolverHub {
 
     const progress = this.ensureChallengeProgressState(binding.challenge.id, binding.solverId)
     progress.blockedReason = undefined
+
+    if (progress.manualBlocked) {
+      progress.status = "blocked"
+      progress.blockedReason = "Manually blocked by user"
+      throw new SolverDispatchDeferredError(
+        `Challenge ${String(binding.challenge.id)} is manually blocked and cannot be dispatched`,
+      )
+    }
 
     const existingSolverModel = binding.solver?.state.model
     const preferredModel = existingSolverModel
@@ -536,6 +740,10 @@ export class SolverHub {
         existing.solverId = solverId
       }
 
+      if (existing.manualBlocked === undefined) {
+        existing.manualBlocked = false
+      }
+
       return existing
     }
 
@@ -543,6 +751,7 @@ export class SolverHub {
       challengeId,
       solverId,
       status: "idle",
+      manualBlocked: false,
       flagAccepted: false,
       writeUpReady: false,
     }
@@ -851,6 +1060,18 @@ export class SolverHub {
     return solver
   }
 
+  private registerQueueSolver(binding: ChallengeSolverBinding) {
+    if (this.queue.hasSolver(binding.solverId)) {
+      return
+    }
+
+    this.queue.registerSolver({
+      solverId: binding.solverId,
+      solve: async (task, context) => this.solveWithBinding(binding, task, context),
+      abortActiveTask: () => binding.solver?.abort(),
+    })
+  }
+
   private notifyStateChanged() {
     this.onStateChanged()
   }
@@ -921,25 +1142,30 @@ function sanitizeAttachmentFileName(name: string, attachmentIndex: number) {
   return safe.length > 0 ? safe : `attachment-${String(attachmentIndex)}`
 }
 
-function buildSolverTaskPrompt(challenge: ChallengeSummary, payload: unknown, template?: string) {
-  const payloadText = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2)
-
-  if (template?.trim()) {
-    return template
-      .replaceAll("{challenge.id}", String(challenge.id))
-      .replaceAll("{challenge.title}", challenge.title)
-      .replaceAll("{challenge.category}", challenge.category)
-      .replaceAll("{challenge.score}", String(challenge.score))
-      .replaceAll("{challenge.solvedCount}", String(challenge.solvedCount))
-      .replaceAll("{payload}", payloadText)
+function isContainerActive(detail: ChallengeDetail | undefined, now = Date.now()) {
+  if (!detail?.requiresContainer || !detail.container?.entry) {
+    return false
   }
 
-  return [
-    `You are assigned to challenge [${challenge.id}] ${challenge.title}.`,
-    `Category: ${challenge.category}, score: ${challenge.score}, solved: ${challenge.solvedCount}.`,
-    "Use platform tools carefully and avoid unnecessary requests.",
-    `Task payload:\n${payloadText}`,
-  ].join("\n")
+  const { closeTime } = detail.container
+  if (typeof closeTime !== "number" || !Number.isFinite(closeTime)) {
+    return true
+  }
+
+  return closeTime > now
+}
+
+function buildSolverTaskPrompt(challenge: ChallengeSummary, payload: unknown, template?: string) {
+  const payloadText = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2)
+  const templateText = template?.trim() || DEFAULT_SOLVER_PROMPT_TEMPLATE
+
+  return templateText
+    .replaceAll("{challenge.id}", String(challenge.id))
+    .replaceAll("{challenge.title}", challenge.title)
+    .replaceAll("{challenge.category}", challenge.category)
+    .replaceAll("{challenge.score}", String(challenge.score))
+    .replaceAll("{challenge.solvedCount}", String(challenge.solvedCount))
+    .replaceAll("{payload}", payloadText)
 }
 
 function buildWriteUpPrompt(challenge: ChallengeSummary) {

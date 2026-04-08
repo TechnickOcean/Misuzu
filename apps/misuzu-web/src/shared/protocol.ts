@@ -12,7 +12,6 @@ export interface WorkspaceRegistryEntry {
   runtime?: {
     initialized: boolean
     pluginId?: string
-    autoOrchestrate: boolean
   }
 }
 
@@ -87,7 +86,6 @@ export interface RuntimeCreateRequest {
     maxConcurrentContainers: number
   }
   modelPool: ModelPoolInput[]
-  autoOrchestrate?: boolean
   createEnvironmentAgent?: boolean
 }
 
@@ -103,12 +101,19 @@ export interface SolverCreateRequest {
   systemPrompt?: string
 }
 
+export interface WorkspaceDeleteRequest {
+  deleteFiles?: boolean
+}
+
 export interface ChallengeSummaryView {
   challengeId: number
   solverId: string
   title: string
   category: string
   requiresContainer?: boolean
+  manuallyBlocked?: boolean
+  hasWriteup?: boolean
+  canMarkSolved?: boolean
   score: number
   solvedCount: number
   status: "active" | "queued" | "solved" | "blocked" | "idle" | "model_unassigned"
@@ -143,7 +148,6 @@ export interface RuntimeWorkspaceSnapshot {
   }>
   environmentAgentReady: boolean
   environmentAgentAdapted: boolean
-  autoOrchestrate: boolean
 }
 
 export interface SolverWorkspaceSnapshot {
@@ -225,6 +229,19 @@ export interface RuntimeResetSolverRequest {
   challengeId: number
 }
 
+export interface RuntimeBlockSolverRequest {
+  challengeId: number
+}
+
+export interface RuntimeUnblockSolverRequest {
+  challengeId: number
+}
+
+export interface RuntimeMarkSolvedRequest {
+  challengeId: number
+  writeupMarkdown?: string
+}
+
 export interface RuntimePlatformConfig {
   pluginId: string
   pluginConfig: NonNullable<RuntimeCreateRequest["pluginConfig"]>
@@ -236,15 +253,32 @@ export interface RuntimePlatformConfig {
 }
 
 export interface RuntimeConfigUpdateRequest {
-  autoOrchestrate?: boolean
   platformConfig?: RuntimePlatformConfig
 }
 
 export interface RuntimeWorkspaceSettingsSnapshot {
+  defaultSolverPromptTemplate: string
   providerConfig: ProviderConfigEntry[]
-  autoOrchestrate: boolean
   platformConfig?: RuntimePlatformConfig
   providerCatalog: ProviderCatalogItem[]
+}
+
+export interface RuntimeAgentWriteupResponse {
+  workspaceId: string
+  agentId: string
+  challengeId?: number
+  challengeTitle?: string
+  exists: boolean
+  markdown: string
+}
+
+export interface RuntimeWriteupExportResponse {
+  workspaceId: string
+  fileName: string
+  markdown: string
+  generatedAt: string
+  totalChallenges: number
+  includedWriteups: number
 }
 
 export interface WsMessage<TType extends string = string, TPayload = unknown> {
