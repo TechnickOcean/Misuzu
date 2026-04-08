@@ -71,7 +71,7 @@ If you're contributing to Misuzu:
 **Before Contributing:**
 
 - Review our [Contributing Guidelines](./CONTRIBUTING.md)
-- Check for known security issues in [GitHub Security Advisories](https://github.com/author/misuzu/security)
+- Check for known security issues in [GitHub Security Advisories](https://github.com/TechnickOcean/Misuzu/security)
 
 **When Writing Code:**
 
@@ -195,7 +195,7 @@ Misuzu aims to comply with:
 
 For past security issues and their fixes:
 
-- Check [GitHub Security Advisories](https://github.com/author/misuzu/security/advisories)
+- Check [GitHub Security Advisories](https://github.com/TechnickOcean/Misuzu/security/advisories)
 - Review [CHANGELOG.md](./CHANGELOG.md)
 - Subscribe to [GitHub security alerts](https://github.blog/changelog/2021-04-13-security-and-analysis-settings-for-repositories-owned-by-organizations/)
 
@@ -268,7 +268,7 @@ For past security issues and their fixes:
 **贡献前：**
 
 - 审阅我们的 [贡献指南](./CONTRIBUTING.md)
-- 检查 [GitHub 安全公告](https://github.com/author/misuzu/security) 中的已知安全问题
+- 检查 [GitHub 安全公告](https://github.com/TechnickOcean/Misuzu/security) 中的已知安全问题
 
 **编写代码时：**
 
@@ -392,6 +392,6 @@ Misuzu 目标符合：
 
 了解过去的安全问题及其修复：
 
-- 检查 [GitHub 安全公告](https://github.com/author/misuzu/security/advisories)
+- 检查 [GitHub 安全公告](https://github.com/TechnickOcean/Misuzu/security/advisories)
 - 审阅 [CHANGELOG.md](./CHANGELOG.md)
 - 订阅 [GitHub 安全警报](https://github.blog/changelog/2021-04-13-security-and-analysis-settings-for-repositories-owned-by-organizations/)

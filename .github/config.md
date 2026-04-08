@@ -7,7 +7,7 @@ This file documents recommended GitHub repository settings for Misuzu.
 ### General
 
 - **Repository name**: misuzu
-- **Description**: A powerful, modern monorepo powered by Vite+ for building scalable TypeScript applications
+- **Description**: Agentic CTF workspace system with runtime orchestration and web control plane
 - **Visibility**: Public
 - **Default branch**: main
 - **Require status checks to pass**: Yes
@@ -206,7 +206,7 @@ REGISTRY_URL          # npm registry URL
 For README.md:
 
 ```markdown
-[![CI/CD](https://github.com/author/misuzu/actions/workflows/ci.yml/badge.svg)](https://github.com/author/misuzu/actions)
+[![CI/CD](https://github.com/TechnickOcean/Misuzu/actions/workflows/ci.yml/badge.svg)](https://github.com/TechnickOcean/Misuzu/actions)
 [![npm version](https://badge.fury.io/js/misuzu-core.svg)](https://badge.fury.io/js/misuzu-core)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 ```

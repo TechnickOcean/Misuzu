@@ -26,5 +26,5 @@ assignees: ""
 
 <!--
 💡 Tip: For discussions, consider using GitHub Discussions instead of Issues:
-https://github.com/author/misuzu/discussions
+https://github.com/TechnickOcean/Misuzu/discussions
 -->

@@ -18,7 +18,7 @@ By participating in this project, you agree to abide by our [Code of Conduct](./
 
 **There are many ways you can contribute to Misuzu:**
 
-- 🐛 **Report Bugs** - Found a bug? Let us know on [GitHub Issues](https://github.com/author/misuzu/issues)
+- 🐛 **Report Bugs** - Found a bug? Let us know on [GitHub Issues](https://github.com/TechnickOcean/Misuzu/issues)
 - ✨ **Suggest Features** - Have an idea for a new feature? Share it with us
 - 📚 **Improve Documentation** - Help us improve our docs and examples
 - 🔧 **Fix Bugs** - Submit a pull request with a bug fix
@@ -44,11 +44,11 @@ By participating in this project, you agree to abide by our [Code of Conduct](./
    ```
 3. **Add upstream remote** to stay in sync:
    ```bash
-   git remote add upstream https://github.com/author/misuzu.git
+   git remote add upstream https://github.com/TechnickOcean/Misuzu.git
    ```
 4. **Install dependencies**:
    ```bash
-   pnpm install
+   vp install
    ```
 5. **Create a feature branch**:
    ```bash
@@ -71,11 +71,13 @@ vp run ready
 #### During Development
 
 ```bash
-# Run development server (for web app)
-pnpm run dev
+# Run web app in full-stack dev mode
+cd apps/misuzu-web
+vp run dev:full
 
-# Run tests in watch mode
-pnpm run test -- --watch
+# Run tests in watch mode from root
+cd ../..
+vp run test -r -- --watch
 
 # Run specific package tests
 cd packages/misuzu-core
@@ -332,13 +334,13 @@ vp pack --watch
 
 **Q: Changes not reflected during development**
 
-- Clear node_modules: `rm -rf node_modules && pnpm install`
-- Restart dev server: Ctrl+C and `pnpm run dev`
+- Reinstall dependencies: `vp install`
+- Restart dev server: Ctrl+C and `cd apps/misuzu-web && vp run dev:full`
 
 ### Getting Help
 
-- **Questions?** Ask in [GitHub Discussions](https://github.com/author/misuzu/discussions)
-- **Found a bug?** Report it on [GitHub Issues](https://github.com/author/misuzu/issues)
+- **Questions?** Ask in [GitHub Discussions](https://github.com/TechnickOcean/Misuzu/discussions)
+- **Found a bug?** Report it on [GitHub Issues](https://github.com/TechnickOcean/Misuzu/issues)
 - **Security issue?** See [SECURITY.md](./SECURITY.md)
 - **Chat with us?** Join our community Discord (if available)
 
@@ -368,7 +370,7 @@ Thank you for contributing to Misuzu! 🚀
 
 **有很多方式可以为 Misuzu 做出贡献：**
 
-- 🐛 **报告 Bug** - 发现了 bug？在 [GitHub Issues](https://github.com/author/misuzu/issues) 上告诉我们
+- 🐛 **报告 Bug** - 发现了 bug？在 [GitHub Issues](https://github.com/TechnickOcean/Misuzu/issues) 上告诉我们
 - ✨ **建议功能** - 有新功能的想法？与我们分享
 - 📚 **改进文档** - 帮助我们改进文档和示例
 - 🔧 **修复 Bug** - 提交带有 bug 修复的拉取请求
@@ -394,11 +396,11 @@ Thank you for contributing to Misuzu! 🚀
    ```
 3. **添加 upstream 远程** 保持同步：
    ```bash
-   git remote add upstream https://github.com/author/misuzu.git
+   git remote add upstream https://github.com/TechnickOcean/Misuzu.git
    ```
 4. **安装依赖**：
    ```bash
-   pnpm install
+   vp install
    ```
 5. **创建功能分支**：
    ```bash
@@ -421,11 +423,13 @@ vp run ready
 #### 开发期间
 
 ```bash
-# 运行开发服务器（用于网页应用）
-pnpm run dev
+# 运行 web 全栈开发模式
+cd apps/misuzu-web
+vp run dev:full
 
-# 在监听模式下运行测试
-pnpm run test -- --watch
+# 在根目录监听测试
+cd ../..
+vp run test -r -- --watch
 
 # 运行特定包的测试
 cd packages/misuzu-core
@@ -682,13 +686,13 @@ vp pack --watch
 
 **Q：开发期间更改未反映**
 
-- 清除 node_modules: `rm -rf node_modules && pnpm install`
-- 重启开发服务器：Ctrl+C 和 `pnpm run dev`
+- 重新安装依赖：`vp install`
+- 重启开发服务器：Ctrl+C 后执行 `cd apps/misuzu-web && vp run dev:full`
 
 ### 获取帮助
 
-- **有问题？** 在 [GitHub Discussions](https://github.com/author/misuzu/discussions) 中提问
-- **发现 bug？** 在 [GitHub Issues](https://github.com/author/misuzu/issues) 上报告
+- **有问题？** 在 [GitHub Discussions](https://github.com/TechnickOcean/Misuzu/discussions) 中提问
+- **发现 bug？** 在 [GitHub Issues](https://github.com/TechnickOcean/Misuzu/issues) 上报告
 - **安全问题？** 请参见 [SECURITY.md](./SECURITY.md)
 - **与我们聊天？** 加入我们的社区 Discord（如有）
 

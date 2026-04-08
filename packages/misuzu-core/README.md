@@ -1,8 +1,8 @@
 # misuzu-core
 
-> The core TypeScript library for the Misuzu ecosystem.
+> Core library for Misuzu agent workspaces: standalone solver mode and orchestrated CTF runtime mode.
 
-[English](#english) | [中文](#chinese)
+[English](#english) | [中文](#中文)
 
 ---
 
@@ -10,296 +10,233 @@
 
 ### Overview
 
-**misuzu-core** is the foundational library for the Misuzu ecosystem. It provides essential utilities and functionality for building TypeScript applications.
+`misuzu-core` provides the domain engine behind Misuzu:
 
-### Features
+- Agent wrappers (`FeaturedAgent`, `SolverAgent`, `EnvironmentAgent`)
+- Workspace primitives (`SolverWorkspace`, `CTFRuntimeWorkspace`)
+- Runtime orchestration (queueing, model-pool assignment, challenge lifecycle)
+- Persistence adapters and typed snapshots
+- Built-in plugin catalog loading (`gzctf` currently)
 
-- 📦 **Modular Design** - Well-organized, focused modules
-- 🧪 **Type-Safe** - Strict TypeScript with full type checking
-- ⚡ **Tree-Shakeable** - Only import what you need
-- 🎯 **Zero Dependencies** - Minimal external dependencies
-- 📚 **Well Documented** - Clear examples and API documentation
-- ✅ **Well Tested** - Comprehensive test coverage
+### Main Exports
 
-### Installation
-
-```bash
-npm install misuzu-core
-# or
-pnpm add misuzu-core
-# or
-yarn add misuzu-core
+```ts
+import {
+  createSolverWorkspace,
+  createCTFRuntimeWorkspace,
+  DEFAULT_SOLVER_PROMPT_TEMPLATE,
+  JsonFilePersistenceAdapter,
+  loadBuiltinPluginCatalog,
+} from "misuzu-core"
 ```
 
-### Quick Start
+### Workspace Modes
 
-```typescript
-import {} from /* exports */ "misuzu-core"
+#### 1) Solver Workspace
 
-// Use exported APIs
+Use this when you want one solver agent session.
+
+```ts
+import { createSolverWorkspace } from "misuzu-core"
+
+const workspace = await createSolverWorkspace({
+  rootDir: "/absolute/path/to/solver-workspace",
+})
+
+workspace.bootstrap()
+
+// Optionally create main agent if provider/model are configured.
+const model = workspace.getModel("openai", "gpt-4.1")
+if (model && !workspace.mainAgent) {
+  await workspace.createMainAgent({
+    initialState: {
+      model,
+      systemPrompt: "Solve the challenge and keep notes in WriteUp.md",
+    },
+  })
+}
 ```
 
-### Available Modules
+#### 2) CTF Runtime Workspace
 
-The core library is organized into logical modules. Each module focuses on a specific concern:
+Use this when you need multi-challenge orchestration and queue control.
 
-```typescript
-// Example: Import from specific modules
-import { feature1, feature2 } from "misuzu-core"
+```ts
+import { createCTFRuntimeWorkspace } from "misuzu-core"
+
+const runtimeWorkspace = await createCTFRuntimeWorkspace({
+  rootDir: "/absolute/path/to/runtime-workspace",
+})
+
+runtimeWorkspace.bootstrapProviders()
+
+await runtimeWorkspace.setModelPoolItems([
+  { provider: "openai", modelId: "gpt-4.1", maxConcurrency: 2 },
+])
+
+await runtimeWorkspace.initializeRuntime({
+  pluginId: "gzctf",
+  pluginConfig: {
+    baseUrl: "https://example-ctf.com",
+    contest: { mode: "id", value: 1 },
+    auth: { mode: "manual" },
+    maxConcurrentContainers: 2,
+  },
+  startPaused: true,
+})
+
+await runtimeWorkspace.syncChallengesOnce()
 ```
 
-### API Documentation
+### Built-in Plugin Catalog
 
-For detailed API documentation, see the [docs](../../docs) folder.
+`misuzu-core` resolves plugin metadata from:
+
+- `packages/misuzu-core/plugins/catalog.json`
+
+Current built-in plugin:
+
+- `gzctf`: adapter for GZCTF-like APIs (contest/challenge list, flag submit, notice polling, container open/destroy)
+
+### Persistence and State
+
+Runtime and agent state are persisted inside workspace directories under `.misuzu/`.
+
+Important persisted artifacts include:
+
+- provider config (`providers.json`)
+- runtime/platform config (`platform.json`)
+- runtime queue/scheduler snapshots
+- solver messages and `WriteUp.md` files
 
 ### Development
 
-#### Setup
+From repository root:
+
+```bash
+vp run test -- packages/misuzu-core
+vp run build -- packages/misuzu-core
+```
+
+From package directory:
 
 ```bash
 cd packages/misuzu-core
-pnpm install
-```
-
-#### Commands
-
-```bash
-# Build the library
-vp pack
-
-# Build with watch mode
-vp pack --watch
-
-# Run tests
 vp test
-
-# Run tests in watch mode
-vp test --watch
-
-# Generate coverage report
-vp test --coverage
-
-# Format and lint code
+vp pack
 vp check
-vp check --fix
 ```
 
-#### File Structure
+### Notes
 
-```
-src/
-├── index.ts           # Main entry point
-├── [feature]/        # Feature modules
-│   ├── index.ts      # Module exports
-│   ├── types.ts      # Type definitions
-│   └── *.test.ts     # Tests
-└── utils/            # Shared utilities
-```
-
-### Contributing
-
-We welcome contributions! Please see [CONTRIBUTING.md](../../CONTRIBUTING.md) for details.
-
-**Development Workflow:**
-
-1. Create a feature branch
-2. Make your changes
-3. Run `vp check --fix` to format code
-4. Run `vp test` to ensure tests pass
-5. Commit with conventional commit messages
-6. Push and open a pull request
-
-### Testing
-
-We use Vitest for testing. Tests should follow these patterns:
-
-```typescript
-import { describe, expect, test } from "vite-plus/test"
-import { myFunction } from "./my-module.ts"
-
-describe("myFunction", () => {
-  test("does something", () => {
-    const result = myFunction("input")
-    expect(result).toBe("expected")
-  })
-
-  test("throws error when invalid", () => {
-    expect(() => {
-      myFunction(null)
-    }).toThrow("Invalid input")
-  })
-})
-```
-
-### Build Output
-
-The library is built with tsdown and produces:
-
-- `dist/index.mjs` - ES module output
-- `dist/index.d.ts` - TypeScript type definitions
-
-### TypeScript Support
-
-- **Minimum TypeScript**: 5.0
-- **Strict Mode**: Enabled by default
-- **Full Type Safety**: No implicit `any`
+- API is evolving with active refactors; pin to commit/tag in production.
+- Some package metadata in `package.json` is still placeholder and will be finalized later.
 
 ### License
 
-MIT - See [LICENSE](../../LICENSE)
-
-### Support
-
-- **Issues**: Report bugs on [GitHub Issues](https://github.com/author/misuzu/issues)
-- **Discussions**: Join conversations on [GitHub Discussions](https://github.com/author/misuzu/discussions)
-- **Documentation**: Check [README.md](../../README.md) for more info
+GPL-3.0. See `../../LICENSE`.
 
 ---
 
-## Chinese
+## 中文
 
 ### 概述
 
-**misuzu-core** 是 Misuzu 生态系统的基础库。它为构建 TypeScript 应用程序提供必要的工具和功能。
+`misuzu-core` 是 Misuzu 的核心引擎，提供：
 
-### 特性
+- Agent 封装（`FeaturedAgent`、`SolverAgent`、`EnvironmentAgent`）
+- Workspace 抽象（`SolverWorkspace`、`CTFRuntimeWorkspace`）
+- Runtime 编排（队列调度、模型池分配、挑战生命周期）
+- 持久化与状态快照能力
+- 内置平台插件目录加载（当前内置 `gzctf`）
 
-- 📦 **模块化设计** - 组织良好的聚焦模块
-- 🧪 **类型安全** - 严格的 TypeScript 和完整的类型检查
-- ⚡ **可树摇** - 仅导入所需内容
-- 🎯 **零依赖** - 最小的外部依赖
-- 📚 **文档齐全** - 清晰的示例和 API 文档
-- ✅ **充分测试** - 全面的测试覆盖
+### 主要导出
 
-### 安装
+```ts
+import {
+  createSolverWorkspace,
+  createCTFRuntimeWorkspace,
+  DEFAULT_SOLVER_PROMPT_TEMPLATE,
+  JsonFilePersistenceAdapter,
+  loadBuiltinPluginCatalog,
+} from "misuzu-core"
+```
+
+### 两种 Workspace 模式
+
+#### 1) Solver Workspace
+
+适用于单个 solver agent 会话。
+
+```ts
+import { createSolverWorkspace } from "misuzu-core"
+
+const workspace = await createSolverWorkspace({
+  rootDir: "/absolute/path/to/solver-workspace",
+})
+
+workspace.bootstrap()
+```
+
+#### 2) CTF Runtime Workspace
+
+适用于多题并行与统一编排。
+
+```ts
+import { createCTFRuntimeWorkspace } from "misuzu-core"
+
+const runtimeWorkspace = await createCTFRuntimeWorkspace({
+  rootDir: "/absolute/path/to/runtime-workspace",
+})
+
+runtimeWorkspace.bootstrapProviders()
+await runtimeWorkspace.setModelPoolItems([
+  { provider: "openai", modelId: "gpt-4.1", maxConcurrency: 2 },
+])
+```
+
+### 内置插件目录
+
+插件元数据位于：
+
+- `packages/misuzu-core/plugins/catalog.json`
+
+当前内置插件：
+
+- `gzctf`：适配 GZCTF 风格接口（题目同步、提交 flag、公告轮询、容器开关等）
+
+### 持久化说明
+
+工作区下 `.misuzu/` 目录会保存运行时状态，例如：
+
+- `providers.json`
+- `platform.json`
+- 队列与调度快照
+- solver 会话消息与 `WriteUp.md`
+
+### 开发命令
+
+仓库根目录：
 
 ```bash
-npm install misuzu-core
-# 或
-pnpm add misuzu-core
-# 或
-yarn add misuzu-core
+vp run test -- packages/misuzu-core
+vp run build -- packages/misuzu-core
 ```
 
-### 快速开始
-
-```typescript
-import {} from /* exports */ "misuzu-core"
-
-// 使用导出的 API
-```
-
-### 可用模块
-
-核心库被组织成逻辑模块。每个模块都关注特定的关注点：
-
-```typescript
-// 示例：从特定模块导入
-import { feature1, feature2 } from "misuzu-core"
-```
-
-### API 文档
-
-详细的 API 文档，请参见 [文档](../../docs) 文件夹。
-
-### 开发
-
-#### 设置
+包目录：
 
 ```bash
 cd packages/misuzu-core
-pnpm install
-```
-
-#### 命令
-
-```bash
-# 构建库
-vp pack
-
-# 在监听模式下构建
-vp pack --watch
-
-# 运行测试
 vp test
-
-# 在监听模式下运行测试
-vp test --watch
-
-# 生成覆盖率报告
-vp test --coverage
-
-# 格式化和 lint 代码
+vp pack
 vp check
-vp check --fix
 ```
 
-#### 文件结构
+### 备注
 
-```
-src/
-├── index.ts           # 主入口点
-├── [feature]/        # 功能模块
-│   ├── index.ts      # 模块导出
-│   ├── types.ts      # 类型定义
-│   └── *.test.ts     # 测试
-└── utils/            # 共享工具
-```
-
-### 贡献
-
-我们欢迎贡献！请参见 [CONTRIBUTING.md](../../CONTRIBUTING.md) 了解详细信息。
-
-**开发工作流程：**
-
-1. 创建功能分支
-2. 进行更改
-3. 运行 `vp check --fix` 格式化代码
-4. 运行 `vp test` 确保测试通过
-5. 使用 conventional commit 消息提交
-6. 推送并打开拉取请求
-
-### 测试
-
-我们使用 Vitest 进行测试。测试应遵循以下模式：
-
-```typescript
-import { describe, expect, test } from "vite-plus/test"
-import { myFunction } from "./my-module.ts"
-
-describe("myFunction", () => {
-  test("does something", () => {
-    const result = myFunction("input")
-    expect(result).toBe("expected")
-  })
-
-  test("throws error when invalid", () => {
-    expect(() => {
-      myFunction(null)
-    }).toThrow("Invalid input")
-  })
-})
-```
-
-### 构建输出
-
-该库使用 tsdown 构建并生成：
-
-- `dist/index.mjs` - ES 模块输出
-- `dist/index.d.ts` - TypeScript 类型定义
-
-### TypeScript 支持
-
-- **最小 TypeScript 版本**：5.0
-- **严格模式**：默认启用
-- **完整类型安全**：无隐式 `any`
+- 当前 API 仍在快速迭代，生产场景建议固定 commit/tag。
+- `package.json` 中仍有部分占位信息，后续会清理。
 
 ### 许可证
 
-MIT - 请参见 [LICENSE](../../LICENSE)
-
-### 支持
-
-- **Issue 报告**：在 [GitHub Issues](https://github.com/author/misuzu/issues) 上报告 bug
-- **讨论**：在 [GitHub Discussions](https://github.com/author/misuzu/discussions) 上加入对话
-- **文档**：检查 [README.md](../../README.md) 获取更多信息
+GPL-3.0，见 `../../LICENSE`。
