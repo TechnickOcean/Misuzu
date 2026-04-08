@@ -18,7 +18,6 @@ import type { RuntimeInitOptions } from "./runtime.ts"
 import {
   SolverDispatchDeferredError,
   type SolverTask,
-  type SolverTaskDispatchPreparation,
   type SolverTaskResult,
   QueueService,
 } from "../scheduler/queue.ts"
@@ -32,6 +31,10 @@ import type {
   PersistedCTFRuntimePlatformState,
   PersistedCTFRuntimeSolverHubState,
 } from "../../state.ts"
+
+interface SolverDispatchContext {
+  modelLease: ReturnType<SolverHub["acquireModelLeaseForSolver"]>
+}
 
 export interface ChallengeSolverBinding {
   challenge: ChallengeSummary
@@ -72,10 +75,6 @@ export interface SolverHubDeps {
   queue: QueueService
   solverWorkspaces: SolverWorkspaceService
   modelPool: WorkspaceModelPool
-}
-
-interface SolverDispatchContext {
-  modelLease: ReturnType<SolverHub["acquireModelLeaseForSolver"]>
 }
 
 export class SolverHub {
@@ -371,7 +370,6 @@ export class SolverHub {
 
     this.queue.registerSolver({
       solverId,
-      prepareTask: () => this.prepareSolverTaskDispatch(binding),
       solve: async (task, context) => this.solveWithBinding(binding, task, context),
       abortActiveTask: () => binding.solver?.abort(),
     })
@@ -456,6 +454,13 @@ export class SolverHub {
     task: SolverTask,
     context?: unknown,
   ) {
+    const challengeId = resolveTaskChallengeId(task.payload)
+    if (challengeId !== binding.challenge.id) {
+      throw new Error(
+        `Dispatch mismatch for task ${task.taskId}: expected challenge ${String(binding.challenge.id)}, got ${String(challengeId)}`,
+      )
+    }
+
     const progress = this.ensureChallengeProgressState(binding.challenge.id, binding.solverId)
     progress.blockedReason = undefined
 
@@ -607,25 +612,6 @@ export class SolverHub {
 
       // Allow restored/unactivated solvers to migrate onto current pool configuration.
       return this.modelPool.acquire()
-    }
-  }
-
-  private prepareSolverTaskDispatch(
-    binding: ChallengeSolverBinding,
-  ): SolverTaskDispatchPreparation {
-    const existingSolverModel = binding.solver?.state.model
-    const preferredModel = existingSolverModel
-      ? {
-          provider: existingSolverModel.provider,
-          modelId: existingSolverModel.id,
-        }
-      : undefined
-
-    return {
-      status: "ready",
-      context: {
-        modelLease: this.tryAcquireDispatchModelLease(binding.solverId, preferredModel),
-      } satisfies SolverDispatchContext,
     }
   }
 
@@ -868,6 +854,15 @@ export class SolverHub {
   private notifyStateChanged() {
     this.onStateChanged()
   }
+}
+
+function resolveTaskChallengeId(payload: unknown) {
+  if (!payload || typeof payload !== "object") {
+    return undefined
+  }
+
+  const challengeId = (payload as { challenge?: unknown }).challenge
+  return typeof challengeId === "number" && Number.isFinite(challengeId) ? challengeId : undefined
 }
 
 function buildChallengeSolverPrompt(

@@ -88,28 +88,51 @@ const {
         <SidebarGroupLabel>Agents</SidebarGroupLabel>
         <SidebarGroupContent class="h-full flex flex-col">
           <ScrollArea class="flex-1">
-            <SidebarMenu v-if="sidebarAgents.length > 0">
+            <TransitionGroup
+              v-if="sidebarAgents.length > 0"
+              name="agent-list"
+              tag="ul"
+              class="flex w-full min-w-0 flex-col gap-1"
+            >
               <SidebarMenuItem v-for="agent in sidebarAgents" :key="agent.id">
                 <SidebarMenuButton
                   :is-active="selectedAgentId === agent.id && !isOverviewRoute"
                   @click="openAgent(agent.id)"
                 >
-                  <ShieldCheckIcon v-if="agent.role === 'environment'" />
-                  <BotIcon v-else />
-                  <span>{{ agent.name }}</span>
+                  <div class="relative">
+                    <ShieldCheckIcon v-if="agent.role === 'environment'" />
+                    <BotIcon v-else />
+                    <span
+                      v-if="agent.status === 'active'"
+                      class="absolute -bottom-0.5 -right-0.5 flex size-2.5"
+                    >
+                      <span
+                        class="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75"
+                      ></span>
+                      <span class="relative inline-flex size-2.5 rounded-full bg-green-500"></span>
+                    </span>
+                  </div>
+                  <span class="truncate">{{ agent.name }}</span>
                   <Badge
                     v-if="agent.role === 'solver' && typeof agent.rank === 'number'"
                     variant="outline"
-                    class="ml-auto"
+                    class="ml-auto shrink-0"
                   >
-                    Rank {{ Math.round(agent.rank) }}
+                    R{{ Math.round(agent.rank) }}
                   </Badge>
-                  <Badge :variant="statusBadgeVariant(agent.status)">
+                  <Badge
+                    v-if="agent.status !== 'active'"
+                    :variant="statusBadgeVariant(agent.status)"
+                    :class="[
+                      'shrink-0',
+                      !(agent.role === 'solver' && typeof agent.rank === 'number') && 'ml-auto',
+                    ]"
+                  >
                     {{ statusLabel(agent.status) }}
                   </Badge>
                 </SidebarMenuButton>
               </SidebarMenuItem>
-            </SidebarMenu>
+            </TransitionGroup>
             <div v-else class="p-4">
               <EmptyPlaceholder
                 title="No agents active"
@@ -245,27 +268,52 @@ const {
       </div>
     </header>
 
-    <section class="px-3 py-3 md:px-4" :class="contentClass">
-      <p v-if="runtimeActionNotice" class="mb-2 text-sm text-muted-foreground">
-        {{ runtimeActionNotice }}
-      </p>
-      <p v-if="runtimeActionError" class="mb-2 text-sm text-destructive">
-        {{ runtimeActionError }}
-      </p>
-      <div
-        v-if="summary?.setupPhase === 'env_agent_ready_for_settings'"
-        class="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 bg-card p-3"
+    <section
+      :class="[
+        contentClass,
+        isOverviewRoute || isSettingsRoute ? 'px-3 py-3 md:px-4' : 'px-0 py-0 md:px-0',
+      ]"
+    >
+      <Transition
+        enter-active-class="transition duration-200 ease-out"
+        enter-from-class="translate-y-2 opacity-0"
+        enter-to-class="translate-y-0 opacity-100"
+        leave-active-class="transition duration-150 ease-in"
+        leave-from-class="translate-y-0 opacity-100"
+        leave-to-class="translate-y-2 opacity-0"
       >
-        <p class="text-sm text-muted-foreground">
-          Environment Agent adaptation appears complete. Open Settings to finalize plugin config and
-          unlock the workspace.
-        </p>
-        <SidebarMenuButton class="w-fit" @click="openSettings">
-          <Settings2Icon />
-          <span>Open Settings</span>
-        </SidebarMenuButton>
-      </div>
+        <div
+          v-if="runtimeActionNotice || runtimeActionError"
+          class="fixed right-4 top-16 z-50 max-w-sm rounded-md border px-3 py-2 text-sm shadow-lg backdrop-blur"
+          :class="
+            runtimeActionError
+              ? 'border-destructive/40 bg-destructive/10 text-destructive'
+              : 'border-border/80 bg-background/95 text-foreground'
+          "
+        >
+          {{ runtimeActionError || runtimeActionNotice }}
+        </div>
+      </Transition>
       <RouterView />
     </section>
   </AppLayout>
 </template>
+
+<style scoped>
+.agent-list-move,
+.agent-list-enter-active,
+.agent-list-leave-active {
+  transition: all 220ms ease;
+}
+
+.agent-list-enter-from,
+.agent-list-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.agent-list-leave-active {
+  position: absolute;
+  width: 100%;
+}
+</style>

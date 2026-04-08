@@ -11,6 +11,7 @@ import {
   ComboboxItem,
   ComboboxItemIndicator,
   ComboboxList,
+  ComboboxTrigger,
   ComboboxViewport,
 } from "@/components/ui/combobox"
 import { Input } from "@/components/ui/input"
@@ -123,10 +124,12 @@ function setAuthMode(value: string) {
       @update:open="(value) => (pluginComboboxOpen = Boolean(value))"
     >
       <ComboboxAnchor class="w-full">
-        <Button variant="outline" class="w-full justify-between font-normal" type="button">
-          <span class="truncate">{{ selectedPluginLabel }}</span>
-          <ChevronsUpDownIcon class="size-4 shrink-0 opacity-50" />
-        </Button>
+        <ComboboxTrigger as-child>
+          <Button variant="outline" class="w-full justify-between font-normal" type="button">
+            <span class="truncate">{{ selectedPluginLabel }}</span>
+            <ChevronsUpDownIcon class="size-4 shrink-0 opacity-50" />
+          </Button>
+        </ComboboxTrigger>
       </ComboboxAnchor>
 
       <ComboboxList class="w-(--reka-popper-anchor-width) p-0">
@@ -177,6 +180,19 @@ function setAuthMode(value: string) {
       <div class="grid gap-2 md:col-span-2">
         <label class="text-sm font-medium">Base URL</label>
         <Input v-model="pluginDraft.baseUrl" placeholder="https://ctf.example.com" />
+      </div>
+
+      <div class="grid gap-2 md:col-span-2">
+        <label class="text-sm font-medium">Max Concurrent Container Challenges</label>
+        <Input
+          v-model="pluginDraft.maxConcurrentContainers"
+          type="number"
+          min="1"
+          placeholder="3"
+        />
+        <p class="text-xs text-muted-foreground">
+          Maximum number of challenges requiring containers to be executed simultaneously.
+        </p>
       </div>
 
       <div class="grid gap-2">

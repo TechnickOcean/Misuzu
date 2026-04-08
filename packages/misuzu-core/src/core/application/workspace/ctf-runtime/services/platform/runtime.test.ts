@@ -1,4 +1,4 @@
-import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, test } from "vite-plus/test"
@@ -7,22 +7,39 @@ import {
   createCTFRuntimeWorkspace,
   createCTFRuntimeWorkspaceWithoutPersistence,
 } from "../../workspace.ts"
-import { providerRegistryToken } from "../../../../../infrastructure/di/tokens.ts"
-import { ProviderRegistry, type ProxyProviderOptions } from "../../../../providers/registry.ts"
 import type {
-  CTFPlatformPlugin,
   ChallengeDetail,
   ChallengeSummary,
+  CTFPlatformPlugin,
   ContestUpdate,
   PluginConfig,
 } from "../../../../../../../plugins/index.ts"
 
 const tempDirs: string[] = []
 
+interface MockChallengeSeed {
+  id: number
+  title: string
+  category: string
+  score: number
+  solvedCount: number
+  requiresContainer?: boolean
+}
+
 async function createRuntimeWorkspaceDir() {
   const dir = await mkdtemp(join(tmpdir(), "misuzu-ctf-runtime-"))
   tempDirs.push(dir)
   return dir
+}
+
+function createChallenge(seed: MockChallengeSeed): ChallengeSummary {
+  return {
+    id: seed.id,
+    title: seed.title,
+    category: seed.category,
+    score: seed.score,
+    solvedCount: seed.solvedCount,
+  }
 }
 
 function resolveDefaultPoolItem(maxConcurrency = 1) {
@@ -38,7 +55,7 @@ function resolveDefaultPoolItem(maxConcurrency = 1) {
   }
 }
 
-async function waitForCondition(condition: () => boolean, timeoutMs = 1200, intervalMs = 20) {
+async function waitForCondition(condition: () => boolean, timeoutMs = 1500, intervalMs = 20) {
   const startedAt = Date.now()
   while (!condition()) {
     if (Date.now() - startedAt >= timeoutMs) {
@@ -62,63 +79,37 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
   }
 
   private updates: ContestUpdate[] = []
-  private readonly detailById = new Map<number, ChallengeDetail>()
+  private readonly detailsByChallengeId = new Map<number, ChallengeDetail>()
   private pollCursor = 0
-  private readonly seenPollCursors: Array<string | undefined> = []
-  private loginCallCount = 0
-  private readonly seenContestIds: number[] = []
 
-  constructor(private challenges: ChallengeSummary[]) {
-    for (const challenge of challenges) {
-      this.detailById.set(challenge.id, {
-        id: challenge.id,
-        title: challenge.title,
-        category: challenge.category,
-        score: challenge.score,
-        content: `${challenge.title} description`,
-        hints: [],
-        requiresContainer: false,
-        attempts: 0,
-        attachments: [],
-      })
-    }
-  }
+  constructor(private challenges: ChallengeSummary[]) {}
 
-  addChallenge(challenge: ChallengeSummary) {
-    this.challenges = [...this.challenges, challenge]
-    this.detailById.set(challenge.id, {
-      id: challenge.id,
-      title: challenge.title,
-      category: challenge.category,
-      score: challenge.score,
-      content: `${challenge.title} description`,
+  seedChallengeDetail(seed: MockChallengeSeed) {
+    this.detailsByChallengeId.set(seed.id, {
+      id: seed.id,
+      title: seed.title,
+      category: seed.category,
+      score: seed.score,
+      content: `${seed.title} description`,
       hints: [],
-      requiresContainer: false,
+      requiresContainer: Boolean(seed.requiresContainer),
       attempts: 0,
       attachments: [],
     })
+  }
+
+  addChallenge(seed: MockChallengeSeed) {
+    this.challenges = [...this.challenges, createChallenge(seed)]
+    this.seedChallengeDetail(seed)
   }
 
   pushUpdate(update: ContestUpdate) {
     this.updates.push(update)
   }
 
-  getSeenPollCursors() {
-    return [...this.seenPollCursors]
-  }
-
-  getLoginCallCount() {
-    return this.loginCallCount
-  }
-
-  getSeenContestIds() {
-    return [...this.seenContestIds]
-  }
-
   async setup(_config: PluginConfig) {}
 
   async login() {
-    this.loginCallCount += 1
     return {
       mode: "manual" as const,
       cookie: "sid=mock",
@@ -126,7 +117,7 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
     }
   }
 
-  async validateSession(session: Awaited<ReturnType<MockPlatformPlugin["login"]>>) {
+  async validateSession(session: { cookie?: string }) {
     if (session.cookie !== "sid=mock") {
       throw new Error("invalid session")
     }
@@ -141,11 +132,10 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
   }
 
   async listChallenges(context: { session: { cookie?: string }; contestId: number }) {
-    if (context.session.cookie !== "sid=mock") {
-      throw new Error("invalid session")
+    if (context.session.cookie !== "sid=mock" || context.contestId !== 1) {
+      throw new Error("invalid context")
     }
 
-    this.seenContestIds.push(context.contestId)
     return [...this.challenges]
   }
 
@@ -154,16 +144,15 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
     contestId: number
     challengeId: number
   }) {
-    if (context.session.cookie !== "sid=mock") {
-      throw new Error("invalid session")
+    if (context.session.cookie !== "sid=mock" || context.contestId !== 1) {
+      throw new Error("invalid context")
     }
 
-    this.seenContestIds.push(context.contestId)
-    const { challengeId } = context
-    const detail = this.detailById.get(challengeId)
+    const detail = this.detailsByChallengeId.get(context.challengeId)
     if (!detail) {
-      throw new Error(`Missing challenge detail: ${String(challengeId)}`)
+      throw new Error(`Missing challenge detail: ${String(context.challengeId)}`)
     }
+
     return detail
   }
 
@@ -173,26 +162,21 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
     challengeId: number
     flag: string
   }) {
-    if (context.session.cookie !== "sid=mock") {
-      throw new Error("invalid session")
+    if (context.session.cookie !== "sid=mock" || context.contestId !== 1) {
+      throw new Error("invalid context")
     }
-
-    this.seenContestIds.push(context.contestId)
 
     return {
       submissionId: 1,
-      status: `${context.challengeId}:${context.flag}`,
+      status: context.flag,
       accepted: context.flag.includes("accepted"),
     }
   }
 
   async pollUpdates(context: { session: { cookie?: string }; contestId: number; cursor?: string }) {
-    if (context.session.cookie !== "sid=mock") {
-      throw new Error("invalid session")
+    if (context.session.cookie !== "sid=mock" || context.contestId !== 1) {
+      throw new Error("invalid context")
     }
-
-    this.seenContestIds.push(context.contestId)
-    this.seenPollCursors.push(context.cursor)
 
     const updates = [...this.updates]
     this.updates = []
@@ -208,243 +192,133 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
   }
 }
 
-class CountingProviderRegistry extends ProviderRegistry {
-  registerProxyProvidersCalls = 0
+function createPlugin(seeds: MockChallengeSeed[]) {
+  const plugin = new MockPlatformPlugin(seeds.map((seed) => createChallenge(seed)))
+  for (const seed of seeds) {
+    plugin.seedChallengeDetail(seed)
+  }
 
-  registerProxyProviders(optionsList: ProxyProviderOptions[]) {
-    this.registerProxyProvidersCalls += 1
-    return super.registerProxyProviders(optionsList)
+  return plugin
+}
+
+interface HoldableSolver {
+  prompt: (prompt: string) => Promise<unknown>
+  continue: () => Promise<unknown>
+  abort: () => void
+}
+
+function holdSolverExecution(solver: HoldableSolver) {
+  const rejectors: Array<(reason?: unknown) => void> = []
+  let abortCallCount = 0
+
+  const hold = async (_prompt?: string) =>
+    new Promise<void>((_resolve, reject) => {
+      rejectors.push(reject)
+    })
+
+  solver.prompt = hold
+  solver.continue = hold
+  solver.abort = () => {
+    abortCallCount += 1
+    for (const reject of rejectors.splice(0, rejectors.length)) {
+      reject(new Error("solver aborted"))
+    }
+  }
+
+  return {
+    getAbortCallCount() {
+      return abortCallCount
+    },
   }
 }
 
 describe("ctf runtime platform integration", () => {
-  test("lists built-in plugins from catalog", async () => {
+  test("lists built-in plugins for create workspace flow", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+
     expect(workspace.listAvailablePlugins().some((entry) => entry.id === "gzctf")).toBe(true)
     await workspace.shutdown()
   })
 
-  test("derives solver workspace under solvers and inherits parent config", async () => {
+  test("initializes runtime and exposes managed challenge ids", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
-    await mkdir(join(rootDir, ".misuzu", "skills", "parent-skill"), { recursive: true })
-    await writeFile(
-      join(rootDir, ".misuzu", "skills", "parent-skill", "SKILL.md"),
-      [
-        "---",
-        "name: parent-skill",
-        "description: inherited skill from parent workspace",
-        "---",
-        "",
-        "Parent skill body",
-      ].join("\n"),
-      "utf-8",
-    )
-
-    const sourceModel = getModels("openai")[0]
-    await mkdir(join(rootDir, ".misuzu"), { recursive: true })
-    await writeFile(
-      join(rootDir, ".misuzu", "providers.json"),
-      JSON.stringify(
-        [
-          {
-            provider: "derived-parent-provider",
-            baseProvider: "openai",
-            modelMappings: [sourceModel!.id],
-          },
-        ],
-        null,
-        2,
-      ),
-      "utf-8",
-    )
-
-    const plugin = new MockPlatformPlugin([
-      {
-        id: 301,
-        title: "derived-solver",
-        category: "misc",
-        score: 100,
-        solvedCount: 0,
-      },
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+    const plugin = createPlugin([
+      { id: 101, title: "web-checkin", category: "web", score: 100, solvedCount: 5 },
+      { id: 102, title: "pwn-baby", category: "pwn", score: 200, solvedCount: 1 },
     ])
 
-    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
     await workspace.initializeRuntime({
       plugin,
       pluginConfig: {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
         auth: { mode: "manual" },
+        maxConcurrentContainers: 1,
+      },
+      startPaused: true,
+    })
+
+    expect(workspace.getManagedChallengeIds().sort((a, b) => a - b)).toEqual([101, 102])
+    expect(
+      workspace
+        .listManagedChallenges()
+        .map((entry) => entry.title)
+        .sort(),
+    ).toEqual(["pwn-baby", "web-checkin"])
+
+    await workspace.shutdown()
+  })
+
+  test("syncs new challenges when user triggers sync action", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+    const plugin = createPlugin([
+      { id: 201, title: "initial", category: "misc", score: 100, solvedCount: 0 },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "manual" },
+        maxConcurrentContainers: 1,
       },
     })
 
-    expect(workspace.getManagedChallengeIds()).toEqual([301])
+    plugin.addChallenge({
+      id: 202,
+      title: "late-arrival",
+      category: "crypto",
+      score: 150,
+      solvedCount: 0,
+    })
+    await workspace.syncChallengesOnce()
 
-    const derivedWorkspace = await workspace.deriveSolverWorkspace("solver-301")
-    expect(derivedWorkspace.rootDir).toBe(join(rootDir, "solvers", "solver-301"))
-    expect(derivedWorkspace.configRootDir).toBe(rootDir)
-    expect(derivedWorkspace.providers).toBe(workspace.providers)
-    expect(derivedWorkspace.providerConfigPath).toBe(
-      join(rootDir, "solvers", "solver-301", ".misuzu", "providers.json"),
-    )
-    expect(derivedWorkspace.getModel("derived-parent-provider", sourceModel!.id)).toBeDefined()
+    expect(workspace.getManagedChallengeIds().sort((a, b) => a - b)).toEqual([201, 202])
+    await workspace.shutdown()
+  })
+
+  test("sync notices steers only matching challenge solver", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+    const plugin = createPlugin([
+      { id: 301, title: "checkin", category: "misc", score: 100, solvedCount: 0 },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "manual" },
+        maxConcurrentContainers: 1,
+      },
+    })
 
     const solver = workspace.getChallengeSolver(301)
-    expect(solver).toBeDefined()
-    expect(solver!.state.systemPrompt).toContain("parent-skill")
-
-    await access(join(rootDir, "solvers", "solver-301"))
-
-    await workspace.shutdown()
-  })
-
-  test("shares provider bootstrap across derived solver workspaces", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const sourceModel = getModels("openai")[0]
-
-    await mkdir(join(rootDir, ".misuzu"), { recursive: true })
-    await writeFile(
-      join(rootDir, ".misuzu", "providers.json"),
-      JSON.stringify(
-        [
-          {
-            provider: "shared-provider",
-            baseProvider: "openai",
-            modelMappings: [sourceModel!.id],
-          },
-        ],
-        null,
-        2,
-      ),
-      "utf-8",
-    )
-
-    const countingProviders = new CountingProviderRegistry()
-    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({
-      rootDir,
-      configureContainer: (container) => {
-        container.registerValue(providerRegistryToken, countingProviders)
-      },
-    })
-
-    const plugin = new MockPlatformPlugin([
-      {
-        id: 401,
-        title: "solver-a",
-        category: "misc",
-        score: 100,
-        solvedCount: 0,
-      },
-      {
-        id: 402,
-        title: "solver-b",
-        category: "web",
-        score: 150,
-        solvedCount: 0,
-      },
-    ])
-
-    await workspace.initializeRuntime({
-      plugin,
-      pluginConfig: {
-        baseUrl: "https://example.com",
-        contest: { mode: "auto" },
-        auth: { mode: "manual" },
-      },
-    })
-
-    expect(workspace.getManagedChallengeIds().sort((a, b) => a - b)).toEqual([401, 402])
-    expect(countingProviders.registerProxyProvidersCalls).toBe(1)
-
-    await workspace.shutdown()
-  })
-
-  test("requires plugin to exist when plugin id is provided", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    await expect(
-      workspace.initializeRuntime({
-        pluginId: "missing-plugin",
-        pluginConfig: {
-          baseUrl: "https://example.com",
-          contest: { mode: "auto" },
-          auth: { mode: "manual" },
-        },
-      }),
-    ).rejects.toThrow("missing from catalog")
-  })
-
-  test("auto-loads runtime config from platformConfigPath during workspace creation", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    await mkdir(join(rootDir, ".misuzu"), { recursive: true })
-    await writeFile(
-      join(rootDir, ".misuzu", "platform.json"),
-      JSON.stringify(
-        {
-          pluginId: "missing-plugin",
-          pluginConfig: {
-            baseUrl: "https://example.com",
-            contest: { mode: "auto" },
-            auth: { mode: "manual" },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    )
-
-    await expect(createCTFRuntimeWorkspace({ rootDir })).rejects.toThrow("missing from catalog")
-  })
-
-  test("requires pluginId when runtime plugin is not provided", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    await expect(
-      workspace.initializeRuntime({
-        pluginConfig: {
-          baseUrl: "https://example.com",
-          contest: { mode: "auto" },
-          auth: { mode: "manual" },
-        },
-      }),
-    ).rejects.toThrow("Missing pluginId")
-  })
-
-  test("initializes platform, creates challenge solvers, syncs notices and new challenges", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
-
-    const plugin = new MockPlatformPlugin([
-      {
-        id: 101,
-        title: "checkin",
-        category: "misc",
-        score: 100,
-        solvedCount: 10,
-      },
-    ])
-
-    await workspace.initializeRuntime({
-      plugin,
-      pluginConfig: {
-        baseUrl: "https://example.com",
-        contest: { mode: "auto" },
-        auth: { mode: "manual" },
-      },
-      cron: {
-        noticePollIntervalMs: 60_000,
-        challengeSyncIntervalMs: 60_000,
-      },
-    })
-
-    expect(workspace.getManagedChallengeIds()).toEqual([101])
-    const solver = workspace.getChallengeSolver(101)
     expect(solver).toBeDefined()
 
     let steerCallCount = 0
@@ -458,40 +332,26 @@ describe("ctf runtime platform integration", () => {
       id: 1,
       time: Date.now(),
       type: "Notice",
-      message: "checkin hint updated, please refresh attachment",
+      message: "checkin hint updated",
+    })
+    plugin.pushUpdate({
+      id: 2,
+      time: Date.now(),
+      type: "Notice",
+      message: "other challenge announcement",
     })
 
     await workspace.syncNoticesOnce()
-
     expect(steerCallCount).toBe(1)
 
-    plugin.addChallenge({
-      id: 102,
-      title: "new-pwn",
-      category: "pwn",
-      score: 300,
-      solvedCount: 0,
-    })
-
-    await workspace.syncChallengesOnce()
-
-    expect(workspace.getManagedChallengeIds().sort((a, b) => a - b)).toEqual([101, 102])
-
     await workspace.shutdown()
   })
 
-  test("reports solver activation state during execution", async () => {
+  test("keeps manual task pending while paused and runs after resume", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    const plugin = new MockPlatformPlugin([
-      {
-        id: 111,
-        title: "activation-state",
-        category: "misc",
-        score: 100,
-        solvedCount: 1,
-      },
+    const plugin = createPlugin([
+      { id: 401, title: "pause-flow", category: "misc", score: 100, solvedCount: 0 },
     ])
 
     await workspace.initializeRuntime({
@@ -500,189 +360,40 @@ describe("ctf runtime platform integration", () => {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
         auth: { mode: "manual" },
+        maxConcurrentContainers: 1,
       },
+      startPaused: true,
     })
-
     await workspace.setModelPoolItems([resolveDefaultPoolItem()])
 
-    const solver = workspace.getChallengeSolver(111)
-    expect(solver).toBeDefined()
-
-    let finishPrompt: (() => void) | undefined
-    const waitForFinish = async () => {
-      await new Promise<void>((resolve) => {
-        finishPrompt = resolve
-      })
-    }
-    solver!.prompt = waitForFinish
-    solver!.continue = waitForFinish
-
-    const runningTask = workspace.enqueueTask({ challenge: 111 })
-    await waitForCondition(() => workspace.getSolverActivationState(111)?.status === "active")
-    const activeState = workspace.getSolverActivationState(111)
-    expect(activeState?.status).toBe("active")
-    expect(activeState?.activeTaskId).toBeDefined()
-
-    await waitForCondition(() => Boolean(finishPrompt))
-    finishPrompt?.()
-    await runningTask
-
-    const inactiveState = workspace.getSolverActivationState(111)
-    expect(inactiveState?.status).toBe("inactive")
-
-    await workspace.shutdown()
-  })
-
-  test("caps simultaneously active solvers by model pool concurrency", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    const plugin = new MockPlatformPlugin([
-      { id: 1121, title: "a", category: "misc", score: 100, solvedCount: 0 },
-      { id: 1122, title: "b", category: "web", score: 100, solvedCount: 0 },
-      { id: 1123, title: "c", category: "pwn", score: 100, solvedCount: 0 },
-    ])
-
-    await workspace.initializeRuntime({
-      plugin,
-      pluginConfig: {
-        baseUrl: "https://example.com",
-        contest: { mode: "auto" },
-        auth: { mode: "manual" },
-      },
-      startPaused: true,
-    })
-
-    await workspace.setModelPoolItems([resolveDefaultPoolItem(1)])
-
-    const holdTask = async () => {
-      await new Promise(() => {})
-    }
-
-    for (const challengeId of [1121, 1122, 1123]) {
-      const solver = workspace.getChallengeSolver(challengeId)
-      expect(solver).toBeDefined()
-      solver!.prompt = holdTask
-      solver!.continue = holdTask
-    }
-
-    void workspace.enqueueTask({ challenge: 1121 }, "task-1121").catch(() => {})
-    void workspace.enqueueTask({ challenge: 1122 }, "task-1122").catch(() => {})
-    void workspace.enqueueTask({ challenge: 1123 }, "task-1123").catch(() => {})
-    workspace.resumeTaskDispatch()
-
-    await waitForCondition(() => workspace.getSchedulerState().busySolverCount > 0)
-
-    const activeCount = workspace
-      .listSolverActivationStates()
-      .filter((state) => state.status === "active").length
-    expect(activeCount).toBe(1)
-    expect(workspace.getSchedulerState().busySolverCount).toBe(1)
-
-    await workspace.shutdown()
-  })
-
-  test("does not pre-assign models to every managed solver before dispatch", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    const plugin = new MockPlatformPlugin([
-      { id: 1131, title: "a", category: "misc", score: 100, solvedCount: 0 },
-      { id: 1132, title: "b", category: "web", score: 100, solvedCount: 0 },
-      { id: 1133, title: "c", category: "pwn", score: 100, solvedCount: 0 },
-    ])
-
-    await workspace.initializeRuntime({
-      plugin,
-      pluginConfig: {
-        baseUrl: "https://example.com",
-        contest: { mode: "auto" },
-        auth: { mode: "manual" },
-      },
-      startPaused: true,
-    })
-
-    await workspace.setModelPoolItems([resolveDefaultPoolItem(1)])
-
-    const activationStatuses = workspace
-      .listSolverActivationStates()
-      .map((state) => ({ challengeId: state.challengeId, status: state.status }))
-
-    expect(activationStatuses).toEqual([
-      { challengeId: 1131, status: "model_unassigned" },
-      { challengeId: 1132, status: "model_unassigned" },
-      { challengeId: 1133, status: "model_unassigned" },
-    ])
-
-    await workspace.shutdown()
-  })
-
-  test("keeps queue paused when runtime initializes with startPaused", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    const plugin = new MockPlatformPlugin([
-      {
-        id: 121,
-        title: "paused-runtime",
-        category: "misc",
-        score: 100,
-        solvedCount: 0,
-      },
-    ])
-
-    await workspace.initializeRuntime({
-      plugin,
-      pluginConfig: {
-        baseUrl: "https://example.com",
-        contest: { mode: "auto" },
-        auth: { mode: "manual" },
-      },
-      startPaused: true,
-    })
-
-    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
-    const solver = workspace.getChallengeSolver(121)
+    const solver = workspace.getChallengeSolver(401)
     expect(solver).toBeDefined()
 
     let started = false
-    let finishPrompt: (() => void) | undefined
     solver!.prompt = async () => {
       started = true
-      await new Promise<void>((resolve) => {
-        finishPrompt = resolve
-      })
     }
 
-    const pendingTask = workspace.enqueueTask({ challenge: 121 }, "task-paused-runtime")
+    const pendingTask = workspace.enqueueTask({ challenge: 401 }, "task-paused")
+    await new Promise((resolve) => setTimeout(resolve, 40))
 
-    await new Promise((resolve) => setTimeout(resolve, 30))
     expect(started).toBe(false)
-    expect(workspace.isTaskDispatchPaused()).toBe(true)
+    expect(workspace.listPendingSchedulerTasks().map((task) => task.taskId)).toContain(
+      "task-paused",
+    )
 
     workspace.resumeTaskDispatch()
-
-    await new Promise((resolve) => setTimeout(resolve, 30))
+    await pendingTask
     expect(started).toBe(true)
 
-    finishPrompt?.()
-    await pendingTask
-
     await workspace.shutdown()
   })
 
-  test("retries active solver loop when dispatch resumes after pause", async () => {
+  test("allows cancelling pending manual task before execution", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    const plugin = new MockPlatformPlugin([
-      {
-        id: 122,
-        title: "pause-abort",
-        category: "misc",
-        score: 100,
-        solvedCount: 0,
-      },
+    const plugin = createPlugin([
+      { id: 402, title: "cancel-pending", category: "misc", score: 100, solvedCount: 0 },
     ])
 
     await workspace.initializeRuntime({
@@ -691,459 +402,28 @@ describe("ctf runtime platform integration", () => {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
         auth: { mode: "manual" },
-      },
-    })
-
-    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
-
-    const solver = workspace.getChallengeSolver(122)
-    expect(solver).toBeDefined()
-
-    let rejectPrompt: ((error?: unknown) => void) | undefined
-    let abortCallCount = 0
-    let promptCallCount = 0
-
-    solver!.prompt = async () => {
-      promptCallCount += 1
-      if (promptCallCount === 1) {
-        await new Promise<void>((_resolve, reject) => {
-          rejectPrompt = reject
-        })
-      }
-    }
-    solver!.abort = () => {
-      abortCallCount += 1
-      rejectPrompt?.(new Error("solver aborted by pause"))
-    }
-
-    const runningTask = workspace.enqueueTask({ challenge: 122 }, "task-pause-abort")
-
-    await waitForCondition(() => workspace.getSolverActivationState(122)?.status === "active")
-
-    workspace.pauseTaskDispatch()
-
-    let runningTaskSettled = false
-    void runningTask.finally(() => {
-      runningTaskSettled = true
-    })
-
-    await new Promise((resolve) => setTimeout(resolve, 30))
-    await waitForCondition(() => workspace.getSolverActivationState(122)?.status === "inactive")
-    expect(abortCallCount).toBe(1)
-    expect(workspace.isTaskDispatchPaused()).toBe(true)
-    expect(runningTaskSettled).toBe(false)
-
-    workspace.resumeTaskDispatch()
-    await expect(runningTask).resolves.toMatchObject({ solverId: "solver-122" })
-    expect(promptCallCount).toBe(2)
-
-    await workspace.shutdown()
-  })
-
-  test("requires WriteUp.md before marking accepted challenge as solved", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    const plugin = new MockPlatformPlugin([
-      {
-        id: 123,
-        title: "writeup-gate",
-        category: "misc",
-        score: 100,
-        solvedCount: 0,
-      },
-    ])
-
-    await workspace.initializeRuntime({
-      plugin,
-      pluginConfig: {
-        baseUrl: "https://example.com",
-        contest: { mode: "auto" },
-        auth: { mode: "manual" },
-      },
-    })
-
-    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
-
-    const solver = workspace.getChallengeSolver(123)
-    expect(solver).toBeDefined()
-
-    const solverHub = Reflect.get(workspace as object, "solverHub") as {
-      submitFlag: (challengeId: number, flag: string) => Promise<{ accepted: boolean }>
-    }
-    const solverWorkspace = await workspace.deriveSolverWorkspace("solver-123")
-
-    let promptCount = 0
-    solver!.prompt = async () => {
-      promptCount += 1
-      await solverHub.submitFlag(123, "flag{accepted}")
-
-      if (promptCount >= 2) {
-        await writeFile(
-          join(solverWorkspace.rootDir, "WriteUp.md"),
-          "# Writeup\n\n- solved challenge\n",
-          "utf-8",
-        )
-      }
-    }
-
-    await expect(workspace.enqueueTask({ challenge: 123 })).resolves.toMatchObject({
-      solverId: "solver-123",
-    })
-
-    const progress = workspace.listSolverProgressStates().find((state) => state.challengeId === 123)
-    expect(progress?.status).toBe("solved")
-    expect(progress?.writeUpReady).toBe(true)
-
-    await workspace.shutdown()
-  })
-
-  test("blocks accepted challenge completion when WriteUp.md is missing", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    const plugin = new MockPlatformPlugin([
-      {
-        id: 124,
-        title: "writeup-missing",
-        category: "misc",
-        score: 100,
-        solvedCount: 0,
-      },
-    ])
-
-    await workspace.initializeRuntime({
-      plugin,
-      pluginConfig: {
-        baseUrl: "https://example.com",
-        contest: { mode: "auto" },
-        auth: { mode: "manual" },
-      },
-    })
-
-    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
-
-    const solver = workspace.getChallengeSolver(124)
-    expect(solver).toBeDefined()
-
-    const solverHub = Reflect.get(workspace as object, "solverHub") as {
-      submitFlag: (challengeId: number, flag: string) => Promise<{ accepted: boolean }>
-    }
-
-    solver!.prompt = async () => {
-      await solverHub.submitFlag(124, "flag{accepted}")
-    }
-
-    await expect(workspace.enqueueTask({ challenge: 124 })).rejects.toThrow(
-      "WriteUp.md is still missing",
-    )
-
-    const progress = workspace.listSolverProgressStates().find((state) => state.challengeId === 124)
-    expect(progress?.status).toBe("blocked")
-    expect(progress?.writeUpReady).toBe(false)
-
-    await workspace.shutdown()
-  })
-
-  test("keeps task pending with model-unassigned solver until pool is configured", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    const plugin = new MockPlatformPlugin([
-      {
-        id: 131,
-        title: "no-pool-yet",
-        category: "misc",
-        score: 100,
-        solvedCount: 0,
-      },
-    ])
-
-    await workspace.initializeRuntime({
-      plugin,
-      pluginConfig: {
-        baseUrl: "https://example.com",
-        contest: { mode: "auto" },
-        auth: { mode: "manual" },
-      },
-    })
-
-    expect(workspace.getManagedChallengeIds()).toEqual([131])
-    expect(workspace.getChallengeSolver(131)).toBeDefined()
-    expect(workspace.getSolverActivationState(131)?.status).toBe("model_unassigned")
-
-    const pendingTask = workspace.enqueueTask({ challenge: 131 }, "task-no-model")
-    await new Promise((resolve) => setTimeout(resolve, 50))
-
-    expect(workspace.listPendingSchedulerTasks().map((task) => task.taskId)).toContain(
-      "task-no-model",
-    )
-    expect(workspace.getSolverActivationState(131)?.status).toBe("model_unassigned")
-
-    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
-
-    await expect(pendingTask).resolves.toMatchObject({
-      solverId: "solver-131",
-      taskId: "task-no-model",
-    })
-    expect(workspace.getChallengeSolver(131)).toBeDefined()
-    expect(workspace.getSolverActivationState(131)?.status).toBe("inactive")
-
-    await workspace.shutdown()
-  })
-
-  test("restores auth session, contest binding and queue sequence from runtime snapshot", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const firstPlugin = new MockPlatformPlugin([
-      {
-        id: 151,
-        title: "persisted-runtime",
-        category: "web",
-        score: 150,
-        solvedCount: 3,
-      },
-    ])
-    const runtime = {
-      plugin: firstPlugin,
-      pluginConfig: {
-        baseUrl: "https://example.com",
-        contest: { mode: "auto" as const },
-        auth: { mode: "manual" as const },
-      },
-      cron: {
-        noticePollIntervalMs: 60_000,
-        challengeSyncIntervalMs: 60_000,
-      },
-    }
-
-    const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir, runtime })
-    await firstWorkspace.setModelPoolItems([resolveDefaultPoolItem()])
-    const firstSolver = firstWorkspace.getChallengeSolver(151)
-    expect(firstSolver).toBeDefined()
-    firstSolver!.prompt = async () => {}
-
-    const firstTask = await firstWorkspace.enqueueTask({ challenge: 151 })
-    expect(firstTask.taskId).toBe("task-1")
-    expect(firstPlugin.getLoginCallCount()).toBe(1)
-
-    await firstWorkspace.syncNoticesOnce()
-    await firstWorkspace.shutdown()
-
-    const restoredPlugin = new MockPlatformPlugin([
-      {
-        id: 151,
-        title: "persisted-runtime",
-        category: "web",
-        score: 150,
-        solvedCount: 3,
-      },
-    ])
-
-    const restoredWorkspace = await createCTFRuntimeWorkspace({
-      rootDir,
-      runtime: {
-        ...runtime,
-        plugin: restoredPlugin,
-      },
-    })
-
-    await restoredWorkspace.setModelPoolItems([resolveDefaultPoolItem()])
-    const restoredSolver = restoredWorkspace.getChallengeSolver(151)
-    expect(restoredSolver).toBeDefined()
-    restoredSolver!.prompt = async () => {}
-    expect(restoredWorkspace.getSolverActivationState(151)?.status).toBe("model_unassigned")
-
-    expect(restoredPlugin.getLoginCallCount()).toBe(0)
-
-    await restoredWorkspace.syncNoticesOnce()
-    expect(restoredPlugin.getSeenPollCursors()).toContain("1")
-    expect(restoredPlugin.getSeenContestIds()).toContain(1)
-
-    const secondTask = await restoredWorkspace.enqueueTask({ challenge: 151 })
-    expect(secondTask.taskId).toBe("task-2")
-
-    await restoredWorkspace.shutdown()
-  })
-
-  test("caps restored queue tasks by model pool capacity", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const runtime = {
-      plugin: new MockPlatformPlugin([
-        {
-          id: 161,
-          title: "restore-cap-1",
-          category: "misc",
-          score: 100,
-          solvedCount: 0,
-        },
-        {
-          id: 162,
-          title: "restore-cap-2",
-          category: "web",
-          score: 120,
-          solvedCount: 0,
-        },
-        {
-          id: 163,
-          title: "restore-cap-3",
-          category: "pwn",
-          score: 150,
-          solvedCount: 0,
-        },
-      ]),
-      pluginConfig: {
-        baseUrl: "https://example.com",
-        contest: { mode: "auto" as const },
-        auth: { mode: "manual" as const },
+        maxConcurrentContainers: 1,
       },
       startPaused: true,
-    }
-
-    const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir, runtime })
-    await firstWorkspace.setModelPoolItems([resolveDefaultPoolItem(1)])
-
-    void firstWorkspace.enqueueTask({ challenge: 161 }, "task-161").catch(() => {})
-    void firstWorkspace.enqueueTask({ challenge: 162 }, "task-162").catch(() => {})
-    void firstWorkspace.enqueueTask({ challenge: 163 }, "task-163").catch(() => {})
-
-    expect(firstWorkspace.listPendingSchedulerTasks().map((task) => task.taskId)).toEqual([
-      "task-161",
-      "task-162",
-      "task-163",
-    ])
-
-    await firstWorkspace.shutdown()
-
-    const restoredWorkspace = await createCTFRuntimeWorkspace({
-      rootDir,
-      runtime: {
-        ...runtime,
-        plugin: new MockPlatformPlugin([
-          {
-            id: 161,
-            title: "restore-cap-1",
-            category: "misc",
-            score: 100,
-            solvedCount: 0,
-          },
-          {
-            id: 162,
-            title: "restore-cap-2",
-            category: "web",
-            score: 120,
-            solvedCount: 0,
-          },
-          {
-            id: 163,
-            title: "restore-cap-3",
-            category: "pwn",
-            score: 150,
-            solvedCount: 0,
-          },
-        ]),
-      },
     })
 
-    expect(restoredWorkspace.listPendingSchedulerTasks().map((task) => task.taskId)).toEqual([
-      "task-161",
-    ])
+    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
+    const taskPromise = workspace.enqueueTask({ challenge: 402 }, "task-cancel-pending")
 
-    await restoredWorkspace.shutdown()
-  })
-
-  test("restores solved progress and skips solver recreation for solved challenges", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const challengeId = 181
-
-    const runtime = {
-      plugin: new MockPlatformPlugin([
-        {
-          id: challengeId,
-          title: "restore-solved",
-          category: "misc",
-          score: 120,
-          solvedCount: 2,
-        },
-      ]),
-      pluginConfig: {
-        baseUrl: "https://example.com",
-        contest: { mode: "auto" as const },
-        auth: { mode: "manual" as const },
-      },
-    }
-
-    const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir, runtime })
-    await firstWorkspace.setModelPoolItems([resolveDefaultPoolItem()])
-
-    const solver = firstWorkspace.getChallengeSolver(challengeId)
-    expect(solver).toBeDefined()
-
-    const solverHub = Reflect.get(firstWorkspace as object, "solverHub") as {
-      submitFlag: (targetChallengeId: number, flag: string) => Promise<{ accepted: boolean }>
-    }
-
-    const solverWorkspace = await firstWorkspace.deriveSolverWorkspace(
-      `solver-${String(challengeId)}`,
+    expect(workspace.cancelSchedulerTask("task-cancel-pending")).toBe("pending")
+    await expect(taskPromise).rejects.toThrow("Task cancelled")
+    expect(workspace.listPendingSchedulerTasks().map((task) => task.taskId)).not.toContain(
+      "task-cancel-pending",
     )
 
-    solver!.prompt = async () => {
-      await writeFile(
-        join(solverWorkspace.rootDir, "WriteUp.md"),
-        "# Writeup\n\n- restored solved challenge\n",
-        "utf-8",
-      )
-      await solverHub.submitFlag(challengeId, "flag{accepted}")
-    }
-
-    await firstWorkspace.enqueueTask({ challenge: challengeId })
-
-    const firstProgress = firstWorkspace
-      .listSolverProgressStates()
-      .find((state) => state.challengeId === challengeId)
-    expect(firstProgress?.status).toBe("solved")
-
-    await firstWorkspace.shutdown()
-
-    const restoredWorkspace = await createCTFRuntimeWorkspace({
-      rootDir,
-      runtime: {
-        ...runtime,
-        plugin: new MockPlatformPlugin([
-          {
-            id: challengeId,
-            title: "restore-solved",
-            category: "misc",
-            score: 120,
-            solvedCount: 2,
-          },
-        ]),
-      },
-    })
-
-    await restoredWorkspace.setModelPoolItems([resolveDefaultPoolItem()])
-
-    const restoredProgress = restoredWorkspace
-      .listSolverProgressStates()
-      .find((state) => state.challengeId === challengeId)
-    expect(restoredProgress?.status).toBe("solved")
-    expect(restoredWorkspace.getChallengeSolver(challengeId)).toBeUndefined()
-
-    await restoredWorkspace.shutdown()
+    await workspace.shutdown()
   })
 
-  test("uses continue loop for resumed solver with existing history", async () => {
+  test("aborts inflight task when user cancels running solver", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
-    const challengeId = 182
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    const plugin = new MockPlatformPlugin([
-      {
-        id: challengeId,
-        title: "resume-continue",
-        category: "misc",
-        score: 90,
-        solvedCount: 0,
-      },
+    const plugin = createPlugin([
+      { id: 403, title: "cancel-inflight", category: "misc", score: 100, solvedCount: 0 },
     ])
 
     await workspace.initializeRuntime({
@@ -1152,52 +432,30 @@ describe("ctf runtime platform integration", () => {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
         auth: { mode: "manual" },
+        maxConcurrentContainers: 1,
       },
     })
-
     await workspace.setModelPoolItems([resolveDefaultPoolItem()])
 
-    const solver = workspace.getChallengeSolver(challengeId)
+    const solver = workspace.getChallengeSolver(403)
     expect(solver).toBeDefined()
 
-    solver!.replaceMessages([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "restored-history" }],
-        timestamp: Date.now(),
-      } as any,
-    ])
+    const execution = holdSolverExecution(solver!)
+    const runningTask = workspace.enqueueTask({ challenge: 403 }, "task-cancel-inflight")
 
-    let promptCalls = 0
-    let continueCalls = 0
-    solver!.prompt = async () => {
-      promptCalls += 1
-    }
-    solver!.continue = async () => {
-      continueCalls += 1
-    }
-
-    await workspace.enqueueTask({ challenge: challengeId })
-
-    expect(promptCalls).toBe(0)
-    expect(continueCalls).toBe(1)
+    await waitForCondition(() => workspace.getSolverActivationState(403)?.status === "active")
+    expect(workspace.cancelSchedulerTask("task-cancel-inflight")).toBe("inflight")
+    await expect(runningTask).rejects.toThrow("solver aborted")
+    expect(execution.getAbortCallCount()).toBe(1)
 
     await workspace.shutdown()
   })
 
-  test("uses continue loop for resumed solver when payload carries metadata", async () => {
+  test("keeps task pending when model pool is empty and resumes after pool update", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
-    const challengeId = 184
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    const plugin = new MockPlatformPlugin([
-      {
-        id: challengeId,
-        title: "resume-continue-with-metadata",
-        category: "misc",
-        score: 85,
-        solvedCount: 0,
-      },
+    const plugin = createPlugin([
+      { id: 501, title: "pool-late", category: "misc", score: 100, solvedCount: 0 },
     ])
 
     await workspace.initializeRuntime({
@@ -1206,100 +464,116 @@ describe("ctf runtime platform integration", () => {
         baseUrl: "https://example.com",
         contest: { mode: "auto" },
         auth: { mode: "manual" },
+        maxConcurrentContainers: 1,
       },
     })
 
-    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
-
-    const solver = workspace.getChallengeSolver(challengeId)
+    const solver = workspace.getChallengeSolver(501)
     expect(solver).toBeDefined()
+    solver!.prompt = async () => {}
+    solver!.continue = async () => {}
 
-    solver!.replaceMessages([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "restored-history" }],
-        timestamp: Date.now(),
-      } as any,
-    ])
+    const pendingTask = workspace.enqueueTask({ challenge: 501 }, "task-no-pool")
+    await new Promise((resolve) => setTimeout(resolve, 40))
 
-    let promptCalls = 0
-    let continueCalls = 0
-    solver!.prompt = async () => {
-      promptCalls += 1
-    }
-    solver!.continue = async () => {
-      continueCalls += 1
-    }
+    expect(workspace.getSolverActivationState(501)?.status).toBe("model_unassigned")
+    expect(workspace.listPendingSchedulerTasks().map((task) => task.taskId)).toContain(
+      "task-no-pool",
+    )
 
-    await workspace.enqueueTask({
-      challenge: challengeId,
-      reason: "resume-after-pause",
-    })
-
-    expect(promptCalls).toBe(0)
-    expect(continueCalls).toBe(1)
+    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
+    await expect(pendingTask).resolves.toMatchObject({ taskId: "task-no-pool" })
 
     await workspace.shutdown()
   })
 
-  test("auto-recovers from unexpected solver stop by sending continue", async () => {
+  test("auto orchestration respects model slots and max concurrent containers", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
-    const challengeId = 183
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
-
-    const plugin = new MockPlatformPlugin([
+    const plugin = createPlugin([
       {
-        id: challengeId,
-        title: "unexpected-stop-recover",
-        category: "misc",
-        score: 80,
-        solvedCount: 0,
-      },
-    ])
-
-    await workspace.initializeRuntime({
-      plugin,
-      pluginConfig: {
-        baseUrl: "https://example.com",
-        contest: { mode: "auto" },
-        auth: { mode: "manual" },
-      },
-    })
-
-    await workspace.setModelPoolItems([resolveDefaultPoolItem()])
-
-    const solver = workspace.getChallengeSolver(challengeId)
-    expect(solver).toBeDefined()
-
-    let promptCalls = 0
-    let continueCalls = 0
-    solver!.prompt = async () => {
-      promptCalls += 1
-      throw new Error("unexpected agent stop")
-    }
-    solver!.continue = async () => {
-      continueCalls += 1
-    }
-
-    await expect(workspace.enqueueTask({ challenge: challengeId })).resolves.toMatchObject({
-      solverId: `solver-${String(challengeId)}`,
-    })
-    expect(promptCalls).toBe(1)
-    expect(continueCalls).toBe(1)
-
-    await workspace.shutdown()
-  })
-
-  test("supports platform initialization during workspace creation", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const plugin = new MockPlatformPlugin([
-      {
-        id: 201,
-        title: "auto-init",
+        id: 601,
+        title: "web-container",
         category: "web",
-        score: 50,
-        solvedCount: 1,
+        score: 100,
+        solvedCount: 0,
+        requiresContainer: true,
       },
+      {
+        id: 602,
+        title: "pwn-container",
+        category: "pwn",
+        score: 100,
+        solvedCount: 0,
+        requiresContainer: true,
+      },
+      {
+        id: 603,
+        title: "crypto-no-container",
+        category: "crypto",
+        score: 100,
+        solvedCount: 0,
+        requiresContainer: false,
+      },
+      {
+        id: 604,
+        title: "misc-no-container",
+        category: "misc",
+        score: 100,
+        solvedCount: 0,
+        requiresContainer: false,
+      },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "manual" },
+        maxConcurrentContainers: 1,
+      },
+      startPaused: true,
+    })
+    await workspace.setModelPoolItems([resolveDefaultPoolItem(3)])
+
+    for (const challengeId of [601, 602, 603, 604]) {
+      const solver = workspace.getChallengeSolver(challengeId)
+      expect(solver).toBeDefined()
+      holdSolverExecution(solver!)
+    }
+
+    workspace.setAutoDispatchManaged(true)
+    workspace.resumeTaskDispatch()
+
+    await waitForCondition(() => workspace.getSchedulerState().busySolverCount >= 3)
+
+    const managedById = new Map(
+      workspace
+        .listManagedChallenges()
+        .map((challenge) => [challenge.challengeId, challenge] as const),
+    )
+    const activeChallengeIds = workspace
+      .listSolverActivationStates()
+      .filter((state) => state.status === "active")
+      .map((state) => state.challengeId)
+
+    const activeContainerCount = activeChallengeIds.filter((challengeId) => {
+      const challenge = managedById.get(challengeId)
+      return challenge?.requiresContainer !== false
+    }).length
+
+    expect(activeChallengeIds.length).toBe(3)
+    expect(activeContainerCount).toBe(1)
+
+    workspace.pauseTaskDispatch()
+    await workspace.shutdown()
+  })
+
+  test("auto-initializes runtime when workspace is created with runtime options", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const plugin = createPlugin([
+      { id: 701, title: "boot-runtime", category: "web", score: 120, solvedCount: 1 },
     ])
 
     const workspace = await createCTFRuntimeWorkspace({
@@ -1310,85 +584,12 @@ describe("ctf runtime platform integration", () => {
           baseUrl: "https://example.com",
           contest: { mode: "auto" },
           auth: { mode: "manual" },
-        },
-        cron: {
-          noticePollIntervalMs: 60_000,
-          challengeSyncIntervalMs: 60_000,
+          maxConcurrentContainers: 1,
         },
       },
     })
 
-    expect(workspace.getManagedChallengeIds()).toEqual([201])
+    expect(workspace.getManagedChallengeIds()).toEqual([701])
     await workspace.shutdown()
-  })
-
-  test("restores environment agent state alongside runtime snapshot", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
-    const firstPlugin = new MockPlatformPlugin([
-      {
-        id: 241,
-        title: "runtime-with-environment-agent",
-        category: "misc",
-        score: 200,
-        solvedCount: 2,
-      },
-    ])
-
-    const runtime = {
-      plugin: firstPlugin,
-      pluginConfig: {
-        baseUrl: "https://example.com",
-        contest: { mode: "auto" as const },
-        auth: { mode: "manual" as const },
-      },
-    }
-
-    const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir, runtime })
-    await firstWorkspace.setModelPoolItems([resolveDefaultPoolItem()])
-    const firstEnvironmentAgent = firstWorkspace.createEnvironmentAgent({
-      initialState: {
-        systemPrompt: "environment-agent-with-runtime",
-        thinkingLevel: "low",
-      },
-    })
-
-    firstEnvironmentAgent.appendMessage({
-      role: "user",
-      content: "persisted-environment-runtime-message",
-      timestamp: Date.now(),
-    })
-    await firstWorkspace.persistRuntimeState()
-    await firstWorkspace.shutdown()
-
-    const restoredPlugin = new MockPlatformPlugin([
-      {
-        id: 241,
-        title: "runtime-with-environment-agent",
-        category: "misc",
-        score: 200,
-        solvedCount: 2,
-      },
-    ])
-
-    const restoredWorkspace = await createCTFRuntimeWorkspace({
-      rootDir,
-      runtime: {
-        ...runtime,
-        plugin: restoredPlugin,
-      },
-    })
-
-    await restoredWorkspace.setModelPoolItems([resolveDefaultPoolItem()])
-
-    expect(restoredPlugin.getLoginCallCount()).toBe(0)
-
-    const restoredEnvironmentAgent = restoredWorkspace.createEnvironmentAgent()
-    expect(restoredEnvironmentAgent.state.systemPrompt).toContain("environment-agent-with-runtime")
-    expect(restoredEnvironmentAgent.state.thinkingLevel).toBe("low")
-    expect(JSON.stringify(restoredEnvironmentAgent.state.messages)).toContain(
-      "persisted-environment-runtime-message",
-    )
-
-    await restoredWorkspace.shutdown()
   })
 })

@@ -3,6 +3,12 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, test } from "vite-plus/test"
 import { getModels } from "@mariozechner/pi-ai"
+import type {
+  ChallengeDetail,
+  ChallengeSummary,
+  CTFPlatformPlugin,
+  PluginConfig,
+} from "../../../../../plugins/index.ts"
 import {
   createCTFRuntimeWorkspace,
   createCTFRuntimeWorkspaceWithoutPersistence,
@@ -16,25 +22,142 @@ async function createRuntimeWorkspaceDir() {
   return dir
 }
 
+function resolveDefaultPoolItem(maxConcurrency = 1) {
+  const defaultModel = getModels("openai")[0]
+  if (!defaultModel) {
+    throw new Error("OpenAI default model is missing for persistence test setup")
+  }
+
+  return {
+    provider: defaultModel.provider,
+    modelId: defaultModel.id,
+    maxConcurrency,
+  }
+}
+
 afterEach(async () => {
   await Promise.all(
     tempDirs.splice(0, tempDirs.length).map((dir) => rm(dir, { recursive: true, force: true })),
   )
 })
 
-describe("ctf runtime workspace persistence", () => {
-  test("persists and restores runtime state", async () => {
-    const rootDir = await createRuntimeWorkspaceDir()
+class PersistenceMockPlugin implements CTFPlatformPlugin {
+  readonly meta = {
+    id: "mock-platform-persistence",
+    name: "Mock Platform Persistence",
+  }
 
+  private readonly challenge: ChallengeSummary = {
+    id: 901,
+    title: "persisted-queue",
+    category: "misc",
+    score: 100,
+    solvedCount: 0,
+  }
+
+  async setup(_config: PluginConfig) {}
+
+  async login() {
+    return {
+      mode: "manual" as const,
+      cookie: "sid=mock",
+      refreshable: false,
+    }
+  }
+
+  async validateSession(session: { cookie?: string }) {
+    if (session.cookie !== "sid=mock") {
+      throw new Error("invalid session")
+    }
+  }
+
+  async listContests(session: { cookie?: string }) {
+    if (session.cookie !== "sid=mock") {
+      throw new Error("invalid session")
+    }
+
+    return [{ id: 1, title: "Mock Contest" }]
+  }
+
+  async listChallenges(context: { session: { cookie?: string }; contestId: number }) {
+    if (context.session.cookie !== "sid=mock" || context.contestId !== 1) {
+      throw new Error("invalid context")
+    }
+
+    return [this.challenge]
+  }
+
+  async getChallenge(context: {
+    session: { cookie?: string }
+    contestId: number
+    challengeId: number
+  }): Promise<ChallengeDetail> {
+    if (
+      context.session.cookie !== "sid=mock" ||
+      context.contestId !== 1 ||
+      context.challengeId !== this.challenge.id
+    ) {
+      throw new Error("invalid context")
+    }
+
+    return {
+      id: this.challenge.id,
+      title: this.challenge.title,
+      category: this.challenge.category,
+      score: this.challenge.score,
+      content: "persisted challenge",
+      hints: [],
+      requiresContainer: false,
+      attempts: 0,
+      attachments: [],
+    }
+  }
+
+  async submitFlagRaw(context: {
+    session: { cookie?: string }
+    contestId: number
+    challengeId: number
+    flag: string
+  }) {
+    if (
+      context.session.cookie !== "sid=mock" ||
+      context.contestId !== 1 ||
+      context.challengeId !== this.challenge.id
+    ) {
+      throw new Error("invalid context")
+    }
+
+    return {
+      submissionId: 1,
+      status: context.flag,
+      accepted: context.flag.includes("accepted"),
+    }
+  }
+
+  async pollUpdates() {
+    return {
+      cursor: "1",
+      updates: [],
+    }
+  }
+}
+
+describe("ctf runtime workspace persistence", () => {
+  test("restores attached runtime payload when runtime id matches", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
     const runtimeWorkspace = await createCTFRuntimeWorkspace({ rootDir })
-    const snapshot = {
-      queue: ["challenge-1", "challenge-2"],
-      limits: { maxConcurrency: 2, maxContainers: 1 },
+    const runtimePayload = {
+      autoOrchestrate: true,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        maxConcurrentContainers: 2,
+      },
     }
 
     await runtimeWorkspace.attachRuntime({
       runtimeId: "ctf-runtime",
-      getPersistedState: () => snapshot,
+      getPersistedState: () => runtimePayload,
     })
     await runtimeWorkspace.persistRuntimeState()
     await runtimeWorkspace.shutdown()
@@ -50,16 +173,17 @@ describe("ctf runtime workspace persistence", () => {
       },
     })
 
-    expect(restoredPayload).toEqual(snapshot)
+    expect(restoredPayload).toEqual(runtimePayload)
+    await restoredWorkspace.shutdown()
   })
 
-  test("ignores persisted state when runtime id mismatches", async () => {
+  test("does not restore attached runtime payload when runtime id differs", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
-
     const runtimeWorkspace = await createCTFRuntimeWorkspace({ rootDir })
+
     await runtimeWorkspace.attachRuntime({
       runtimeId: "runtime-a",
-      getPersistedState: () => ({ marker: "a" }),
+      getPersistedState: () => ({ marker: "runtime-a" }),
     })
     await runtimeWorkspace.persistRuntimeState()
     await runtimeWorkspace.shutdown()
@@ -76,25 +200,19 @@ describe("ctf runtime workspace persistence", () => {
     })
 
     expect(restoredCalled).toBe(false)
+    await restoredWorkspace.shutdown()
   })
 
-  test("persists and restores environment agent state before runtime activation", async () => {
+  test("restores environment agent state for skip-plugin setup flow", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
-    const defaultModel = getModels("openai")[0]!
 
     const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir })
-    await firstWorkspace.setModelPoolItems([
-      {
-        provider: defaultModel.provider,
-        modelId: defaultModel.id,
-        maxConcurrency: 1,
-      },
-    ])
+    await firstWorkspace.setModelPoolItems([resolveDefaultPoolItem()])
 
     const firstEnvironmentAgent = firstWorkspace.createEnvironmentAgent({
       initialState: {
         thinkingLevel: "high",
-        systemPrompt: "restore-environment-agent-base-prompt",
+        systemPrompt: "environment-before-plugin",
       },
     })
 
@@ -107,20 +225,11 @@ describe("ctf runtime workspace persistence", () => {
     await firstWorkspace.shutdown()
 
     const restoredWorkspace = await createCTFRuntimeWorkspace({ rootDir })
-    await restoredWorkspace.setModelPoolItems([
-      {
-        provider: defaultModel.provider,
-        modelId: defaultModel.id,
-        maxConcurrency: 1,
-      },
-    ])
-    const restoredEnvironmentAgent = restoredWorkspace.createEnvironmentAgent()
+    await restoredWorkspace.setModelPoolItems([resolveDefaultPoolItem()])
 
+    const restoredEnvironmentAgent = restoredWorkspace.createEnvironmentAgent()
     expect(restoredEnvironmentAgent.state.thinkingLevel).toBe("high")
-    expect(restoredEnvironmentAgent.state.systemPrompt).toContain(
-      "restore-environment-agent-base-prompt",
-    )
-    expect(restoredEnvironmentAgent.state.messages.length).toBeGreaterThan(0)
+    expect(restoredEnvironmentAgent.state.systemPrompt).toContain("environment-before-plugin")
     expect(JSON.stringify(restoredEnvironmentAgent.state.messages)).toContain(
       "persist-environment-message",
     )
@@ -128,29 +237,20 @@ describe("ctf runtime workspace persistence", () => {
     await restoredWorkspace.shutdown()
   })
 
-  test("keeps environment agent state after persisting a different runtime", async () => {
+  test("keeps environment snapshot after runtime plugin persistence", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
-    const defaultModel = getModels("openai")[0]!
 
     const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir })
-    await firstWorkspace.setModelPoolItems([
-      {
-        provider: defaultModel.provider,
-        modelId: defaultModel.id,
-        maxConcurrency: 1,
-      },
-    ])
+    await firstWorkspace.setModelPoolItems([resolveDefaultPoolItem()])
 
-    const firstEnvironmentAgent = firstWorkspace.createEnvironmentAgent({
+    const environmentAgent = firstWorkspace.createEnvironmentAgent({
       initialState: {
-        thinkingLevel: "high",
-        systemPrompt: "persist-environment-after-runtime-switch",
+        systemPrompt: "environment-survives-runtime",
       },
     })
-
-    firstEnvironmentAgent.appendMessage({
+    environmentAgent.appendMessage({
       role: "user",
-      content: "persist-environment-runtime-switch-message",
+      content: "persist-before-runtime-attach",
       timestamp: Date.now(),
     })
     await firstWorkspace.persistRuntimeState()
@@ -159,32 +259,61 @@ describe("ctf runtime workspace persistence", () => {
     const secondWorkspace = await createCTFRuntimeWorkspace({ rootDir })
     await secondWorkspace.attachRuntime({
       runtimeId: "plugin-runtime",
-      getPersistedState: () => ({ runtime: "plugin" }),
+      getPersistedState: () => ({ ok: true }),
     })
     await secondWorkspace.persistRuntimeState()
     await secondWorkspace.shutdown()
 
     const thirdWorkspace = await createCTFRuntimeWorkspace({ rootDir })
-    await thirdWorkspace.setModelPoolItems([
-      {
-        provider: defaultModel.provider,
-        modelId: defaultModel.id,
-        maxConcurrency: 1,
-      },
-    ])
-
+    await thirdWorkspace.setModelPoolItems([resolveDefaultPoolItem()])
     const restoredEnvironmentAgent = thirdWorkspace.createEnvironmentAgent()
-    expect(restoredEnvironmentAgent.state.systemPrompt).toContain(
-      "persist-environment-after-runtime-switch",
-    )
-    expect(JSON.stringify(restoredEnvironmentAgent.state.messages)).toContain(
-      "persist-environment-runtime-switch-message",
-    )
 
+    expect(restoredEnvironmentAgent.state.systemPrompt).toContain("environment-survives-runtime")
+    expect(JSON.stringify(restoredEnvironmentAgent.state.messages)).toContain(
+      "persist-before-runtime-attach",
+    )
     await thirdWorkspace.shutdown()
   })
 
-  test("loads runtime options from platformConfigPath and resolves env placeholders", async () => {
+  test("restores paused queue intents after workspace reopen", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const runtimeOptions = {
+      plugin: new PersistenceMockPlugin(),
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" as const },
+        auth: { mode: "manual" as const },
+        maxConcurrentContainers: 1,
+      },
+      startPaused: true,
+    }
+
+    const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir, runtime: runtimeOptions })
+    await firstWorkspace.setModelPoolItems([resolveDefaultPoolItem(1)])
+
+    void firstWorkspace.enqueueTask({ challenge: 901 }, "task-persisted").catch(() => {})
+    expect(firstWorkspace.listPendingSchedulerTasks().map((task) => task.taskId)).toContain(
+      "task-persisted",
+    )
+
+    await firstWorkspace.shutdown()
+
+    const restoredWorkspace = await createCTFRuntimeWorkspace({
+      rootDir,
+      runtime: {
+        ...runtimeOptions,
+        plugin: new PersistenceMockPlugin(),
+      },
+    })
+    await restoredWorkspace.setModelPoolItems([resolveDefaultPoolItem(1)])
+
+    expect(restoredWorkspace.listPendingSchedulerTasks().map((task) => task.taskId)).toContain(
+      "task-persisted",
+    )
+    await restoredWorkspace.shutdown()
+  })
+
+  test("loads platform config and resolves env placeholders", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
 
@@ -202,6 +331,7 @@ describe("ctf runtime workspace persistence", () => {
               baseUrl: "$env:RUNTIME_BASE_URL",
               contest: { mode: "auto" },
               auth: { mode: "manual" },
+              maxConcurrentContainers: 1,
             },
           },
           null,
@@ -219,6 +349,7 @@ describe("ctf runtime workspace persistence", () => {
       } else {
         process.env.RUNTIME_BASE_URL = previousEnv
       }
+      await workspace.shutdown()
     }
   })
 })

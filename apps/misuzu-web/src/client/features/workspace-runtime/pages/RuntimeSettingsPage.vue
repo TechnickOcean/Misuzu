@@ -1,7 +1,20 @@
 <script setup lang="ts">
+import { CheckIcon, ChevronsUpDownIcon } from "lucide-vue-next"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Combobox,
+  ComboboxAnchor,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxItemIndicator,
+  ComboboxList,
+  ComboboxTrigger,
+  ComboboxViewport,
+} from "@/components/ui/combobox"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
@@ -161,16 +174,84 @@ const {
               :key="item.id"
               class="grid gap-3 rounded-md border p-3 md:grid-cols-[1fr_1fr_160px_auto]"
             >
-              <Input
-                v-model="item.provider"
-                list="runtime-settings-provider-options"
-                placeholder="provider"
-              />
-              <Input
-                v-model="item.modelId"
-                :list="`runtime-settings-model-options-${item.id}`"
-                placeholder="model id"
-              />
+              <Combobox
+                :model-value="item.provider"
+                @update:model-value="(value) => (item.provider = String(value ?? ''))"
+              >
+                <ComboboxAnchor class="w-full">
+                  <ComboboxTrigger as-child>
+                    <Button
+                      variant="outline"
+                      class="w-full justify-between font-normal"
+                      type="button"
+                    >
+                      <span class="truncate">{{ item.provider || "Select provider" }}</span>
+                      <ChevronsUpDownIcon class="size-4 shrink-0 opacity-50" />
+                    </Button>
+                  </ComboboxTrigger>
+                </ComboboxAnchor>
+
+                <ComboboxList class="w-(--reka-popper-anchor-width) p-0">
+                  <ComboboxInput placeholder="Search provider..." />
+                  <ComboboxEmpty>No provider found.</ComboboxEmpty>
+                  <ComboboxViewport>
+                    <ComboboxGroup>
+                      <ComboboxItem
+                        v-for="provider in providerOptions"
+                        :key="provider"
+                        :value="provider"
+                        class="justify-between"
+                      >
+                        <span class="truncate">{{ provider }}</span>
+                        <ComboboxItemIndicator>
+                          <CheckIcon class="size-4" />
+                        </ComboboxItemIndicator>
+                      </ComboboxItem>
+                    </ComboboxGroup>
+                  </ComboboxViewport>
+                </ComboboxList>
+              </Combobox>
+
+              <Combobox
+                :model-value="item.modelId"
+                :disabled="!item.provider"
+                @update:model-value="(value) => (item.modelId = String(value ?? ''))"
+              >
+                <ComboboxAnchor class="w-full">
+                  <ComboboxTrigger as-child>
+                    <Button
+                      variant="outline"
+                      class="w-full justify-between font-normal"
+                      type="button"
+                      :disabled="!item.provider"
+                    >
+                      <span class="truncate">{{ item.modelId || "Select model" }}</span>
+                      <ChevronsUpDownIcon class="size-4 shrink-0 opacity-50" />
+                    </Button>
+                  </ComboboxTrigger>
+                </ComboboxAnchor>
+
+                <ComboboxList class="w-(--reka-popper-anchor-width) p-0">
+                  <ComboboxInput placeholder="Search model..." />
+                  <ComboboxEmpty>No model found.</ComboboxEmpty>
+                  <ComboboxViewport>
+                    <ComboboxGroup>
+                      <ComboboxItem
+                        v-for="model in listModelsForProvider(item.provider)"
+                        :key="model.modelId"
+                        :value="model.modelId"
+                        class="justify-between"
+                      >
+                        <span class="truncate">{{ model.modelId }}</span>
+                        <ComboboxItemIndicator>
+                          <CheckIcon class="size-4" />
+                        </ComboboxItemIndicator>
+                      </ComboboxItem>
+                    </ComboboxGroup>
+                  </ComboboxViewport>
+                </ComboboxList>
+              </Combobox>
+
               <div class="flex items-center gap-1">
                 <Button type="button" variant="outline" @click="decrementConcurrency(item.id)"
                   >-</Button
@@ -188,14 +269,6 @@ const {
               <Button variant="ghost" type="button" @click="removeModelPoolRow(item.id)"
                 >Remove</Button
               >
-
-              <datalist :id="`runtime-settings-model-options-${item.id}`">
-                <option
-                  v-for="model in listModelsForProvider(item.provider)"
-                  :key="model.modelId"
-                  :value="model.modelId"
-                />
-              </datalist>
             </article>
 
             <div class="flex flex-wrap gap-2">
@@ -225,9 +298,5 @@ const {
     </Card>
 
     <p v-if="settingsError" class="text-sm text-destructive">{{ settingsError }}</p>
-
-    <datalist id="runtime-settings-provider-options">
-      <option v-for="provider in providerOptions" :key="provider" :value="provider" />
-    </datalist>
   </div>
 </template>

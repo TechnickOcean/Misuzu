@@ -186,6 +186,8 @@ export function useRuntimeSettingsPage(workspaceId: string) {
     runtimeConfigNotice.value = ""
     runtimeConfigSaving.value = true
     try {
+      const shouldInitializeAfterSave =
+        snapshot.value?.setupPhase === "env_agent_ready_for_settings"
       let platformConfig: RuntimePlatformConfig | undefined
       if (pluginIdDraft.value.trim()) {
         platformConfig = {
@@ -200,8 +202,14 @@ export function useRuntimeSettingsPage(workspaceId: string) {
         platformConfig,
       })
 
+      if (shouldInitializeAfterSave && platformConfig) {
+        await runtime.initializeRuntime(platformConfig.pluginId, platformConfig.pluginConfig)
+      }
+
       await loadSettings()
-      runtimeConfigNotice.value = "Runtime config saved"
+      runtimeConfigNotice.value = shouldInitializeAfterSave
+        ? "Runtime config saved, plugin login succeeded, and setup is now ready"
+        : "Runtime config saved"
     } catch (error) {
       runtimeConfigError.value = error instanceof Error ? error.message : String(error)
     } finally {

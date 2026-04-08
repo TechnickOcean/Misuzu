@@ -27,13 +27,25 @@ export interface PersistedCTFRuntimeConfig {
 
 export interface PersistedCTFRuntimeQueueTask {
   taskId: string
+  challengeId?: number
+  targetSolverId?: string
   payload: unknown
+  source?: "auto" | "manual"
+  priority?: number
+  createdAt?: number
+  reason?: string
 }
 
 export interface PersistedCTFRuntimeInflightTask {
   solverId: string
   taskId: string
+  challengeId?: number
+  targetSolverId?: string
   payload: unknown
+  source?: "auto" | "manual"
+  priority?: number
+  createdAt?: number
+  reason?: string
 }
 
 export interface PersistedCTFRuntimeQueueState {
@@ -41,6 +53,23 @@ export interface PersistedCTFRuntimeQueueState {
   paused: boolean
   pendingTasks: PersistedCTFRuntimeQueueTask[]
   inflightTasks: PersistedCTFRuntimeInflightTask[]
+}
+
+export interface PersistedCTFRuntimeSchedulerIntent {
+  taskId: string
+  challengeId: number
+  source: "auto" | "manual"
+  priority: number
+  createdAt: number
+  payload: unknown
+  reason?: string
+}
+
+export interface PersistedCTFRuntimeSchedulerState {
+  taskCounter: number
+  autoManaged: boolean
+  paused: boolean
+  pendingIntents: PersistedCTFRuntimeSchedulerIntent[]
 }
 
 export interface PersistedCTFRuntimeManagedChallenge {
@@ -81,6 +110,7 @@ export interface PersistedCTFRuntimeSnapshot {
   platform: PersistedCTFRuntimePlatformState
   sync: PersistedCTFRuntimeSyncState
   queue: PersistedCTFRuntimeQueueState
+  scheduler?: PersistedCTFRuntimeSchedulerState
   solverHub: PersistedCTFRuntimeSolverHubState
 }
 

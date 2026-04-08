@@ -27,6 +27,7 @@ import { useAppServices } from "@/shared/di/app-services.ts"
 
 const runtimeUnsubscribers = new Map<string, () => void>()
 const agentRefreshTimers = new Map<string, number>()
+const snapshotRefreshTimers = new Map<string, number>()
 const activeAgentIds = ref<Record<string, string>>({})
 
 export function useRuntimeWorkspace(workspaceId: string) {
@@ -57,7 +58,12 @@ export function useRuntimeWorkspace(workspaceId: string) {
       return undefined
     }
 
-    return runtimeAgentStateQuery.data.value
+    const state = runtimeAgentStateQuery.data.value
+    if (state && state.agentId !== activeAgentId.value) {
+      return undefined
+    }
+
+    return state
   })
 
   let feedConnected = false
@@ -79,6 +85,7 @@ export function useRuntimeWorkspace(workspaceId: string) {
 
       const refreshKey = `${workspaceId}:${message.payload.agentId}`
       window.clearTimeout(agentRefreshTimers.get(refreshKey))
+      window.clearTimeout(snapshotRefreshTimers.get(workspaceId))
 
       const timerId = window.setTimeout(() => {
         if (activeAgentId.value === message.payload.agentId) {
@@ -86,7 +93,12 @@ export function useRuntimeWorkspace(workspaceId: string) {
         }
       }, 220)
 
+      const snapshotTimerId = window.setTimeout(() => {
+        void runtimeWorkspaceQuery.refetch()
+      }, 220)
+
       agentRefreshTimers.set(refreshKey, timerId)
+      snapshotRefreshTimers.set(workspaceId, snapshotTimerId)
     })
 
     runtimeUnsubscribers.set(workspaceId, unsubscribe)
@@ -150,6 +162,8 @@ export function useRuntimeWorkspace(workspaceId: string) {
 
       runtimeUnsubscribers.get(workspaceId)?.()
       runtimeUnsubscribers.delete(workspaceId)
+      window.clearTimeout(snapshotRefreshTimers.get(workspaceId))
+      snapshotRefreshTimers.delete(workspaceId)
       feedConnected = false
     },
   }

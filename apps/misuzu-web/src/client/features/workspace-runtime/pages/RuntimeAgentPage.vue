@@ -21,6 +21,15 @@ const activeAgentName = computed(() => {
   return snapshot.agents.find((agent) => agent.id === props.agentId)?.name ?? props.agentId
 })
 
+const activeAgentRank = computed(() => {
+  const snapshot = runtime.snapshot.value
+  if (!snapshot) {
+    return undefined
+  }
+
+  return snapshot.challenges.find((c) => c.solverId === props.agentId)?.rank
+})
+
 watch(
   () => props.agentId,
   async (agentId) => {
@@ -40,10 +49,11 @@ async function sendPrompt(payload: { prompt: string; mode: PromptMode }) {
 </script>
 
 <template>
-  <div class="h-full min-h-0">
+  <div class="flex h-full min-h-0 flex-col">
     <AgentChatPanel
       :title="activeAgentName"
       :state="runtime.activeAgentState.value"
+      :rank="activeAgentRank"
       :loading="sendingPrompt"
       @prompt="sendPrompt"
     />

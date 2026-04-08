@@ -57,6 +57,13 @@ interface SolverWorkspaceSession {
   mainAgentUnsubscribe?: () => void
 }
 
+type RuntimePlatformPluginConfigInput = Omit<
+  RuntimePlatformConfig["pluginConfig"],
+  "maxConcurrentContainers"
+> & {
+  maxConcurrentContainers?: number
+}
+
 export class WorkspaceManager {
   private readonly runtimeSessions = new Map<string, RuntimeWorkspaceSession>()
   private readonly solverSessions = new Map<string, SolverWorkspaceSession>()
@@ -391,7 +398,7 @@ export class WorkspaceManager {
   async getRuntimeAgentState(workspaceId: string, agentId: string) {
     const session = await this.requireRuntimeSession(workspaceId)
     const agent = this.resolveRuntimeAgent(session, agentId)
-    return this.toAgentSnapshot(agent)
+    return this.toAgentSnapshot(agent, agentId)
   }
 
   async promptRuntimeAgent(
@@ -406,7 +413,7 @@ export class WorkspaceManager {
     await applyPromptMode(agent, prompt, mode)
     this.publishRuntimeSnapshot(session)
 
-    return this.toAgentSnapshot(agent)
+    return this.toAgentSnapshot(agent, agentId)
   }
 
   async createSolverWorkspace(request: SolverCreateRequest) {
@@ -478,7 +485,7 @@ export class WorkspaceManager {
       throw new Error("Solver workspace has no main agent yet")
     }
 
-    return this.toAgentSnapshot(agent)
+    return this.toAgentSnapshot(agent, "main")
   }
 
   async promptSolver(workspaceId: string, prompt: string, mode: PromptMode = "followup") {
@@ -491,7 +498,7 @@ export class WorkspaceManager {
     await applyPromptMode(agent, prompt, mode)
     this.publishSolverSnapshot(session)
 
-    return this.toAgentSnapshot(agent)
+    return this.toAgentSnapshot(agent, "main")
   }
 
   private async createRuntimeSession(entry: WorkspaceRegistryEntry) {
@@ -879,9 +886,13 @@ export class WorkspaceManager {
     }
   }
 
-  private toAgentSnapshot(agent: EnvironmentAgent | SolverAgent): AgentStateSnapshot {
+  private toAgentSnapshot(
+    agent: EnvironmentAgent | SolverAgent,
+    agentId?: string,
+  ): AgentStateSnapshot {
     const model = agent.state.model
     return {
+      agentId,
       modelId: model ? `${model.provider}/${model.id}` : undefined,
       thinkingLevel: agent.state.thinkingLevel,
       isRunning: Boolean((agent.state as { isRunning?: boolean }).isRunning),
@@ -924,7 +935,7 @@ export class WorkspaceManager {
     runtimeOptions:
       | {
           pluginId?: string
-          pluginConfig?: RuntimePlatformConfig["pluginConfig"]
+          pluginConfig?: RuntimePlatformPluginConfigInput
           cron?: RuntimePlatformConfig["cron"]
         }
       | undefined,
@@ -938,9 +949,18 @@ export class WorkspaceManager {
       return undefined
     }
 
+    const maxConcurrentContainers = runtimeOptions.pluginConfig.maxConcurrentContainers
+    const normalizedMaxConcurrentContainers =
+      typeof maxConcurrentContainers === "number" && Number.isFinite(maxConcurrentContainers)
+        ? Math.max(1, Math.floor(maxConcurrentContainers))
+        : 1
+
     return {
       pluginId,
-      pluginConfig: runtimeOptions.pluginConfig,
+      pluginConfig: {
+        ...runtimeOptions.pluginConfig,
+        maxConcurrentContainers: normalizedMaxConcurrentContainers,
+      },
       cron: runtimeOptions.cron,
     }
   }
@@ -1260,10 +1280,22 @@ async function applyPromptMode(
   prompt: string,
   mode: PromptMode,
 ) {
+  const isRunning = Boolean((agent.state as { isRunning?: boolean }).isRunning)
+
   if (mode === "steer") {
-    agent.steer(prompt)
+    if (isRunning) {
+      agent.steer(prompt)
+      return
+    }
+
+    await Promise.resolve(agent.prompt(prompt))
     return
   }
 
-  await Promise.resolve(agent.followUp(prompt))
+  if (isRunning) {
+    await Promise.resolve(agent.followUp(prompt))
+    return
+  }
+
+  await Promise.resolve(agent.prompt(prompt))
 }

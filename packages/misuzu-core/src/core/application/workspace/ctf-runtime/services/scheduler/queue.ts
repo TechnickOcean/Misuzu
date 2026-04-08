@@ -1,8 +1,20 @@
-import type { PersistedCTFRuntimeQueueState, PersistedCTFRuntimeQueueTask } from "../../state.ts"
+import type { PersistedCTFRuntimeInflightTask, PersistedCTFRuntimeQueueState } from "../../state.ts"
+import { resolveChallengeIdFromTaskPayload } from "../../helpers.ts"
 
 export interface SolverTask {
   taskId: string
   payload: unknown
+}
+
+export interface DispatchTask {
+  taskId: string
+  challengeId: number
+  targetSolverId: string
+  payload: unknown
+  source: "auto" | "manual"
+  priority: number
+  createdAt: number
+  reason?: string
 }
 
 export interface SolverTaskResult {
@@ -27,39 +39,16 @@ export type SolverTaskCancelResult = "pending" | "inflight"
 
 export interface SolverRunner {
   solverId: string
-  prepareTask?(task: SolverTask): SolverTaskDispatchPreparation
   solve(task: SolverTask, context?: unknown): Promise<unknown>
   abortActiveTask?(): void
-}
-
-export type SolverTaskDispatchPreparation =
-  | {
-      status: "ready"
-      context?: unknown
-    }
-  | {
-      status: "deferred"
-      reason?: string
-    }
-
-interface PendingSolverTask {
-  task: SolverTask
-  resolve: (result: SolverTaskResult) => void
-  reject: (error: unknown) => void
 }
 
 type QueueStateChangeListener = () => void
 
 export class QueueService {
   private readonly solverRegistry = new Map<string, SolverRunner>()
-  private readonly pendingTaskQueue: PendingSolverTask[] = []
-  private readonly idleSolverQueue: string[] = []
-  private readonly busySolverIds = new Set<string>()
-  private readonly inflightTasks = new Map<string, SolverTask>()
-  private readonly deferredTaskIds = new Set<string>()
-  private readonly pausedAbortRetryTaskIds = new Set<string>()
-  private taskSequence = 0
-  private paused = false
+  private readonly inflightTasksBySolver = new Map<string, DispatchTask>()
+  private readonly inflightTasksByTaskId = new Map<string, DispatchTask>()
   private onStateChanged: QueueStateChangeListener = () => {}
 
   setStateChangeListener(listener: QueueStateChangeListener) {
@@ -72,117 +61,86 @@ export class QueueService {
     }
 
     this.solverRegistry.set(solver.solverId, solver)
-    this.idleSolverQueue.push(solver.solverId)
     this.notifyStateChanged()
-    this.scheduleDispatch()
   }
 
   unregisterSolver(solverId: string) {
     this.solverRegistry.delete(solverId)
 
-    const solverIndex = this.idleSolverQueue.indexOf(solverId)
-    if (solverIndex >= 0) {
-      this.idleSolverQueue.splice(solverIndex, 1)
-    }
-
-    this.busySolverIds.delete(solverId)
-
-    const inflightTask = this.inflightTasks.get(solverId)
+    const inflightTask = this.inflightTasksBySolver.get(solverId)
     if (inflightTask) {
-      this.pausedAbortRetryTaskIds.delete(inflightTask.taskId)
+      this.inflightTasksBySolver.delete(solverId)
+      this.inflightTasksByTaskId.delete(inflightTask.taskId)
     }
 
-    this.inflightTasks.delete(solverId)
     this.notifyStateChanged()
   }
 
-  enqueueTask(payload: unknown, taskId = this.nextTaskId()) {
-    const task: SolverTask = { taskId, payload }
-
-    return new Promise<SolverTaskResult>((resolve, reject) => {
-      this.pendingTaskQueue.push({ task, resolve, reject })
-      this.deferredTaskIds.delete(task.taskId)
-      this.notifyStateChanged()
-      this.scheduleDispatch()
-    })
-  }
-
-  wake() {
-    this.scheduleDispatch()
-  }
-
-  pause() {
-    if (this.paused) {
-      return
+  runTask(task: DispatchTask, context?: unknown) {
+    const solver = this.solverRegistry.get(task.targetSolverId)
+    if (!solver) {
+      throw new Error(`Cannot execute task ${task.taskId}: solver is not registered`)
     }
 
-    this.paused = true
-    this.markRunningTasksForPauseRetry()
-    this.abortRunningTasks()
-    this.notifyStateChanged()
-  }
-
-  resume() {
-    if (!this.paused) {
-      return
+    if (this.inflightTasksByTaskId.has(task.taskId)) {
+      throw new Error(`Cannot execute task ${task.taskId}: task is already inflight`)
     }
 
-    this.paused = false
-    this.notifyStateChanged()
-    this.scheduleDispatch()
-  }
-
-  isPaused() {
-    return this.paused
-  }
-
-  restoreState(state: PersistedCTFRuntimeQueueState | undefined) {
-    if (!state) {
-      return
+    if (this.inflightTasksBySolver.has(task.targetSolverId)) {
+      throw new Error(`Cannot execute task ${task.taskId}: solver is already busy`)
     }
 
-    this.taskSequence = Number.isFinite(state.taskSequence)
-      ? Math.max(0, Math.floor(state.taskSequence))
-      : 0
-    this.paused = typeof state.paused === "boolean" ? state.paused : false
-
-    this.pendingTaskQueue.length = 0
-    this.inflightTasks.clear()
-    this.deferredTaskIds.clear()
-    this.enqueueRestoredTasks(state)
-
+    this.inflightTasksBySolver.set(task.targetSolverId, task)
+    this.inflightTasksByTaskId.set(task.taskId, task)
     this.notifyStateChanged()
-    this.scheduleDispatch()
+
+    return Promise.resolve(
+      solver.solve(
+        {
+          taskId: task.taskId,
+          payload: task.payload,
+        },
+        context,
+      ),
+    )
+      .then((output) => {
+        this.releaseTask(task)
+        return {
+          taskId: task.taskId,
+          solverId: task.targetSolverId,
+          output,
+        } satisfies SolverTaskResult
+      })
+      .catch((error) => {
+        this.releaseTask(task)
+        throw error
+      })
   }
 
   snapshotState(): PersistedCTFRuntimeQueueState {
     return {
-      taskSequence: this.taskSequence,
-      paused: this.paused,
-      pendingTasks: this.pendingTaskQueue.map((pendingTask) => ({
-        taskId: pendingTask.task.taskId,
-        payload: pendingTask.task.payload,
-      })),
-      inflightTasks: [...this.inflightTasks.entries()].map(([solverId, task]) => ({
-        solverId,
-        taskId: task.taskId,
-        payload: task.payload,
-      })),
+      taskSequence: 0,
+      paused: false,
+      pendingTasks: [],
+      inflightTasks: [...this.inflightTasksByTaskId.values()].map((task) =>
+        this.toPersistedInflightTask(task),
+      ),
     }
   }
 
   getState() {
     return {
-      paused: this.paused,
-      pendingTaskCount: this.pendingTaskQueue.length,
-      idleSolverCount: this.idleSolverQueue.length,
-      busySolverCount: this.busySolverIds.size,
+      paused: false,
+      pendingTaskCount: 0,
+      idleSolverCount: this.solverRegistry.size - this.inflightTasksBySolver.size,
+      busySolverCount: this.inflightTasksBySolver.size,
       registeredSolverCount: this.solverRegistry.size,
+      inflightTaskCount: this.inflightTasksByTaskId.size,
     }
   }
 
   getSolverExecutionState(solverId: string): SolverExecutionState {
-    const activeTask = this.inflightTasks.get(solverId)
+    const activeTask = this.inflightTasksBySolver.get(solverId)
 
     if (!activeTask) {
       return { active: false }
@@ -195,280 +153,101 @@ export class QueueService {
   }
 
   listPendingTasks() {
-    return this.pendingTaskQueue.map((pendingTask) => ({
-      taskId: pendingTask.task.taskId,
-      payload: pendingTask.task.payload,
-    }))
+    return []
   }
 
   listInflightTasks() {
-    return [...this.inflightTasks.entries()].map(([solverId, task]) => ({
-      solverId,
+    return [...this.inflightTasksByTaskId.values()].map((task) => ({
+      solverId: task.targetSolverId,
       task: {
         taskId: task.taskId,
         payload: task.payload,
       },
+      dispatch: { ...task },
     }))
   }
 
+  listInflightDispatchTasks() {
+    return [...this.inflightTasksByTaskId.values()].map((task) => ({ ...task }))
+  }
+
+  hasSolver(solverId: string) {
+    return this.solverRegistry.has(solverId)
+  }
+
   cancelTask(taskId: string): SolverTaskCancelResult | undefined {
-    const pendingTaskIndex = this.pendingTaskQueue.findIndex(
-      (entry) => entry.task.taskId === taskId,
-    )
-    if (pendingTaskIndex >= 0) {
-      const [removedTask] = this.pendingTaskQueue.splice(pendingTaskIndex, 1)
-      this.deferredTaskIds.delete(taskId)
-      removedTask?.reject(new Error(`Task cancelled: ${taskId}`))
-      this.notifyStateChanged()
-      return "pending"
-    }
-
-    for (const [solverId, task] of this.inflightTasks.entries()) {
-      if (task.taskId !== taskId) {
-        continue
-      }
-
-      this.pausedAbortRetryTaskIds.delete(taskId)
-      this.solverRegistry.get(solverId)?.abortActiveTask?.()
-      return "inflight"
-    }
-
-    return undefined
-  }
-
-  private nextTaskId() {
-    this.taskSequence += 1
-    return `task-${this.taskSequence}`
-  }
-
-  private scheduleDispatch() {
-    while (this.dispatchNextTask()) {
-      // keep dispatching until no task/solver pair is available
-    }
-  }
-
-  private dispatchNextTask() {
-    if (this.paused) {
-      return false
-    }
-
-    const pendingTask = this.takeNextDispatchableTask()
-    if (!pendingTask) {
-      return false
-    }
-
-    const idleSolverCount = this.idleSolverQueue.length
-    if (idleSolverCount <= 0) {
-      this.pendingTaskQueue.unshift(pendingTask)
-      return false
-    }
-
-    const deferredSolverIds: string[] = []
-
-    for (let attempt = 0; attempt < idleSolverCount; attempt += 1) {
-      const solverId = this.idleSolverQueue.shift()
-      if (!solverId) {
-        break
-      }
-
-      const solver = this.solverRegistry.get(solverId)
-      if (!solver) {
-        continue
-      }
-
-      let preparation: SolverTaskDispatchPreparation
-      try {
-        preparation = this.prepareSolverTaskDispatch(solver, pendingTask.task)
-      } catch (error) {
-        this.idleSolverQueue.push(...deferredSolverIds)
-        this.idleSolverQueue.push(solverId)
-        pendingTask.reject(error)
-        this.notifyStateChanged()
-        return this.pendingTaskQueue.length > 0 && this.idleSolverQueue.length > 0
-      }
-
-      if (preparation.status === "deferred") {
-        deferredSolverIds.push(solverId)
-        continue
-      }
-
-      this.idleSolverQueue.push(...deferredSolverIds)
-      this.markTaskInflight(solverId, pendingTask.task)
-      this.runTaskOnSolver(solver, solverId, pendingTask, preparation.context)
-      return this.pendingTaskQueue.length > 0 && this.idleSolverQueue.length > 0
-    }
-
-    this.idleSolverQueue.push(...deferredSolverIds)
-    this.pendingTaskQueue.unshift(pendingTask)
-    return false
-  }
-
-  private prepareSolverTaskDispatch(
-    solver: SolverRunner,
-    task: SolverTask,
-  ): SolverTaskDispatchPreparation {
-    if (!solver.prepareTask) {
-      return { status: "ready" }
-    }
-
-    try {
-      return solver.prepareTask(task)
-    } catch (error) {
-      if (isSolverDispatchDeferredError(error)) {
-        return {
-          status: "deferred",
-          reason: error.message,
-        }
-      }
-
-      throw error
-    }
-  }
-
-  private takeNextDispatchableTask() {
-    if (this.pendingTaskQueue.length === 0) {
+    const inflightTask = this.inflightTasksByTaskId.get(taskId)
+    if (!inflightTask) {
       return undefined
     }
 
-    let deferredSeen = 0
-    const queueLength = this.pendingTaskQueue.length
-    while (deferredSeen < queueLength) {
-      const candidate = this.pendingTaskQueue.shift()
-      if (!candidate) {
-        break
-      }
+    this.solverRegistry.get(inflightTask.targetSolverId)?.abortActiveTask?.()
+    return "inflight"
+  }
 
-      if (!this.deferredTaskIds.has(candidate.task.taskId)) {
-        return candidate
-      }
-
-      this.pendingTaskQueue.push(candidate)
-      deferredSeen += 1
+  restoreQueueTasksAsPendingTasks(state: PersistedCTFRuntimeQueueState | undefined) {
+    if (!state) {
+      return []
     }
 
-    if (deferredSeen > 0) {
-      this.deferredTaskIds.clear()
-    }
-
-    return undefined
+    return [...state.inflightTasks, ...state.pendingTasks]
+      .map((task) => ({
+        task,
+        challengeId: task.challengeId ?? resolveChallengeIdFromTaskPayload(task.payload),
+        targetSolverId:
+          task.targetSolverId ??
+          ("solverId" in task && typeof task.solverId === "string" ? task.solverId : undefined),
+      }))
+      .filter(
+        (entry) => Number.isFinite(entry.challengeId) && typeof entry.targetSolverId === "string",
+      )
+      .map(
+        (task) =>
+          ({
+            taskId: task.task.taskId,
+            challengeId: task.challengeId!,
+            targetSolverId: task.targetSolverId!,
+            payload: task.task.payload,
+            source: task.task.source ?? "manual",
+            priority: task.task.priority ?? 0,
+            createdAt: task.task.createdAt ?? Date.now(),
+            reason: task.task.reason,
+          }) satisfies DispatchTask,
+      )
   }
 
-  private markTaskInflight(solverId: string, task: SolverTask) {
-    this.deferredTaskIds.delete(task.taskId)
-    this.busySolverIds.add(solverId)
-    this.inflightTasks.set(solverId, task)
-    this.notifyStateChanged()
-  }
-
-  private runTaskOnSolver(
-    solver: SolverRunner,
-    solverId: string,
-    pendingTask: PendingSolverTask,
-    context?: unknown,
-  ) {
-    void Promise.resolve(solver.solve(pendingTask.task, context))
-      .then((output) => {
-        this.pausedAbortRetryTaskIds.delete(pendingTask.task.taskId)
-        this.releaseSolver(solverId)
-        this.scheduleDispatch()
-
-        pendingTask.resolve({
-          taskId: pendingTask.task.taskId,
-          solverId,
-          output,
-        })
-      })
-      .catch((error) => {
-        this.releaseSolver(solverId)
-
-        if (isSolverDispatchDeferredError(error)) {
-          this.deferredTaskIds.add(pendingTask.task.taskId)
-          this.pendingTaskQueue.push(pendingTask)
-          this.notifyStateChanged()
-          this.scheduleDispatch()
-          return
-        }
-
-        if (this.pausedAbortRetryTaskIds.delete(pendingTask.task.taskId)) {
-          this.deferredTaskIds.delete(pendingTask.task.taskId)
-          this.pendingTaskQueue.push(pendingTask)
-          this.notifyStateChanged()
-          this.scheduleDispatch()
-          return
-        }
-
-        this.scheduleDispatch()
-        pendingTask.reject(error)
-      })
-  }
-
-  private markRunningTasksForPauseRetry() {
-    for (const task of this.inflightTasks.values()) {
-      this.pausedAbortRetryTaskIds.add(task.taskId)
+  abortAllRunningTasks() {
+    for (const task of this.inflightTasksByTaskId.values()) {
+      this.solverRegistry.get(task.targetSolverId)?.abortActiveTask?.()
     }
   }
 
-  private releaseSolver(solverId: string) {
-    this.busySolverIds.delete(solverId)
-    this.inflightTasks.delete(solverId)
-
-    if (this.solverRegistry.has(solverId)) {
-      this.idleSolverQueue.push(solverId)
-    }
-
-    this.notifyStateChanged()
-  }
-
-  private enqueueRestoredTasks(state: PersistedCTFRuntimeQueueState) {
-    const seenTaskIds = new Set<string>()
-
-    // Inflight tasks are re-queued because completion cannot be trusted across restarts.
-    for (const task of state.inflightTasks) {
-      this.enqueueRestoredTaskIfNeeded(seenTaskIds, {
-        taskId: task.taskId,
-        payload: task.payload,
-      })
-    }
-
-    for (const task of state.pendingTasks) {
-      this.enqueueRestoredTaskIfNeeded(seenTaskIds, task)
-    }
-  }
-
-  private enqueueRestoredTaskIfNeeded(
-    seenTaskIds: Set<string>,
-    task: PersistedCTFRuntimeQueueTask,
-  ) {
-    if (seenTaskIds.has(task.taskId)) {
+  private releaseTask(task: DispatchTask) {
+    const existing = this.inflightTasksByTaskId.get(task.taskId)
+    if (!existing) {
       return
     }
 
-    seenTaskIds.add(task.taskId)
-    this.enqueueRestoredTask(task)
+    this.inflightTasksByTaskId.delete(task.taskId)
+    this.inflightTasksBySolver.delete(task.targetSolverId)
+    this.notifyStateChanged()
   }
 
-  private enqueueRestoredTask(task: PersistedCTFRuntimeQueueTask) {
-    this.pendingTaskQueue.push({
-      task: {
-        taskId: task.taskId,
-        payload: task.payload,
-      },
-      resolve: () => {},
-      reject: () => {},
-    })
-  }
-
-  private abortRunningTasks() {
-    for (const solverId of this.busySolverIds) {
-      this.solverRegistry.get(solverId)?.abortActiveTask?.()
+  private toPersistedInflightTask(task: DispatchTask): PersistedCTFRuntimeInflightTask {
+    return {
+      taskId: task.taskId,
+      payload: task.payload,
+      solverId: task.targetSolverId,
+      challengeId: task.challengeId,
+      targetSolverId: task.targetSolverId,
+      source: task.source,
+      priority: task.priority,
+      createdAt: task.createdAt,
+      reason: task.reason,
     }
   }
 
   private notifyStateChanged() {
     this.onStateChanged()
   }
-}
-
-function isSolverDispatchDeferredError(error: unknown): error is SolverDispatchDeferredError {
-  return error instanceof SolverDispatchDeferredError
 }

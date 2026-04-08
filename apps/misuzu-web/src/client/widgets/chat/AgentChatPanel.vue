@@ -28,12 +28,14 @@ const props = withDefaults(
   defineProps<{
     title: string
     state?: AgentStateSnapshot
+    rank?: number
     loading?: boolean
     compact?: boolean
     defaultPromptMode?: PromptMode
   }>(),
   {
     state: undefined,
+    rank: undefined,
     loading: false,
     compact: false,
     defaultPromptMode: "followup",
@@ -50,6 +52,7 @@ const visibleMessageCount = ref(MESSAGE_PAGE_SIZE)
 const scrollContainer = ref<HTMLElement>()
 const loadingOlderMessages = ref(false)
 const stickToBottom = ref(true)
+const currentAgentKey = computed(() => props.state?.agentId ?? props.title)
 let detachViewportListener: (() => void) | undefined
 
 const allMessages = computed(() => props.state?.messages ?? [])
@@ -394,13 +397,9 @@ watch(scrollContainer, async () => {
 })
 
 watch(
-  () => props.state,
-  async (nextState, previousState) => {
-    if (!nextState) {
-      return
-    }
-
-    if (previousState && nextState === previousState) {
+  () => currentAgentKey.value,
+  async (nextAgentKey, previousAgentKey) => {
+    if (!nextAgentKey || nextAgentKey === previousAgentKey) {
       return
     }
 
@@ -411,6 +410,23 @@ watch(
     await scrollToBottomSoon()
   },
   { immediate: true },
+)
+
+watch(
+  () => props.state,
+  async (nextState) => {
+    if (!nextState) {
+      return
+    }
+
+    if (nextState.messages.length === 0) {
+      visibleMessageCount.value = MESSAGE_PAGE_SIZE
+      stickToBottom.value = true
+      await nextTick()
+      bindViewportListener()
+      await scrollToBottomSoon()
+    }
+  },
 )
 
 watch(
@@ -435,17 +451,20 @@ watch(
 </script>
 
 <template>
-  <div class="flex min-h-0 max-h-[calc(100dvh-4rem)] flex-col gap-2 overflow-scroll">
+  <div class="flex h-full min-h-0 flex-col gap-2 overflow-hidden">
     <div
-      class="mx-auto flex w-full items-center justify-between px-1 text-xs text-muted-foreground xl:max-w-[50vw]"
+      class="mx-auto flex w-full items-center justify-between px-1 pt-1 text-xs text-muted-foreground xl:max-w-[50vw]"
     >
-      <span>Model: {{ state?.modelId ?? "Not selected" }}</span>
+      <div class="flex items-center gap-4">
+        <span>Model: {{ state?.modelId ?? "Not selected" }}</span>
+        <span v-if="typeof rank === 'number'">Rank: {{ Math.round(rank) }}</span>
+      </div>
       <span>Messages: {{ state?.messages.length ?? 0 }}</span>
     </div>
 
-    <div ref="scrollContainer" class="min-h-0 flex-1">
-      <ScrollArea class="h-full rounded-xl bg-card/80 px-3 py-2">
-        <div class="mx-auto grid w-full gap-3 pb-5 pt-2 text-left xl:max-w-[50vw]">
+    <div ref="scrollContainer" class="min-h-0 flex-1 overflow-hidden">
+      <ScrollArea class="h-full bg-card px-3 py-2 shadow-sm">
+        <div class="mx-auto grid w-full gap-3 pb-3 pt-2 text-left xl:max-w-[50vw]">
           <div v-if="loadingOlderMessages" class="space-y-4 px-3 py-2">
             <div class="flex flex-col gap-2">
               <Skeleton class="h-4 w-[150px]" />
@@ -578,11 +597,13 @@ watch(
     </div>
 
     <form
-      class="mx-auto w-full shrink-0 px-2 pb-2 pt-1 xl:max-w-[50vw]"
+      class="sticky bottom-0 z-10 mx-auto w-full shrink-0 pb-2 xl:max-w-[50vw]"
       @submit.prevent="submitPrompt"
     >
-      <div class="mx-auto w-full">
-        <InputGroup class="h-auto rounded-2xl">
+      <div
+        class="mx-auto w-full rounded-2xl border border-border/80 bg-background/95 p-2 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-background/85"
+      >
+        <InputGroup class="h-auto rounded-xl bg-card/95">
           <InputGroupTextarea
             v-model="promptInput"
             :rows="compact ? 1 : 2"

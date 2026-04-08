@@ -84,6 +84,7 @@ export interface RuntimeCreateRequest {
       authCheckUrl?: string
       timeoutSec?: number
     }
+    maxConcurrentContainers: number
   }
   modelPool: ModelPoolInput[]
   autoOrchestrate?: boolean
@@ -169,6 +170,7 @@ export interface AgentMessageToolPart {
 export type AgentMessagePart = AgentMessageTextPart | AgentMessageToolPart
 
 export interface AgentStateSnapshot {
+  agentId?: string
   modelId?: string
   thinkingLevel?: string
   isRunning: boolean

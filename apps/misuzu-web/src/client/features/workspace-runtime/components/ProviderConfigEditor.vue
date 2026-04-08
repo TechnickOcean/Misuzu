@@ -128,20 +128,47 @@ function setMappingsText(index: number, value: string | number) {
 </script>
 
 <template>
-  <div class="space-y-3">
+  <div class="space-y-4">
     <article
       v-for="(entry, index) in rows"
       :key="`${entry.provider}-${String(index)}`"
-      class="space-y-3 rounded-md border p-3"
+      class="relative space-y-4 rounded-lg border bg-card p-4 pt-5 shadow-sm transition-all focus-within:ring-1 focus-within:ring-ring"
     >
-      <div class="grid gap-3 md:grid-cols-3">
+      <div class="absolute right-2 top-2">
+        <Button
+          variant="ghost"
+          size="icon"
+          class="size-7 text-muted-foreground hover:text-destructive"
+          type="button"
+          :disabled="disabled"
+          @click="removeEntry(index)"
+          title="Remove provider"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </Button>
+      </div>
+
+      <div class="grid gap-4 md:grid-cols-3">
         <div class="grid gap-2">
-          <label class="text-sm font-medium">Provider</label>
+          <label class="text-sm font-medium">Provider Name</label>
           <Input
             :model-value="entry.provider"
             :disabled="disabled"
             list="provider-config-provider-options"
-            placeholder="openai"
+            placeholder="e.g. openai"
             @update:model-value="(value) => patchEntry(index, { provider: String(value) })"
           />
         </div>
@@ -162,8 +189,39 @@ function setMappingsText(index: number, value: string | number) {
           </Select>
         </div>
 
+        <template v-if="getEntryMode(entry) === 'proxy'">
+          <div class="grid gap-2">
+            <label class="text-sm font-medium">Base Provider</label>
+            <Input
+              :model-value="entry.baseProvider"
+              :disabled="disabled"
+              list="provider-config-provider-options"
+              placeholder="e.g. openai"
+              @update:model-value="(value) => patchEntry(index, { baseProvider: String(value) })"
+            />
+          </div>
+        </template>
+      </div>
+
+      <template v-if="getEntryMode(entry) === 'proxy'">
         <div class="grid gap-2">
-          <label class="text-sm font-medium">API Key (api_key)</label>
+          <label class="text-sm font-medium"
+            >Base URL <span class="text-muted-foreground font-normal ml-1">(Optional)</span></label
+          >
+          <Input
+            :model-value="entry.baseUrl"
+            :disabled="disabled"
+            placeholder="https://proxy.example.com/v1"
+            @update:model-value="(value) => patchEntry(index, { baseUrl: String(value) })"
+          />
+        </div>
+      </template>
+
+      <div class="grid gap-4 md:grid-cols-2">
+        <div class="grid gap-2">
+          <label class="text-sm font-medium"
+            >API Key <span class="text-muted-foreground font-normal ml-1">(Optional)</span></label
+          >
           <Input
             :model-value="entry.api_key"
             :disabled="disabled"
@@ -174,7 +232,10 @@ function setMappingsText(index: number, value: string | number) {
         </div>
 
         <div class="grid gap-2">
-          <label class="text-sm font-medium">API Key Env Var</label>
+          <label class="text-sm font-medium"
+            >Env Variable
+            <span class="text-muted-foreground font-normal ml-1">(Optional)</span></label
+          >
           <Input
             :model-value="entry.apiKeyEnvVar"
             :disabled="disabled"
@@ -182,57 +243,32 @@ function setMappingsText(index: number, value: string | number) {
             @update:model-value="(value) => patchEntry(index, { apiKeyEnvVar: String(value) })"
           />
         </div>
-
-        <template v-if="getEntryMode(entry) === 'proxy'">
-          <div class="grid gap-2">
-            <label class="text-sm font-medium">Base Provider</label>
-            <Input
-              :model-value="entry.baseProvider"
-              :disabled="disabled"
-              list="provider-config-provider-options"
-              placeholder="openai"
-              @update:model-value="(value) => patchEntry(index, { baseProvider: String(value) })"
-            />
-          </div>
-
-          <div class="grid gap-2 md:col-span-2">
-            <label class="text-sm font-medium">Base URL</label>
-            <Input
-              :model-value="entry.baseUrl"
-              :disabled="disabled"
-              placeholder="https://proxy.example.com/v1"
-              @update:model-value="(value) => patchEntry(index, { baseUrl: String(value) })"
-            />
-          </div>
-
-          <div class="grid gap-2 md:col-span-3">
-            <label class="text-sm font-medium">Model Mappings</label>
-            <Input
-              :model-value="getMappingsText(entry)"
-              :disabled="disabled"
-              placeholder="gpt-4.1,gpt-4o:gpt-4o-mini"
-              @update:model-value="(value) => setMappingsText(index, value)"
-            />
-            <p class="text-xs text-muted-foreground">
-              Use comma separated values. You can map with <code>source:target</code>.
-            </p>
-          </div>
-        </template>
       </div>
 
-      <div class="flex justify-end">
-        <Button variant="ghost" type="button" :disabled="disabled" @click="removeEntry(index)">
-          Remove
-        </Button>
-      </div>
+      <template v-if="getEntryMode(entry) === 'proxy'">
+        <div class="grid gap-2">
+          <label class="text-sm font-medium flex items-center justify-between">
+            <span>Model Mappings</span>
+            <span class="text-xs text-muted-foreground font-normal"
+              >Use comma separated values. Map with <code>source:target</code></span
+            >
+          </label>
+          <Input
+            :model-value="getMappingsText(entry)"
+            :disabled="disabled"
+            placeholder="gpt-4.1, gpt-4o:gpt-4o-mini"
+            @update:model-value="(value) => setMappingsText(index, value)"
+          />
+        </div>
+      </template>
     </article>
 
-    <Button variant="outline" type="button" :disabled="disabled" @click="addEntry">
-      Add Provider Entry
-    </Button>
-
     <datalist id="provider-config-provider-options">
-      <option v-for="provider in providerOptions" :key="provider" :value="provider" />
+      <option v-for="option in providerOptions" :key="option" :value="option"></option>
     </datalist>
+
+    <Button type="button" variant="outline" :disabled="disabled" @click="addEntry">
+      Add Provider
+    </Button>
   </div>
 </template>

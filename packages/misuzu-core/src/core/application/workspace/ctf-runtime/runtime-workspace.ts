@@ -128,6 +128,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     this.queue.setStateChangeListener(() => {
       this.scheduleRuntimeStatePersist()
       this.notifyRuntimeStateChanged()
+      this.rankOrchestrator.scheduleRebalance()
     })
     this.solverHub.setStateChangeListener(() => {
       this.scheduleRuntimeStatePersist()
@@ -187,7 +188,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
   async setModelPoolItems(items: ModelPoolItem[]) {
     await this.modelPool.setItems(items)
     await this.solverHub.refreshUnassignedSolvers()
-    this.queue.wake()
+    this.rankOrchestrator.scheduleRebalance(true)
   }
 
   async deriveSolverWorkspace(solverId: string) {
@@ -273,6 +274,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     const restoreSnapshot = this.getMatchingPendingRuntimeSnapshot(options)
     this.restoreSolverHubFromSnapshot(restoreSnapshot)
     this.restoreQueueFromSnapshot(restoreSnapshot)
+    this.restoreSchedulerFromSnapshot(restoreSnapshot)
     this.applyRuntimeDispatchPreference(options.startPaused)
 
     await this.orchestrator.initialize(
@@ -310,23 +312,88 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
   }
 
   enqueueTask(payload: unknown, taskId?: string) {
-    return this.queue.enqueueTask(payload, taskId)
+    return this.rankOrchestrator.enqueueTask(payload, taskId)
   }
 
   getSchedulerState() {
     return this.queue.getState()
   }
 
+  getDispatchLimits() {
+    return {
+      maxConcurrentContainers: this.resolveMaxConcurrentContainers(),
+    }
+  }
+
   listPendingSchedulerTasks() {
-    return this.queue.listPendingTasks()
+    return this.rankOrchestrator.listPendingIntentsSnapshot().map((intent) => ({
+      taskId: intent.taskId,
+      payload: intent.payload,
+      challengeId: intent.challengeId,
+      source: intent.source,
+      priority: intent.priority,
+    }))
   }
 
   listInflightSchedulerTasks() {
     return this.queue.listInflightTasks()
   }
 
-  cancelSchedulerTask(taskId: string): SolverTaskCancelResult | undefined {
+  listInflightDispatchTasks() {
+    return this.queue.listInflightDispatchTasks()
+  }
+
+  runDispatchTask(task: {
+    taskId: string
+    challengeId: number
+    targetSolverId: string
+    payload: unknown
+    source: "auto" | "manual"
+    priority: number
+    createdAt: number
+    reason?: string
+  }) {
+    const binding = this.solverHub.getChallengeBinding(task.challengeId)
+    if (!binding || binding.solverId !== task.targetSolverId) {
+      throw new Error(
+        `Dispatch assignment mismatch for task ${task.taskId}: solver ${task.targetSolverId} is not bound to challenge ${String(task.challengeId)}`,
+      )
+    }
+
+    const preferredModel = binding.solver?.state.model
+      ? {
+          provider: binding.solver.state.model.provider,
+          modelId: binding.solver.state.model.id,
+        }
+      : undefined
+
+    let modelLease
+    try {
+      modelLease = this.modelPool.acquire(preferredModel)
+    } catch {
+      modelLease = this.modelPool.acquire()
+    }
+
+    try {
+      return this.queue.runTask(task, {
+        modelLease,
+      })
+    } catch (error) {
+      modelLease.release()
+      throw error
+    }
+  }
+
+  cancelInflightTask(taskId: string): SolverTaskCancelResult | undefined {
     return this.queue.cancelTask(taskId)
+  }
+
+  abortAllRunningTasks() {
+    this.queue.abortAllRunningTasks()
+  }
+
+  cancelSchedulerTask(taskId: string): SolverTaskCancelResult | undefined {
+    return this.rankOrchestrator.cancelTask(taskId)
   }
 
   resetChallengeSolver(challengeId: number) {
@@ -335,15 +402,15 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
 
   pauseTaskDispatch() {
     this.rankOrchestrator.setDispatchAutoManaged(false)
-    this.queue.pause()
+    this.rankOrchestrator.setDispatchPaused(true)
   }
 
   resumeTaskDispatch() {
-    this.queue.resume()
+    this.rankOrchestrator.setDispatchPaused(false)
   }
 
   isTaskDispatchPaused() {
-    return this.queue.isPaused()
+    return this.rankOrchestrator.isDispatchPaused()
   }
 
   setAutoDispatchManaged(enabled: boolean) {
@@ -495,6 +562,7 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
         noticeCursor: this.solverHub.getNoticeCursor(),
       },
       queue: this.queue.snapshotState(),
+      scheduler: this.rankOrchestrator.snapshotState(),
       solverHub: this.solverHub.snapshotState(),
     }
   }
@@ -613,7 +681,50 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
       return
     }
 
-    this.queue.restoreState(this.filterRestoredQueueState(snapshot.queue))
+    const filteredQueueState = this.filterRestoredQueueState(snapshot.queue)
+    const restoredQueueTasks = this.queue.restoreQueueTasksAsPendingTasks(filteredQueueState)
+    if (restoredQueueTasks.length <= 0) {
+      return
+    }
+
+    this.rankOrchestrator.restorePendingIntents(
+      restoredQueueTasks.map((task) => ({
+        taskId: task.taskId,
+        challengeId: task.challengeId,
+        source: task.source,
+        priority: task.priority,
+        createdAt: task.createdAt,
+        payload: task.payload,
+        reason: task.reason,
+      })),
+    )
+  }
+
+  private restoreSchedulerFromSnapshot(snapshot: PersistedCTFRuntimeSnapshot | undefined) {
+    if (!snapshot?.scheduler) {
+      return
+    }
+
+    const restoredTaskBudget = this.resolveRestoredTaskBudget()
+    let remainingBudget = restoredTaskBudget
+    const filteredPendingIntents = snapshot.scheduler.pendingIntents.filter((intent) => {
+      if (remainingBudget <= 0) {
+        return false
+      }
+
+      const challengeId = resolveChallengeIdFromTaskPayload(intent.payload)
+      if (challengeId !== undefined && this.solverHub.isChallengeSolved(challengeId)) {
+        return false
+      }
+
+      remainingBudget -= 1
+      return true
+    })
+
+    this.rankOrchestrator.restoreState({
+      ...snapshot.scheduler,
+      pendingIntents: filteredPendingIntents,
+    })
   }
 
   private restoreSolverHubFromSnapshot(snapshot: PersistedCTFRuntimeSnapshot | undefined) {
@@ -670,6 +781,15 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     return Math.max(1, Math.floor(modelCapacity))
   }
 
+  private resolveMaxConcurrentContainers() {
+    const maxConcurrentContainers = this.runtimeConfig?.pluginConfig.maxConcurrentContainers
+    if (typeof maxConcurrentContainers !== "number" || !Number.isFinite(maxConcurrentContainers)) {
+      return Number.POSITIVE_INFINITY
+    }
+
+    return Math.max(1, Math.floor(maxConcurrentContainers))
+  }
+
   private buildRuntimeRestoreContext(
     snapshot: PersistedCTFRuntimeSnapshot | undefined,
   ): RuntimeRestoreContext {
@@ -700,12 +820,12 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
 
   private applyRuntimeDispatchPreference(startPaused: boolean | undefined) {
     if (startPaused === true) {
-      this.queue.pause()
+      this.rankOrchestrator.setDispatchPaused(true)
       return
     }
 
     if (startPaused === false) {
-      this.queue.resume()
+      this.rankOrchestrator.setDispatchPaused(false)
     }
   }
 

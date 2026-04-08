@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, test } from "vite-plus/test"
@@ -19,29 +19,41 @@ afterEach(async () => {
   )
 })
 
+async function writeProviderConfig(
+  providerConfigPath: string,
+  provider: string,
+  sourceModelId: string,
+) {
+  await mkdir(join(providerConfigPath, ".."), { recursive: true })
+  await writeFile(
+    providerConfigPath,
+    JSON.stringify(
+      [
+        {
+          provider,
+          baseProvider: "openai",
+          modelMappings: [sourceModelId],
+        },
+      ],
+      null,
+      2,
+    ),
+    "utf-8",
+  )
+}
+
 describe("ctf runtime providers", () => {
-  test("bootstraps provider config once", async () => {
+  test("bootstraps provider config only once until explicit reload", async () => {
     const sourceModel = getModels("openai")[0]
     expect(sourceModel).toBeDefined()
 
     const rootDir = await createRuntimeWorkspaceDir()
     const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
 
-    await mkdir(workspace.markerDir, { recursive: true })
-    await writeFile(
+    await writeProviderConfig(
       workspace.providerConfigPath,
-      JSON.stringify(
-        [
-          {
-            provider: `ctf-proxy-${Date.now()}`,
-            baseProvider: "openai",
-            modelMappings: [sourceModel!.id],
-          },
-        ],
-        null,
-        2,
-      ),
-      "utf-8",
+      `ctf-proxy-${Date.now()}`,
+      sourceModel!.id,
     )
 
     const firstLoad = workspace.bootstrapProviders()
@@ -49,5 +61,33 @@ describe("ctf runtime providers", () => {
 
     expect(firstLoad.length).toBe(1)
     expect(secondLoad.length).toBe(0)
+    await workspace.shutdown()
+  })
+
+  test("reloads providers after settings update", async () => {
+    const sourceModel = getModels("openai")[0]
+    expect(sourceModel).toBeDefined()
+
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+    const initialProvider = "ctf-provider-initial"
+    const updatedProvider = "ctf-provider-updated"
+
+    await writeProviderConfig(workspace.providerConfigPath, initialProvider, sourceModel!.id)
+    workspace.bootstrapProviders()
+
+    expect(workspace.getModel(initialProvider, sourceModel!.id)).toBeDefined()
+    expect(
+      workspace.listModelPoolCatalog().some((entry) => entry.provider === updatedProvider),
+    ).toBe(false)
+
+    await writeProviderConfig(workspace.providerConfigPath, updatedProvider, sourceModel!.id)
+    workspace.reloadProviderConfig()
+
+    expect(workspace.getModel(updatedProvider, sourceModel!.id)).toBeDefined()
+    expect(
+      workspace.listModelPoolCatalog().some((entry) => entry.provider === updatedProvider),
+    ).toBe(true)
+    await workspace.shutdown()
   })
 })

@@ -53,11 +53,15 @@ export function useCreateWorkspacePage() {
   const skipPluginSetup = ref(false)
   const startFlowAfterCreate = ref(false)
 
-  const providerOptions = computed(() =>
-    providerCatalog.value
-      .map((item) => item.provider)
-      .sort((left, right) => left.localeCompare(right)),
-  )
+  const providerOptions = computed(() => {
+    const set = new Set(providerCatalog.value.map((item) => item.provider))
+    for (const entry of providerConfigDraft.value) {
+      if (entry.provider?.trim()) {
+        set.add(entry.provider.trim())
+      }
+    }
+    return Array.from(set).sort((left, right) => left.localeCompare(right))
+  })
 
   const normalizedModelPool = computed<ModelPoolInput[]>(() => {
     return modelPool.value.map((item) => ({
@@ -72,7 +76,41 @@ export function useCreateWorkspacePage() {
   })
 
   function listModelsForProvider(provider: string) {
-    return providerCatalog.value.find((item) => item.provider === provider)?.models ?? []
+    const builtinModels =
+      providerCatalog.value.find((item) => item.provider === provider)?.models ?? []
+
+    if (builtinModels.length > 0) {
+      return builtinModels
+    }
+
+    const draftEntry = providerConfigDraft.value.find((entry) => entry.provider === provider)
+    if (!draftEntry) {
+      return []
+    }
+
+    if (draftEntry.modelIds && draftEntry.modelIds.length > 0) {
+      return draftEntry.modelIds.map((id) => ({ modelId: id, modelName: id }))
+    }
+
+    if (draftEntry.modelMappings && draftEntry.modelMappings.length > 0) {
+      return draftEntry.modelMappings.map((mapping) => {
+        if (typeof mapping === "string") {
+          return { modelId: mapping, modelName: mapping }
+        }
+        const id = mapping.targetModelId || mapping.sourceModelId
+        const name = mapping.targetModelName || mapping.targetModelId || mapping.sourceModelId
+        return { modelId: id, modelName: name }
+      })
+    }
+
+    if (draftEntry.baseProvider) {
+      return (
+        providerCatalog.value.find((item) => item.provider === draftEntry.baseProvider)?.models ??
+        []
+      )
+    }
+
+    return []
   }
 
   function addModelPoolRow() {

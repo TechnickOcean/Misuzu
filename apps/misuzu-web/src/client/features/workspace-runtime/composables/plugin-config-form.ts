@@ -13,6 +13,7 @@ export interface PluginConfigDraft {
   loginUrl: string
   authCheckUrl: string
   timeoutSec: string
+  maxConcurrentContainers: number
 }
 
 export function createDefaultPluginConfigDraft(): PluginConfigDraft {
@@ -26,6 +27,7 @@ export function createDefaultPluginConfigDraft(): PluginConfigDraft {
     loginUrl: "",
     authCheckUrl: "",
     timeoutSec: "120",
+    maxConcurrentContainers: 3,
   }
 }
 
@@ -37,12 +39,17 @@ export function toPluginConfig(
     throw new Error("Plugin baseUrl is required")
   }
 
+  if (!Number.isFinite(draft.maxConcurrentContainers) || draft.maxConcurrentContainers < 1) {
+    throw new Error("Max concurrent containers must be at least 1")
+  }
+
   const contest = resolveContestConfig(draft)
 
   return {
     baseUrl,
     contest,
     auth: resolveAuthConfig(draft),
+    maxConcurrentContainers: draft.maxConcurrentContainers,
   }
 }
 
@@ -54,6 +61,10 @@ export function fromPluginConfig(config: any): PluginConfigDraft {
 
   if (config.baseUrl) {
     draft.baseUrl = config.baseUrl
+  }
+
+  if (config.maxConcurrentContainers !== undefined) {
+    draft.maxConcurrentContainers = config.maxConcurrentContainers
   }
 
   if (config.contest) {

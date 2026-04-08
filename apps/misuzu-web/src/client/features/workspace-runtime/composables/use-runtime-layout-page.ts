@@ -37,6 +37,7 @@ export function useRuntimeLayoutPage() {
   )
   const runtimeActionNotice = ref("")
   const runtimeActionError = ref("")
+  let runtimeActionTimer: number | undefined
   const defaultAgentId = computed(() => {
     const agents = summary.value?.agents ?? []
     return agents.find((agent) => agent.id === "environment")?.id ?? agents[0]?.id
@@ -106,6 +107,7 @@ export function useRuntimeLayoutPage() {
   })
 
   onUnmounted(() => {
+    clearRuntimeActionTimer()
     runtime.disconnect()
   })
 
@@ -229,12 +231,33 @@ export function useRuntimeLayoutPage() {
   async function runRuntimeAction(action: () => Promise<unknown>, successMessage: string) {
     runtimeActionNotice.value = ""
     runtimeActionError.value = ""
+    clearRuntimeActionTimer()
     try {
       await action()
       runtimeActionNotice.value = successMessage
+      scheduleRuntimeActionClear(2600)
     } catch (error) {
       runtimeActionError.value = error instanceof Error ? error.message : String(error)
+      scheduleRuntimeActionClear(4200)
     }
+  }
+
+  function clearRuntimeActionTimer() {
+    if (runtimeActionTimer === undefined) {
+      return
+    }
+
+    window.clearTimeout(runtimeActionTimer)
+    runtimeActionTimer = undefined
+  }
+
+  function scheduleRuntimeActionClear(delayMs: number) {
+    clearRuntimeActionTimer()
+    runtimeActionTimer = window.setTimeout(() => {
+      runtimeActionNotice.value = ""
+      runtimeActionError.value = ""
+      runtimeActionTimer = undefined
+    }, delayMs)
   }
 
   async function enforceSetupLock() {

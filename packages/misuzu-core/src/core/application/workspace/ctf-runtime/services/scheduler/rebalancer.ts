@@ -1,29 +1,19 @@
 import type { PersistedCTFRuntimeManagedChallenge } from "../../state.ts"
-import type { SolverTaskCancelResult } from "./queue.ts"
+import type { DispatchTask, SolverTaskCancelResult, SolverTaskResult } from "./queue.ts"
 import type { UnexpectedSolverStopEvent } from "../platform/hub.ts"
 import {
   RANK_HARD_CAP_MS,
   RANK_HARD_COOLDOWN_MS,
-  RANK_MIN_RUN_SLICE_MS,
   RANK_REBALANCE_INTERVAL_MS,
   RANK_STOP_BURST_LIMIT,
   RANK_STOP_COOLDOWN_MS,
   RANK_STOP_RECOVERY_WINDOW_MS,
-  RANK_SWAP_MARGIN,
   type ChallengeRankState,
   type RankedCandidate,
   computeChallengeBaseRank,
   computeChallengeRank,
 } from "./rank.ts"
-
-interface SchedulerTaskLike {
-  taskId: string
-  payload: unknown
-}
-
-interface InflightSchedulerTaskLike {
-  task: SchedulerTaskLike
-}
+import type { PersistedCTFRuntimeSchedulerState } from "../../state.ts"
 
 interface ChallengeProgressLike {
   challengeId: number
@@ -39,29 +29,51 @@ interface ModelPoolStateLike {
   totalAvailable: number
 }
 
+interface DispatchLimitsLike {
+  maxConcurrentContainers: number
+}
+
+export interface DispatchIntent {
+  taskId: string
+  challengeId: number
+  source: "auto" | "manual"
+  priority: number
+  createdAt: number
+  payload: unknown
+  reason?: string
+}
+
 export interface RuntimeRankOrchestratorHost {
   listManagedChallenges(): PersistedCTFRuntimeManagedChallenge[]
-  getChallengeSolver(challengeId: number): unknown
   listSolverProgressStates(): ChallengeProgressLike[]
-  listPendingSchedulerTasks(): SchedulerTaskLike[]
-  listInflightSchedulerTasks(): InflightSchedulerTaskLike[]
-  cancelSchedulerTask(taskId: string): SolverTaskCancelResult | undefined
-  enqueueTask(payload: unknown, taskId?: string): Promise<unknown>
   getSchedulerState(): RuntimeSchedulerStateLike
   getModelPoolState(): ModelPoolStateLike
-  isTaskDispatchPaused(): boolean
+  getDispatchLimits(): DispatchLimitsLike
+  listInflightDispatchTasks(): DispatchTask[]
+  runDispatchTask(task: DispatchTask): Promise<SolverTaskResult>
+  cancelInflightTask(taskId: string): SolverTaskCancelResult | undefined
+  abortAllRunningTasks(): void
   setUnexpectedSolverStopListener(listener: (event: UnexpectedSolverStopEvent) => void): void
   notifyStateChanged(): void
 }
 
 export class RuntimeRankOrchestrator {
-  private readonly autoQueuedChallenges = new Set<number>()
-  private readonly expectedStopTaskIds = new Set<string>()
   private readonly rankByChallenge = new Map<number, ChallengeRankState>()
+  private readonly pendingIntents = new Map<string, DispatchIntent>()
+  private readonly expectedStopTaskIds = new Set<string>()
   private taskCounter = 0
   private dispatchAutoManaged = false
+  private dispatchPaused = false
   private rankRebalanceRunning = false
+  private rankRebalanceRequested = false
   private rankRebalanceTimer?: NodeJS.Timeout
+  private readonly pendingResolvers = new Map<
+    string,
+    {
+      resolve: (result: SolverTaskResult) => void
+      reject: (error: unknown) => void
+    }
+  >()
 
   constructor(private readonly host: RuntimeRankOrchestratorHost) {}
 
@@ -70,7 +82,6 @@ export class RuntimeRankOrchestrator {
       this.handleUnexpectedSolverStop(event)
     })
     this.syncRankStates()
-    this.seedAutoQueuedChallenges()
     this.ensureRankRebalanceTimer()
   }
 
@@ -85,32 +96,53 @@ export class RuntimeRankOrchestrator {
 
   setDispatchAutoManaged(enabled: boolean) {
     this.dispatchAutoManaged = enabled
+    this.scheduleRebalance(true)
   }
 
   isDispatchAutoManaged() {
     return this.dispatchAutoManaged
   }
 
-  onManagedChallengesChanged() {
-    this.syncRankStates()
+  setDispatchPaused(paused: boolean) {
+    this.dispatchPaused = paused
+    if (paused) {
+      this.expectedStopTaskIds.clear()
+      for (const task of this.host.listInflightDispatchTasks()) {
+        this.expectedStopTaskIds.add(task.taskId)
+      }
+      this.host.abortAllRunningTasks()
+      this.host.notifyStateChanged()
+      return
+    }
+
+    this.scheduleRebalance(true)
   }
 
-  listRankedCandidatesSnapshot() {
+  isDispatchPaused() {
+    return this.dispatchPaused
+  }
+
+  onManagedChallengesChanged() {
     this.syncRankStates()
-    return this.computeRankedCandidates(Date.now())
+    this.scheduleRebalance(true)
   }
 
   scheduleRebalance(immediate = false) {
     if (this.rankRebalanceRunning) {
+      this.rankRebalanceRequested = true
       return
     }
 
     const run = async () => {
       this.rankRebalanceRunning = true
       try {
-        await this.rebalanceManagedChallenges()
+        await this.reconcileDispatch()
       } finally {
         this.rankRebalanceRunning = false
+        if (this.rankRebalanceRequested) {
+          this.rankRebalanceRequested = false
+          this.scheduleRebalance(true)
+        }
       }
     }
 
@@ -120,6 +152,106 @@ export class RuntimeRankOrchestrator {
     }
 
     void run()
+  }
+
+  createManualIntent(payload: unknown, taskId?: string) {
+    const challengeId = resolveChallengeIdFromPayload(payload)
+    if (challengeId === undefined) {
+      throw new Error("Manual dispatch requires payload.challenge as finite number")
+    }
+
+    const nextTaskId = taskId ?? `task-${String(++this.taskCounter)}`
+    this.pendingIntents.set(nextTaskId, {
+      taskId: nextTaskId,
+      challengeId,
+      source: "manual",
+      priority: 1_000_000,
+      createdAt: Date.now(),
+      payload,
+    })
+    this.host.notifyStateChanged()
+    this.scheduleRebalance(true)
+    return nextTaskId
+  }
+
+  enqueueTask(payload: unknown, taskId?: string) {
+    const actualTaskId = this.createManualIntent(payload, taskId)
+    return new Promise<SolverTaskResult>((resolve, reject) => {
+      this.pendingResolvers.set(actualTaskId, { resolve, reject })
+    })
+  }
+
+  cancelTask(taskId: string): SolverTaskCancelResult | undefined {
+    if (this.pendingIntents.delete(taskId)) {
+      this.pendingResolvers.get(taskId)?.reject(new Error(`Task cancelled: ${taskId}`))
+      this.pendingResolvers.delete(taskId)
+      this.host.notifyStateChanged()
+      return "pending"
+    }
+
+    const cancelled = this.host.cancelInflightTask(taskId)
+    if (cancelled === "inflight") {
+      this.expectedStopTaskIds.add(taskId)
+    }
+    return cancelled
+  }
+
+  listPendingIntentsSnapshot() {
+    return [...this.pendingIntents.values()].sort(
+      (left, right) => right.priority - left.priority || left.createdAt - right.createdAt,
+    )
+  }
+
+  snapshotState(): PersistedCTFRuntimeSchedulerState {
+    return {
+      taskCounter: this.taskCounter,
+      autoManaged: this.dispatchAutoManaged,
+      paused: this.dispatchPaused,
+      pendingIntents: this.listPendingIntentsSnapshot().map((intent) => ({
+        taskId: intent.taskId,
+        challengeId: intent.challengeId,
+        source: intent.source,
+        priority: intent.priority,
+        createdAt: intent.createdAt,
+        payload: intent.payload,
+        reason: intent.reason,
+      })),
+    }
+  }
+
+  listRankedCandidatesSnapshot() {
+    this.syncRankStates()
+    return this.computeRankedCandidates(Date.now())
+  }
+
+  restorePendingIntents(intents: DispatchIntent[]) {
+    this.pendingIntents.clear()
+    for (const intent of intents) {
+      if (!intent.taskId || !Number.isFinite(intent.challengeId)) {
+        continue
+      }
+
+      this.pendingIntents.set(intent.taskId, {
+        taskId: intent.taskId,
+        challengeId: intent.challengeId,
+        source: intent.source === "manual" ? "manual" : "auto",
+        priority: Number.isFinite(intent.priority) ? intent.priority : 0,
+        createdAt: Number.isFinite(intent.createdAt) ? intent.createdAt : Date.now(),
+        payload: intent.payload,
+        reason: intent.reason,
+      })
+    }
+  }
+
+  restoreState(state: PersistedCTFRuntimeSchedulerState | undefined) {
+    if (!state) {
+      return
+    }
+
+    this.taskCounter = Number.isFinite(state.taskCounter) ? Math.max(0, state.taskCounter) : 0
+    this.dispatchAutoManaged = Boolean(state.autoManaged)
+    this.dispatchPaused = Boolean(state.paused)
+    this.restorePendingIntents(state.pendingIntents)
   }
 
   private ensureRankRebalanceTimer() {
@@ -133,113 +265,199 @@ export class RuntimeRankOrchestrator {
     this.rankRebalanceTimer.unref?.()
   }
 
-  private async rebalanceManagedChallenges() {
-    if (!this.dispatchAutoManaged) {
-      return
-    }
-
-    if (this.host.isTaskDispatchPaused()) {
+  private async reconcileDispatch() {
+    if (this.dispatchPaused) {
       return
     }
 
     this.syncRankStates()
-
     const now = Date.now()
-    const pendingTaskByChallengeId = new Map<number, string>()
-    for (const task of this.host.listPendingSchedulerTasks()) {
-      const challengeId = resolveChallengeIdFromPayload(task.payload)
-      if (challengeId === undefined || pendingTaskByChallengeId.has(challengeId)) {
-        continue
-      }
-
-      pendingTaskByChallengeId.set(challengeId, task.taskId)
-    }
-
-    const inflightTaskByChallengeId = new Map<number, string>()
-    for (const inflight of this.host.listInflightSchedulerTasks()) {
-      const challengeId = resolveChallengeIdFromPayload(inflight.task.payload)
-      if (challengeId === undefined || inflightTaskByChallengeId.has(challengeId)) {
-        continue
-      }
-
-      inflightTaskByChallengeId.set(challengeId, inflight.task.taskId)
-    }
-
-    const candidates = this.computeRankedCandidates(now)
-    const targetCount = this.resolveTargetConcurrency(candidates.length)
-    const targetCandidates = candidates.slice(0, targetCount)
-    const targetIds = new Set(targetCandidates.map((candidate) => candidate.challengeId))
-    const candidateRankById = new Map(
-      targetCandidates.map((candidate) => [candidate.challengeId, candidate.rank]),
+    const managedChallenges = this.host.listManagedChallenges()
+    const managedByChallengeId = new Map(
+      managedChallenges.map((challenge) => [challenge.challengeId, challenge] as const),
+    )
+    const requiresContainerByChallengeId = new Map(
+      managedChallenges.map((challenge) => [
+        challenge.challengeId,
+        challenge.requiresContainer !== false,
+      ]),
     )
 
-    for (const [challengeId, taskId] of pendingTaskByChallengeId) {
-      if (targetIds.has(challengeId)) {
+    if (this.dispatchAutoManaged) {
+      const rankedCandidates = this.computeRankedCandidates(now)
+      this.ensureAutoIntents(now, rankedCandidates)
+      this.refreshAutoIntentPriorities(rankedCandidates)
+    }
+
+    for (const [taskId, intent] of this.pendingIntents) {
+      if (intent.source !== "auto") {
         continue
       }
 
-      const cancelled = this.host.cancelSchedulerTask(taskId)
-      if (cancelled === "pending") {
-        this.autoQueuedChallenges.delete(challengeId)
-        const rankState = this.rankByChallenge.get(challengeId)
+      if (!this.isAutoQueueEligible(intent.challengeId)) {
+        this.pendingIntents.delete(taskId)
+      }
+    }
+
+    const inflightTasks = this.host.listInflightDispatchTasks()
+    const inflightByChallengeId = new Set(inflightTasks.map((task) => task.challengeId))
+    const inflightTaskIds = new Set(inflightTasks.map((task) => task.taskId))
+    const targetConcurrency = this.resolveTargetConcurrency(this.rankByChallenge.size)
+    const availableSlots = Math.max(0, targetConcurrency - inflightTasks.length)
+    const containerLimit = this.resolveContainerLimit()
+    const inflightContainerCount = this.countInflightContainerTasks(
+      inflightTasks,
+      requiresContainerByChallengeId,
+    )
+    let availableContainerSlots = Number.isFinite(containerLimit)
+      ? Math.max(0, containerLimit - inflightContainerCount)
+      : Number.POSITIVE_INFINITY
+
+    this.preemptLongRunningTasks(now, inflightTasks)
+
+    if (availableSlots <= 0) {
+      return
+    }
+
+    let started = 0
+    for (const intent of this.listPendingIntentsSnapshot()) {
+      if (started >= availableSlots) {
+        break
+      }
+
+      if (inflightByChallengeId.has(intent.challengeId) || inflightTaskIds.has(intent.taskId)) {
+        continue
+      }
+
+      const managed = managedByChallengeId.get(intent.challengeId)
+      if (!managed) {
+        continue
+      }
+
+      const requiresContainer = requiresContainerByChallengeId.get(intent.challengeId) ?? true
+      if (requiresContainer && availableContainerSlots <= 0) {
+        continue
+      }
+
+      this.pendingIntents.delete(intent.taskId)
+      this.startDispatchTask({
+        taskId: intent.taskId,
+        challengeId: intent.challengeId,
+        targetSolverId: managed.solverId,
+        payload: intent.payload,
+        source: intent.source,
+        priority: intent.priority,
+        createdAt: intent.createdAt,
+        reason: intent.reason,
+      })
+      if (requiresContainer && Number.isFinite(availableContainerSlots)) {
+        availableContainerSlots -= 1
+      }
+      started += 1
+    }
+  }
+
+  private startDispatchTask(task: DispatchTask) {
+    void this.host
+      .runDispatchTask(task)
+      .then((result) => {
+        const rankState = this.rankByChallenge.get(task.challengeId)
         if (rankState) {
           rankState.queuedSince = undefined
-          rankState.waitingSince = now
+          rankState.activeSince = undefined
+          rankState.waitingSince = Date.now()
         }
-      }
-    }
 
-    let highestWaitingRank = Number.NEGATIVE_INFINITY
-    for (const candidate of targetCandidates) {
-      if (inflightTaskByChallengeId.has(candidate.challengeId)) {
+        this.expectedStopTaskIds.delete(task.taskId)
+        this.pendingResolvers.get(task.taskId)?.resolve(result)
+        this.pendingResolvers.delete(task.taskId)
+        this.host.notifyStateChanged()
+        this.scheduleRebalance(true)
+      })
+      .catch((error) => {
+        this.expectedStopTaskIds.delete(task.taskId)
+        const resolver = this.pendingResolvers.get(task.taskId)
+        const shouldRetryPausedTask = this.dispatchPaused && Boolean(resolver)
+        const shouldRequeue =
+          shouldRetryPausedTask || (!resolver && this.isAutoQueueEligible(task.challengeId))
+        if (shouldRequeue) {
+          this.pendingIntents.set(task.taskId, {
+            taskId: task.taskId,
+            challengeId: task.challengeId,
+            source: task.source,
+            priority: task.priority,
+            createdAt: Date.now(),
+            payload: task.payload,
+            reason: task.reason,
+          })
+        }
+
+        if (!shouldRetryPausedTask) {
+          resolver?.reject(error)
+          this.pendingResolvers.delete(task.taskId)
+        }
+
+        this.host.notifyStateChanged()
+        this.scheduleRebalance(true)
+      })
+  }
+
+  private ensureAutoIntents(now: number, ranked: RankedCandidate[]) {
+    const queuedChallengeIds = new Set(
+      this.listPendingIntentsSnapshot().map((intent) => intent.challengeId),
+    )
+    for (const candidate of ranked) {
+      if (queuedChallengeIds.has(candidate.challengeId)) {
         continue
       }
 
-      highestWaitingRank = Math.max(highestWaitingRank, candidate.rank)
+      const taskId = `auto-${String(candidate.challengeId)}-${String(++this.taskCounter)}`
+      this.pendingIntents.set(taskId, {
+        taskId,
+        challengeId: candidate.challengeId,
+        source: "auto",
+        priority: Math.round(candidate.rank * 100),
+        createdAt: now,
+        payload: { challenge: candidate.challengeId },
+      })
+      queuedChallengeIds.add(candidate.challengeId)
     }
+  }
 
-    for (const [challengeId, taskId] of inflightTaskByChallengeId) {
-      const rankState = this.rankByChallenge.get(challengeId)
+  private refreshAutoIntentPriorities(rankedCandidates: RankedCandidate[]) {
+    const rankByChallengeId = new Map(
+      rankedCandidates.map((candidate) => [candidate.challengeId, candidate.rank] as const),
+    )
+
+    for (const [taskId, intent] of this.pendingIntents) {
+      if (intent.source !== "auto") {
+        continue
+      }
+
+      const rank = rankByChallengeId.get(intent.challengeId)
+      if (rank === undefined) {
+        this.pendingIntents.delete(taskId)
+        continue
+      }
+
+      intent.priority = Math.round(rank * 100)
+    }
+  }
+
+  private preemptLongRunningTasks(now: number, inflightTasks: DispatchTask[]) {
+    for (const task of inflightTasks) {
+      const rankState = this.rankByChallenge.get(task.challengeId)
       const activeDurationMs = rankState?.activeSince ? now - rankState.activeSince : 0
-      const activeRank =
-        candidateRankById.get(challengeId) ??
-        (rankState ? computeChallengeRank(rankState, now, true) : Number.NEGATIVE_INFINITY)
-
-      let shouldAbort = false
-      if (activeDurationMs >= RANK_HARD_CAP_MS) {
-        shouldAbort = true
-        if (rankState) {
-          rankState.cooldownUntil = now + RANK_HARD_COOLDOWN_MS
-        }
-      } else if (
-        !targetIds.has(challengeId) &&
-        activeDurationMs >= RANK_MIN_RUN_SLICE_MS &&
-        highestWaitingRank >= activeRank + RANK_SWAP_MARGIN
-      ) {
-        shouldAbort = true
-      }
-
-      if (!shouldAbort) {
+      if (activeDurationMs < RANK_HARD_CAP_MS) {
         continue
       }
 
-      this.expectedStopTaskIds.add(taskId)
-      const cancelled = this.host.cancelSchedulerTask(taskId)
-      if (cancelled !== "inflight") {
-        this.expectedStopTaskIds.delete(taskId)
-      }
-    }
-
-    for (const candidate of targetCandidates) {
-      if (
-        pendingTaskByChallengeId.has(candidate.challengeId) ||
-        inflightTaskByChallengeId.has(candidate.challengeId) ||
-        this.autoQueuedChallenges.has(candidate.challengeId)
-      ) {
-        continue
+      if (rankState) {
+        rankState.cooldownUntil = now + RANK_HARD_COOLDOWN_MS
       }
 
-      this.enqueueAutoChallenge(candidate.challengeId)
+      this.expectedStopTaskIds.add(task.taskId)
+      this.host.cancelInflightTask(task.taskId)
     }
   }
 
@@ -284,111 +502,19 @@ export class RuntimeRankOrchestrator {
       }
 
       this.rankByChallenge.delete(challengeId)
-      this.autoQueuedChallenges.delete(challengeId)
     }
 
-    const queuedChallengeIds = new Set<number>()
-    const activeChallengeIds = new Set<number>()
-
-    for (const task of this.host.listPendingSchedulerTasks()) {
-      const challengeId = resolveChallengeIdFromPayload(task.payload)
-      if (challengeId !== undefined) {
-        queuedChallengeIds.add(challengeId)
-      }
-    }
-
-    for (const inflight of this.host.listInflightSchedulerTasks()) {
-      const challengeId = resolveChallengeIdFromPayload(inflight.task.payload)
-      if (challengeId === undefined) {
-        continue
-      }
-
-      queuedChallengeIds.add(challengeId)
-      activeChallengeIds.add(challengeId)
-    }
-
+    const activeChallengeIds = new Set(
+      this.host.listInflightDispatchTasks().map((task) => task.challengeId),
+    )
     for (const [challengeId, rankState] of this.rankByChallenge) {
-      const isQueued = queuedChallengeIds.has(challengeId)
-      const wasQueued = rankState.queuedSince !== undefined
-
-      if (isQueued) {
-        rankState.queuedSince ??= now
-        this.autoQueuedChallenges.add(challengeId)
-      } else {
-        rankState.queuedSince = undefined
-        if (wasQueued) {
-          rankState.waitingSince = now
-        }
-        this.autoQueuedChallenges.delete(challengeId)
-      }
-
-      const isActive = activeChallengeIds.has(challengeId)
-      if (isActive) {
+      if (activeChallengeIds.has(challengeId)) {
         rankState.activeSince ??= now
+        rankState.queuedSince ??= now
       } else {
         rankState.activeSince = undefined
       }
     }
-  }
-
-  private seedAutoQueuedChallenges() {
-    this.autoQueuedChallenges.clear()
-    for (const task of this.host.listPendingSchedulerTasks()) {
-      const challengeId = resolveChallengeIdFromPayload(task.payload)
-      if (challengeId !== undefined) {
-        this.autoQueuedChallenges.add(challengeId)
-      }
-    }
-
-    for (const inflight of this.host.listInflightSchedulerTasks()) {
-      const challengeId = resolveChallengeIdFromPayload(inflight.task.payload)
-      if (challengeId !== undefined) {
-        this.autoQueuedChallenges.add(challengeId)
-      }
-    }
-  }
-
-  private enqueueAutoChallenge(challengeId: number) {
-    if (this.autoQueuedChallenges.has(challengeId) || !this.isAutoQueueEligible(challengeId)) {
-      return
-    }
-
-    const taskId = `auto-${String(challengeId)}-${String(++this.taskCounter)}`
-    const now = Date.now()
-    const rankState = this.rankByChallenge.get(challengeId)
-    if (rankState) {
-      rankState.queuedSince = now
-    }
-
-    this.autoQueuedChallenges.add(challengeId)
-
-    void this.host
-      .enqueueTask({ challenge: challengeId }, taskId)
-      .then(() => {
-        this.handleAutoChallengeTaskSettled(challengeId, taskId)
-      })
-      .catch(() => {
-        this.handleAutoChallengeTaskSettled(challengeId, taskId)
-      })
-  }
-
-  private handleAutoChallengeTaskSettled(challengeId: number, taskId: string) {
-    this.autoQueuedChallenges.delete(challengeId)
-
-    const rankState = this.rankByChallenge.get(challengeId)
-    if (rankState) {
-      rankState.queuedSince = undefined
-      rankState.activeSince = undefined
-      rankState.waitingSince = Date.now()
-    }
-
-    this.expectedStopTaskIds.delete(taskId)
-
-    if (this.dispatchAutoManaged && !this.host.isTaskDispatchPaused()) {
-      this.scheduleRebalance(true)
-    }
-
-    this.host.notifyStateChanged()
   }
 
   private handleUnexpectedSolverStop(event: UnexpectedSolverStopEvent) {
@@ -416,10 +542,7 @@ export class RuntimeRankOrchestrator {
       rankState.cooldownUntil = now + RANK_STOP_COOLDOWN_MS
     }
 
-    if (this.dispatchAutoManaged) {
-      this.scheduleRebalance(true)
-    }
-
+    this.scheduleRebalance(true)
     this.host.notifyStateChanged()
   }
 
@@ -473,11 +596,30 @@ export class RuntimeRankOrchestrator {
     return Math.min(candidateCount, solverCapacity, modelCapacity)
   }
 
-  private isAutoQueueEligible(challengeId: number) {
-    if (!this.host.getChallengeSolver(challengeId)) {
-      return false
+  private resolveContainerLimit() {
+    const { maxConcurrentContainers } = this.host.getDispatchLimits()
+    if (!Number.isFinite(maxConcurrentContainers)) {
+      return Number.POSITIVE_INFINITY
     }
 
+    return Math.max(1, Math.floor(maxConcurrentContainers))
+  }
+
+  private countInflightContainerTasks(
+    inflightTasks: DispatchTask[],
+    requiresContainerByChallengeId: Map<number, boolean>,
+  ) {
+    let containerTaskCount = 0
+    for (const task of inflightTasks) {
+      if (requiresContainerByChallengeId.get(task.challengeId) ?? true) {
+        containerTaskCount += 1
+      }
+    }
+
+    return containerTaskCount
+  }
+
+  private isAutoQueueEligible(challengeId: number) {
     const progress = this.host
       .listSolverProgressStates()
       .find((state) => state.challengeId === challengeId)

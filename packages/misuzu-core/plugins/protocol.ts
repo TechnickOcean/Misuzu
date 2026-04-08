@@ -27,6 +27,7 @@ export interface PluginConfig {
   baseUrl: string
   contest: ContestBinding
   auth?: PluginAuthConfig
+  maxConcurrentContainers: number
 }
 
 export interface PlatformRequestContext {
