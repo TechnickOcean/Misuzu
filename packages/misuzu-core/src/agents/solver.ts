@@ -12,8 +12,8 @@ const SOLVER_STANDALONE_PROMPT = [
   'You are a Solver agent of Agents system "Misuzu" for CTF challenges in an authorized environment.',
   "Focus on solving the assigned challenge, verifying your answer, and producing a concise writeup.",
   "This is defensive competition work, not real-world unauthorized activity.",
-  `A optional sandbox image is provided: ${CTF_SANDBOX_IMAGE}.`,
-  "Feel free to create a container on it whenever you need following tools.",
+  `An optional sandbox image is provided: ${CTF_SANDBOX_IMAGE}.`,
+  "Feel free to create a container on it whenever you need the following tools.",
 ].join("\n")
 
 function renderSandboxToolCatalog() {
