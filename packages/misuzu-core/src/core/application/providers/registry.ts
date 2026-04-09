@@ -97,11 +97,27 @@ export interface OAuthProviderOptions {
   autoRefresh?: boolean
 }
 
+export interface OAuthCredentialsRefreshUpdate {
+  provider: string
+  oauthProvider: string
+  credentials: OAuthCredentials
+  autoRefresh: boolean
+}
+
 export class ProviderRegistry {
   private readonly proxyProviderRegistry = new Map<string, Map<string, Model<Api>>>()
   private readonly providerApiKeyEnvRegistry = new Map<string, string>()
   private readonly providerApiKeyRegistry = new Map<string, string>()
   private readonly oauthCredentialsRegistry = new Map<string, RegisteredOAuthCredentials>()
+  private oauthCredentialsRefreshListener?: (
+    update: OAuthCredentialsRefreshUpdate,
+  ) => Promise<void> | void
+
+  setOAuthCredentialsRefreshListener(
+    listener?: (update: OAuthCredentialsRefreshUpdate) => Promise<void> | void,
+  ) {
+    this.oauthCredentialsRefreshListener = listener
+  }
 
   resetWorkspaceConfig() {
     this.proxyProviderRegistry.clear()
@@ -220,6 +236,8 @@ export class ProviderRegistry {
         credentials: refreshed.newCredentials,
       })
 
+      await this.notifyOAuthCredentialsRefresh(provider)
+
       return refreshed.apiKey
     } catch {
       return this.getOAuthApiKeyFromCache(provider)
@@ -315,6 +333,25 @@ export class ProviderRegistry {
       return oauthProvider.getApiKey(registered.credentials)
     } catch {
       return undefined
+    }
+  }
+
+  private async notifyOAuthCredentialsRefresh(provider: string) {
+    const listener = this.oauthCredentialsRefreshListener
+    const registered = this.oauthCredentialsRegistry.get(provider)
+    if (!listener || !registered) {
+      return
+    }
+
+    try {
+      await listener({
+        provider,
+        oauthProvider: registered.oauthProvider,
+        credentials: registered.credentials,
+        autoRefresh: registered.autoRefresh,
+      })
+    } catch {
+      // Ignore persistence callback failures to avoid breaking API key resolution.
     }
   }
 }

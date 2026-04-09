@@ -181,14 +181,6 @@ function formatOAuthErrorMessage(provider: OAuthProviderId, details: OAuthErrorD
     return "GitHub Copilot OAuth failed: github.com currently resolves to 127.0.0.1:443 in this environment, so device login cannot reach GitHub. Please check DNS/hosts/proxy settings or provide a reachable GitHub Enterprise domain."
   }
 
-  if (
-    provider === "github-copilot" &&
-    details.message === "fetch failed" &&
-    details.cause?.code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE"
-  ) {
-    return "GitHub Copilot OAuth failed: TLS certificate verification failed (UNABLE_TO_VERIFY_LEAF_SIGNATURE). This usually means your proxy/SSL inspection certificate chain is not trusted by Node.js. Please import the proxy root certificate into Node trust store or disable HTTPS interception for github.com/api.github.com."
-  }
-
   if (details.cause?.code) {
     return `${details.message} (${details.cause.code}${
       details.cause.address ? ` ${details.cause.address}:${String(details.cause.port ?? "")}` : ""
@@ -1910,11 +1902,6 @@ export class WorkspaceManager {
             typeof item.oauthProvider === "string" && item.oauthProvider.trim().length > 0
               ? item.oauthProvider.trim()
               : undefined,
-          oauthEnterpriseDomain:
-            typeof item.oauthEnterpriseDomain === "string" &&
-            item.oauthEnterpriseDomain.trim().length > 0
-              ? item.oauthEnterpriseDomain.trim()
-              : undefined,
           oauthCredentials: isOAuthCredentialsPayload(item.oauthCredentials)
             ? item.oauthCredentials
             : undefined,
@@ -1971,11 +1958,6 @@ export class WorkspaceManager {
         oauthProvider:
           typeof entry.oauthProvider === "string" && entry.oauthProvider.trim().length > 0
             ? entry.oauthProvider.trim()
-            : undefined,
-        oauthEnterpriseDomain:
-          typeof entry.oauthEnterpriseDomain === "string" &&
-          entry.oauthEnterpriseDomain.trim().length > 0
-            ? entry.oauthEnterpriseDomain.trim()
             : undefined,
         oauthCredentials: isOAuthCredentialsPayload(entry.oauthCredentials)
           ? entry.oauthCredentials
@@ -2035,7 +2017,6 @@ export class WorkspaceManager {
             providerType: entry.providerType,
             provider: entry.provider,
             oauthProvider: entry.oauthProvider,
-            oauthEnterpriseDomain: entry.oauthEnterpriseDomain,
             oauthCredentials: entry.oauthCredentials,
             oauthAutoRefresh: entry.oauthAutoRefresh,
           }

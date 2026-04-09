@@ -92,13 +92,6 @@ export function useRuntimeSettingsPage(workspaceId: string) {
 
     return [...options].sort((left, right) => left.localeCompare(right))
   })
-  const oauthNeedsManualInput = computed(() => {
-    if (!oauthActiveSession.value?.awaitingManualInput) {
-      return false
-    }
-
-    return !isGitHubEnterpriseDomainPrompt(oauthActiveSession.value)
-  })
 
   onMounted(async () => {
     await Promise.all([
@@ -122,7 +115,6 @@ export function useRuntimeSettingsPage(workspaceId: string) {
       const started = await apiClient.startOAuthLogin(payload.oauthProvider)
       let session = started
       let manualPromptSignature = ""
-      let githubDomainAutoSubmitted = false
       oauthActiveSession.value = session
 
       console.log("[misuzu-oauth] runtime start", {
@@ -143,15 +135,6 @@ export function useRuntimeSettingsPage(workspaceId: string) {
         }
 
         if (session.awaitingManualInput) {
-          if (isGitHubEnterpriseDomainPrompt(session) && !githubDomainAutoSubmitted) {
-            githubDomainAutoSubmitted = true
-            const configuredDomain =
-              providerConfigDraft.value[payload.index]?.oauthEnterpriseDomain?.trim() ?? ""
-            session = await apiClient.submitOAuthManualCode(session.id, configuredDomain)
-            oauthActiveSession.value = session
-            continue
-          }
-
           const signature = JSON.stringify({
             id: session.id,
             instructions: session.instructions,
@@ -240,20 +223,6 @@ export function useRuntimeSettingsPage(workspaceId: string) {
     } finally {
       oauthManualInputSubmitting.value = false
     }
-  }
-
-  function isGitHubEnterpriseDomainPrompt(session: OAuthLoginSessionSnapshot | null) {
-    if (!session) {
-      return false
-    }
-
-    return (
-      session.provider === "github-copilot" &&
-      session.awaitingManualInput === true &&
-      session.manualInputAllowEmpty === true &&
-      !session.authUrl &&
-      (session.instructions ?? "").includes("GitHub Enterprise URL/domain")
-    )
   }
 
   watch(
@@ -462,7 +431,6 @@ export function useRuntimeSettingsPage(workspaceId: string) {
     oauthProviderOptions,
     oauthPendingIndex,
     oauthActiveSession,
-    oauthNeedsManualInput,
     oauthManualInput,
     oauthManualInputSubmitting,
     modelPoolDraft,

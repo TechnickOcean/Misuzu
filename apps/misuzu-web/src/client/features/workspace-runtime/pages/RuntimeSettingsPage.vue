@@ -39,7 +39,6 @@ const {
   oauthProviderOptions,
   oauthPendingIndex,
   oauthActiveSession,
-  oauthNeedsManualInput,
   oauthManualInput,
   oauthManualInputSubmitting,
   modelPoolDraft,
@@ -183,13 +182,11 @@ const {
                 </a>
               </div>
 
-              <div v-if="oauthNeedsManualInput" class="grid gap-2 md:grid-cols-[1fr_auto]">
-                <Input
-                  v-model="oauthManualInput"
-                  :placeholder="
-                    oauthActiveSession.manualInputPlaceholder || 'Paste code or redirect URL'
-                  "
-                />
+              <div
+                v-if="oauthActiveSession.awaitingManualInput"
+                class="grid gap-2 md:grid-cols-[1fr_auto]"
+              >
+                <Input v-model="oauthManualInput" :placeholder="'Paste code or redirect URL'" />
                 <Button
                   :disabled="
                     oauthManualInputSubmitting ||

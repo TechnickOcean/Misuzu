@@ -49,7 +49,6 @@ export interface ProviderConfigEntry {
   apiKeyEnvVar?: string
   api_key?: string
   oauthProvider?: string
-  oauthEnterpriseDomain?: string
   oauthCredentials?: {
     refresh: string
     access: string

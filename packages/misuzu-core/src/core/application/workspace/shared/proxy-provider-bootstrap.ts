@@ -1,6 +1,10 @@
-import { readFileSync } from "node:fs"
+import { readFileSync, writeFileSync } from "node:fs"
 import type { OAuthCredentials } from "@mariozechner/pi-ai/oauth"
-import type { ProviderRegistry, ProxyProviderOptions } from "../../providers/registry.ts"
+import type {
+  OAuthCredentialsRefreshUpdate,
+  ProviderRegistry,
+  ProxyProviderOptions,
+} from "../../providers/registry.ts"
 import type { Logger } from "../../../infrastructure/logging/types.ts"
 
 interface ProviderConfigEntry {
@@ -56,6 +60,26 @@ export class ProxyProviderBootstrap {
     this.providers = options.providers
     this.providerConfigPath = options.providerConfigPath
     this.onProvidersLoaded = options.onProvidersLoaded
+    this.providers.setOAuthCredentialsRefreshListener((update) => {
+      this.persistRefreshedOAuthCredentials(update)
+    })
+  }
+
+  private readRawProviderConfigEntries() {
+    try {
+      const parsed = JSON.parse(readFileSync(this.providerConfigPath, "utf-8")) as unknown
+      if (!Array.isArray(parsed)) {
+        return []
+      }
+
+      return parsed
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return []
+      }
+
+      throw error
+    }
   }
 
   loadProviderConfigEntries() {
@@ -203,5 +227,58 @@ export class ProxyProviderBootstrap {
     this.loaded = false
     this.logger.info("Provider config reload requested")
     return this.bootstrap()
+  }
+
+  private persistRefreshedOAuthCredentials(update: OAuthCredentialsRefreshUpdate) {
+    try {
+      const entries = this.readRawProviderConfigEntries()
+      const target = entries.find((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return false
+        }
+
+        const provider = (entry as { provider?: unknown }).provider
+        return typeof provider === "string" && provider.trim() === update.provider
+      })
+
+      if (!target || typeof target !== "object") {
+        return
+      }
+
+      const entry = target as Record<string, unknown>
+      const currentOAuthProvider =
+        typeof entry.oauthProvider === "string" ? entry.oauthProvider : undefined
+      const currentCredentials = entry.oauthCredentials
+      const currentAutoRefresh =
+        typeof entry.oauthAutoRefresh === "boolean" ? entry.oauthAutoRefresh : undefined
+
+      const nextCredentials = update.credentials as Record<string, unknown>
+      const credentialsChanged =
+        JSON.stringify(currentCredentials) !== JSON.stringify(nextCredentials)
+      const oauthProviderChanged = currentOAuthProvider !== update.oauthProvider
+      const autoRefreshChanged = currentAutoRefresh !== update.autoRefresh
+      if (!credentialsChanged && !oauthProviderChanged && !autoRefreshChanged) {
+        return
+      }
+
+      entry.oauthProvider = update.oauthProvider
+      entry.oauthCredentials = nextCredentials
+      entry.oauthAutoRefresh = update.autoRefresh
+      if (typeof entry.providerType !== "string") {
+        entry.providerType = "oauth_provider"
+      }
+
+      writeFileSync(this.providerConfigPath, JSON.stringify(entries, null, 2), "utf-8")
+      this.logger.debug("Persisted refreshed OAuth credentials", {
+        provider: update.provider,
+        oauthProvider: update.oauthProvider,
+      })
+    } catch (error) {
+      this.logger.warn(
+        "Failed to persist refreshed OAuth credentials",
+        { provider: update.provider, providerConfigPath: this.providerConfigPath },
+        error,
+      )
+    }
   }
 }

@@ -46,7 +46,6 @@ const {
   oauthProviderOptions,
   oauthPendingIndex,
   oauthActiveSession,
-  oauthNeedsManualInput,
   oauthManualInput,
   oauthManualInputSubmitting,
   modelPool,
@@ -262,7 +261,10 @@ function handleProviderFileChange(event: Event) {
                       </a>
                     </div>
 
-                    <div v-if="oauthNeedsManualInput" class="grid gap-2 md:grid-cols-[1fr_auto]">
+                    <div
+                      v-if="oauthActiveSession.awaitingManualInput"
+                      class="grid gap-2 md:grid-cols-[1fr_auto]"
+                    >
                       <Input
                         v-model="oauthManualInput"
                         :placeholder="

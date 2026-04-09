@@ -92,13 +92,6 @@ export function useCreateWorkspacePage() {
 
     return [...options].sort((left, right) => left.localeCompare(right))
   })
-  const oauthNeedsManualInput = computed(() => {
-    if (!oauthActiveSession.value?.awaitingManualInput) {
-      return false
-    }
-
-    return !isGitHubEnterpriseDomainPrompt(oauthActiveSession.value)
-  })
 
   const normalizedModelPool = computed<ModelPoolInput[]>(() => {
     return modelPool.value.map((item) => ({
@@ -127,7 +120,6 @@ export function useCreateWorkspacePage() {
       const started = await apiClient.startOAuthLogin(payload.oauthProvider)
       let session = started
       let manualPromptSignature = ""
-      let githubDomainAutoSubmitted = false
       oauthActiveSession.value = session
 
       console.log("[misuzu-oauth] create start", {
@@ -148,15 +140,6 @@ export function useCreateWorkspacePage() {
         }
 
         if (session.awaitingManualInput) {
-          if (isGitHubEnterpriseDomainPrompt(session) && !githubDomainAutoSubmitted) {
-            githubDomainAutoSubmitted = true
-            const configuredDomain =
-              providerConfigDraft.value[payload.index]?.oauthEnterpriseDomain?.trim() ?? ""
-            session = await apiClient.submitOAuthManualCode(session.id, configuredDomain)
-            oauthActiveSession.value = session
-            continue
-          }
-
           const signature = JSON.stringify({
             id: session.id,
             instructions: session.instructions,
@@ -244,20 +227,6 @@ export function useCreateWorkspacePage() {
     } finally {
       oauthManualInputSubmitting.value = false
     }
-  }
-
-  function isGitHubEnterpriseDomainPrompt(session: OAuthLoginSessionSnapshot | null) {
-    if (!session) {
-      return false
-    }
-
-    return (
-      session.provider === "github-copilot" &&
-      session.awaitingManualInput === true &&
-      session.manualInputAllowEmpty === true &&
-      !session.authUrl &&
-      (session.instructions ?? "").includes("GitHub Enterprise URL/domain")
-    )
   }
 
   function listModelsForProvider(provider: string) {
@@ -501,7 +470,6 @@ export function useCreateWorkspacePage() {
     oauthProviderOptions,
     oauthPendingIndex,
     oauthActiveSession,
-    oauthNeedsManualInput,
     oauthManualInput,
     oauthManualInputSubmitting,
     modelPool,

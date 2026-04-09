@@ -119,7 +119,6 @@ function setEntryType(index: number, nextType: string) {
       providerType: type,
       baseProvider: current.baseProvider?.trim() || "openai",
       oauthProvider: undefined,
-      oauthEnterpriseDomain: undefined,
       oauthCredentials: undefined,
       oauthAutoRefresh: undefined,
     })
@@ -142,8 +141,6 @@ function setEntryType(index: number, nextType: string) {
       apiKeyEnvVar: undefined,
       api_key: undefined,
       oauthProvider: defaultOauthProvider,
-      oauthEnterpriseDomain:
-        (defaultOauthProvider === "github-copilot" && current.oauthEnterpriseDomain) || undefined,
       oauthAutoRefresh: true,
     })
     return
@@ -156,7 +153,6 @@ function setEntryType(index: number, nextType: string) {
     modelIds: undefined,
     modelMappings: undefined,
     oauthProvider: undefined,
-    oauthEnterpriseDomain: undefined,
     oauthCredentials: undefined,
     oauthAutoRefresh: undefined,
   })
@@ -242,31 +238,6 @@ function triggerOAuthLogin(index: number, entry: ProviderConfigEntry) {
   }
 
   emit("oauth-login", { index, oauthProvider })
-}
-
-function setOAuthProvider(index: number, value: string) {
-  const oauthProvider = value.trim()
-  patchEntry(index, {
-    oauthProvider,
-    oauthEnterpriseDomain:
-      oauthProvider === "github-copilot" ? rows.value[index]?.oauthEnterpriseDomain : undefined,
-  })
-}
-
-function isGitHubCopilotOAuth(entry: ProviderConfigEntry) {
-  return (entry.oauthProvider?.trim() || entry.provider?.trim()) === "github-copilot"
-}
-
-function isEnterpriseDomainConfigVisible(entry: ProviderConfigEntry) {
-  return typeof entry.oauthEnterpriseDomain === "string"
-}
-
-function enableEnterpriseDomainConfig(index: number) {
-  patchEntry(index, { oauthEnterpriseDomain: "" })
-}
-
-function disableEnterpriseDomainConfig(index: number) {
-  patchEntry(index, { oauthEnterpriseDomain: undefined })
 }
 
 function formatExpireTime(expiresAt: number | undefined) {
@@ -426,7 +397,9 @@ function formatExpireTime(expiresAt: number | undefined) {
             <Combobox
               :model-value="entry.oauthProvider ?? ''"
               :disabled="disabled"
-              @update:model-value="(value) => setOAuthProvider(index, String(value ?? ''))"
+              @update:model-value="
+                (value) => patchEntry(index, { oauthProvider: String(value ?? '') })
+              "
             >
               <ComboboxAnchor class="w-full">
                 <ComboboxTrigger as-child>
@@ -483,49 +456,6 @@ function formatExpireTime(expiresAt: number | undefined) {
       </template>
 
       <template v-if="getEntryType(entry) === 'oauth_provider'">
-        <div
-          v-if="isGitHubCopilotOAuth(entry)"
-          class="grid gap-2 rounded-md border border-dashed p-3"
-        >
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <p class="text-xs text-muted-foreground">
-              Default uses <code>github.com</code>. Configure enterprise domain only when needed.
-            </p>
-            <Button
-              v-if="!isEnterpriseDomainConfigVisible(entry)"
-              type="button"
-              variant="ghost"
-              size="sm"
-              :disabled="disabled"
-              @click="enableEnterpriseDomainConfig(index)"
-            >
-              Configure Domain
-            </Button>
-            <Button
-              v-else
-              type="button"
-              variant="ghost"
-              size="sm"
-              :disabled="disabled"
-              @click="disableEnterpriseDomainConfig(index)"
-            >
-              Use github.com
-            </Button>
-          </div>
-
-          <div v-if="isEnterpriseDomainConfigVisible(entry)" class="grid gap-2">
-            <label class="text-sm font-medium">GitHub Enterprise Domain</label>
-            <Input
-              :model-value="entry.oauthEnterpriseDomain"
-              :disabled="disabled"
-              placeholder="company.ghe.com"
-              @update:model-value="
-                (value) => patchEntry(index, { oauthEnterpriseDomain: String(value ?? '') })
-              "
-            />
-          </div>
-        </div>
-
         <div class="grid gap-2 md:grid-cols-[1fr_auto] md:items-end">
           <div class="text-xs text-muted-foreground">
             <p v-if="entry.oauthCredentials">
