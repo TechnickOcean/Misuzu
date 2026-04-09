@@ -2,7 +2,6 @@ import "dotenv/config"
 import { createInterface } from "node:readline"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import type { ProxyProviderOptions } from "@/index.ts"
 import { createSolverWorkspace } from "@/core/application/workspace/index.ts"
 
 const defaultWorkspaceRootDir = dirname(fileURLToPath(import.meta.url))
@@ -10,9 +9,7 @@ const workspaceRootDir = resolve(process.argv[2] ?? defaultWorkspaceRootDir)
 const workspace = await createSolverWorkspace({ rootDir: workspaceRootDir })
 workspace.bootstrap()
 
-const model = resolveDefaultModel(workspace.loadProxyProviderOptions(), (provider, modelId) => {
-  return workspace.getModel(provider, modelId)
-})
+const model = workspace.getModel("swpumc", "gpt-5.3-codex")
 
 if (!model) {
   console.error(
@@ -97,36 +94,3 @@ readline.on("close", async () => {
   console.log("Bye")
   process.exit(0)
 })
-
-function resolveDefaultModel<T>(
-  optionsList: ProxyProviderOptions[],
-  getModel: (provider: string, modelId: string) => T | undefined,
-) {
-  for (const options of optionsList) {
-    const modelIds = extractCandidateModelIds(options)
-    for (const modelId of modelIds) {
-      const model = getModel(options.provider, modelId)
-      if (model) {
-        return model
-      }
-    }
-  }
-
-  return undefined
-}
-
-function extractCandidateModelIds(options: ProxyProviderOptions) {
-  if (options.modelMappings && options.modelMappings.length > 0) {
-    return options.modelMappings
-      .map((mapping) => {
-        if (typeof mapping === "string") {
-          return mapping
-        }
-
-        return mapping.targetModelId ?? mapping.sourceModelId
-      })
-      .filter((modelId): modelId is string => Boolean(modelId))
-  }
-
-  return options.modelIds ?? []
-}

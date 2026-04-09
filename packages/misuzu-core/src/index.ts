@@ -12,6 +12,7 @@ export {
 export { SolverAgent, type SolverAgentOptions } from "./agents/solver.ts"
 export {
   ProviderRegistry,
+  type OAuthProviderOptions,
   type ProxyProviderModelMapping,
   type ProxyProviderOptions,
 } from "./core/application/providers/registry.ts"

@@ -5,6 +5,7 @@ import {
   type Api,
   type Model,
 } from "@mariozechner/pi-ai"
+import { getOAuthApiKey, getOAuthProvider, type OAuthCredentials } from "@mariozechner/pi-ai/oauth"
 
 export interface ProxyProviderModelMapping {
   sourceModelId: string
@@ -21,6 +22,12 @@ export interface ProxyProviderOptions {
   apiKey?: string
   modelIds?: string[]
   modelMappings?: (string | ProxyProviderModelMapping)[]
+}
+
+interface RegisteredOAuthCredentials {
+  oauthProvider: string
+  credentials: OAuthCredentials
+  autoRefresh: boolean
 }
 
 function cloneProxyModel(
@@ -83,15 +90,24 @@ function getBuiltInModel(provider: string, modelId: string) {
   return resolver(provider, modelId)
 }
 
+export interface OAuthProviderOptions {
+  provider: string
+  oauthProvider?: string
+  credentials?: OAuthCredentials
+  autoRefresh?: boolean
+}
+
 export class ProviderRegistry {
   private readonly proxyProviderRegistry = new Map<string, Map<string, Model<Api>>>()
   private readonly providerApiKeyEnvRegistry = new Map<string, string>()
   private readonly providerApiKeyRegistry = new Map<string, string>()
+  private readonly oauthCredentialsRegistry = new Map<string, RegisteredOAuthCredentials>()
 
   resetWorkspaceConfig() {
     this.proxyProviderRegistry.clear()
     this.providerApiKeyEnvRegistry.clear()
     this.providerApiKeyRegistry.clear()
+    this.oauthCredentialsRegistry.clear()
   }
 
   registerProviderCredentials(options: {
@@ -168,13 +184,46 @@ export class ProviderRegistry {
   }
 
   getApiKey(provider: string, env: NodeJS.ProcessEnv = process.env) {
-    const inlineApiKey = this.providerApiKeyRegistry.get(provider)
-    if (inlineApiKey) {
-      return inlineApiKey
+    const configuredApiKey = this.getConfiguredApiKey(provider, env)
+    if (configuredApiKey !== undefined) {
+      return configuredApiKey
     }
 
-    const apiKeyEnvVar = this.providerApiKeyEnvRegistry.get(provider)
-    return apiKeyEnvVar ? env[apiKeyEnvVar] : undefined
+    return this.getOAuthApiKeyFromCache(provider)
+  }
+
+  async getApiKeyAsync(provider: string, env: NodeJS.ProcessEnv = process.env) {
+    const configuredApiKey = this.getConfiguredApiKey(provider, env)
+    if (configuredApiKey !== undefined) {
+      return configuredApiKey
+    }
+
+    const registered = this.oauthCredentialsRegistry.get(provider)
+    if (!registered) {
+      return undefined
+    }
+
+    if (!registered.autoRefresh) {
+      return this.getOAuthApiKeyFromCache(provider)
+    }
+
+    try {
+      const refreshed = await getOAuthApiKey(registered.oauthProvider, {
+        [registered.oauthProvider]: registered.credentials,
+      })
+      if (!refreshed) {
+        return undefined
+      }
+
+      this.oauthCredentialsRegistry.set(provider, {
+        ...registered,
+        credentials: refreshed.newCredentials,
+      })
+
+      return refreshed.apiKey
+    } catch {
+      return this.getOAuthApiKeyFromCache(provider)
+    }
   }
 
   listProviders() {
@@ -191,6 +240,81 @@ export class ProviderRegistry {
       return getModels(provider as any) as Model<Api>[]
     } catch {
       return []
+    }
+  }
+
+  registerOAuthCredentials(options: OAuthProviderOptions) {
+    const provider = options.provider.trim()
+    if (!provider) {
+      return
+    }
+
+    const oauthProvider =
+      typeof options.oauthProvider === "string" && options.oauthProvider.trim().length > 0
+        ? options.oauthProvider.trim()
+        : provider
+
+    if (!options.credentials) {
+      this.oauthCredentialsRegistry.delete(provider)
+      return
+    }
+
+    this.oauthCredentialsRegistry.set(provider, {
+      oauthProvider,
+      credentials: options.credentials,
+      autoRefresh: options.autoRefresh ?? true,
+    })
+  }
+
+  getOAuthCredentials(provider: string): OAuthCredentials | undefined {
+    return this.oauthCredentialsRegistry.get(provider)?.credentials
+  }
+
+  getOAuthProviderName(provider: string): string | undefined {
+    return this.oauthCredentialsRegistry.get(provider)?.oauthProvider
+  }
+
+  isOAuthAutoRefreshEnabled(provider: string): boolean {
+    return this.oauthCredentialsRegistry.get(provider)?.autoRefresh ?? false
+  }
+
+  hasOAuthCredentials(provider: string): boolean {
+    return this.oauthCredentialsRegistry.has(provider)
+  }
+
+  removeOAuthCredentials(provider: string) {
+    this.oauthCredentialsRegistry.delete(provider)
+  }
+
+  listOAuthProviders(): string[] {
+    return [...this.oauthCredentialsRegistry.keys()]
+  }
+
+  private getConfiguredApiKey(provider: string, env: NodeJS.ProcessEnv) {
+    const inlineApiKey = this.providerApiKeyRegistry.get(provider)
+    if (inlineApiKey) {
+      return inlineApiKey
+    }
+
+    const apiKeyEnvVar = this.providerApiKeyEnvRegistry.get(provider)
+    return apiKeyEnvVar ? env[apiKeyEnvVar] : undefined
+  }
+
+  private getOAuthApiKeyFromCache(provider: string) {
+    const registered = this.oauthCredentialsRegistry.get(provider)
+    if (!registered) {
+      return undefined
+    }
+
+    const oauthProvider = getOAuthProvider(registered.oauthProvider)
+    if (!oauthProvider) {
+      return undefined
+    }
+
+    try {
+      return oauthProvider.getApiKey(registered.credentials)
+    } catch {
+      return undefined
     }
   }
 }

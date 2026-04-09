@@ -68,7 +68,6 @@ export class SyncService {
         await this.solverHub.ensureChallengeSolver(challenge)
       }
 
-      this.solverHub.updateChallengeMetadata(challenge)
       await this.solverHub.refreshChallengeDetail(challenge.id)
     }
 

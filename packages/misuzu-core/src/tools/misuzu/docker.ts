@@ -1,5 +1,6 @@
 import { type Static, Type } from "@sinclair/typebox"
 import { defaultBashOperations, type BashOperations } from "../base/bash.ts"
+import type { AgentTool } from "@mariozechner/pi-agent-core"
 
 function dockerCmd(args: string) {
   return `docker ${args}`
@@ -49,7 +50,7 @@ async function execDocker(ops: BashOperations, cwd: string, command: string, sig
 }
 
 export function createDockerTools(cwd: string, operations: BashOperations = defaultBashOperations) {
-  const dockerBuildTool = {
+  const dockerBuildTool: AgentTool = {
     name: "docker_build",
     label: "docker build",
     description: "Build a Docker image from a Dockerfile.",
@@ -66,7 +67,7 @@ export function createDockerTools(cwd: string, operations: BashOperations = defa
     },
   }
 
-  const dockerRunTool = {
+  const dockerRunTool: AgentTool = {
     name: "docker_run",
     label: "docker run",
     description: "Run a Docker container. Use detach=true for background execution.",
@@ -92,7 +93,7 @@ export function createDockerTools(cwd: string, operations: BashOperations = defa
     },
   }
 
-  const dockerExecTool = {
+  const dockerExecTool: AgentTool = {
     name: "docker_exec",
     label: "docker exec",
     description: "Execute a command in a running container.",
@@ -107,7 +108,7 @@ export function createDockerTools(cwd: string, operations: BashOperations = defa
     },
   }
 
-  const dockerStopTool = {
+  const dockerStopTool: AgentTool = {
     name: "docker_stop",
     label: "docker stop",
     description: "Stop a running container.",
@@ -128,7 +129,7 @@ export function createDockerTools(cwd: string, operations: BashOperations = defa
     },
   }
 
-  const dockerRmTool = {
+  const dockerRmTool: AgentTool = {
     name: "docker_rm",
     label: "docker rm",
     description: "Remove a container.",

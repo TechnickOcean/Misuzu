@@ -109,6 +109,15 @@ async function onWriteupUpload(event: Event) {
     markSolvedError.value = error instanceof Error ? error.message : String(error)
   }
 }
+
+function openPlatformPage() {
+  const baseUrl = snapshot.value?.platformBaseUrl?.trim()
+  if (!baseUrl) {
+    return
+  }
+
+  window.open(baseUrl, "_blank", "noopener,noreferrer")
+}
 </script>
 
 <template>
@@ -229,9 +238,14 @@ async function onWriteupUpload(event: Event) {
               Ordered as active first, queued (collapsed), then solved and blocked review lists.
             </CardDescription>
           </div>
-          <Button variant="outline" :disabled="writeupExporting" @click="exportWriteups">
-            {{ writeupExporting ? "Exporting..." : "Export Writeups" }}
-          </Button>
+          <div class="flex flex-wrap items-center gap-2">
+            <Button v-if="snapshot?.platformBaseUrl" variant="secondary" @click="openPlatformPage">
+              Open Platform
+            </Button>
+            <Button variant="outline" :disabled="writeupExporting" @click="exportWriteups">
+              {{ writeupExporting ? "Exporting..." : "Export Writeups" }}
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent>

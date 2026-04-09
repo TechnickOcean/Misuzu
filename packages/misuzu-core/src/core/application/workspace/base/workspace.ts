@@ -82,7 +82,7 @@ export class BaseWorkspace {
       if ((error as Error).message === "PersistenceStore not initialized") {
         return
       }
-      this.logger.warn("Failed to persist change", error)
+      this.logger.warn("Failed to persist change", JSON.stringify((error as Error)?.message))
     })
   }
 
@@ -143,7 +143,11 @@ export class BaseWorkspace {
     try {
       await job.handler()
     } catch (error) {
-      this.logger.warn("Cron job execution failed", { name }, error)
+      this.logger.warn(
+        "Cron job execution failed",
+        { name },
+        JSON.stringify((error as Error)?.message),
+      )
     } finally {
       job.running = false
     }

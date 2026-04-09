@@ -22,6 +22,8 @@ export interface RuntimeInitOptions {
   plugin?: CTFPlatformPlugin
   cron?: RuntimeCronOptions
   startPaused?: boolean
+  skipContextWarmup?: boolean
+  skipInitialChallengeSync?: boolean
   restore?: {
     authSession?: AuthSession
     contestId?: number
@@ -52,7 +54,9 @@ export class RuntimeOrchestrator {
 
   async initialize(options: RuntimeInitOptions, scheduler: RuntimeScheduler) {
     await this.solverHub.initialize(options)
-    await this.syncService.syncChallengesOnce()
+    if (!options.skipInitialChallengeSync) {
+      await this.syncService.syncChallengesOnce()
+    }
 
     const noticePollIntervalMs =
       options.cron?.noticePollIntervalMs ?? DEFAULT_NOTICE_POLL_INTERVAL_MS

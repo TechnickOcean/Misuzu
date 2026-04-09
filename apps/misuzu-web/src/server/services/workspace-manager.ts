@@ -3,6 +3,16 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
+  getOAuthApiKey,
+  loginAntigravity,
+  loginAnthropic,
+  loginGeminiCli,
+  loginGitHubCopilot,
+  loginOpenAICodex,
+  type OAuthCredentials,
+  type OAuthPrompt,
+} from "@mariozechner/pi-ai/oauth"
+import {
   DEFAULT_SOLVER_PROMPT_TEMPLATE,
   createCTFRuntimeWorkspaceWithoutPersistence,
   createSolverWorkspace,
@@ -18,6 +28,7 @@ import {
 import type {
   AgentStateSnapshot,
   ChallengeSummaryView,
+  OAuthLoginSessionSnapshot,
   ProviderCatalogItem,
   ProviderConfigEntry,
   PluginCatalogItem,
@@ -43,6 +54,35 @@ import { WorkspaceRegistryStore } from "./workspace-registry-store.ts"
 
 const APP_ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
 const DEFAULT_WORKSPACE_ROOT = resolve(APP_ROOT_DIR, ".misuzu-web", "workspaces")
+
+const OAUTH_PROVIDERS = [
+  "anthropic",
+  "openai-codex",
+  "github-copilot",
+  "google-gemini-cli",
+  "google-antigravity",
+] as const
+
+type OAuthProviderId = (typeof OAUTH_PROVIDERS)[number]
+
+interface OAuthLoginSession {
+  id: string
+  provider: OAuthProviderId
+  status: OAuthLoginSessionSnapshot["status"]
+  awaitingManualInput: boolean
+  pollCount: number
+  debugEvents: string[]
+  manualInputPlaceholder?: string
+  manualInputAllowEmpty: boolean
+  authUrl?: string
+  instructions?: string
+  progressMessage?: string
+  error?: string
+  apiKey?: string
+  credentials?: ProviderConfigEntry["oauthCredentials"]
+  updatedAt: number
+  resolveManualCode?: (code: string) => void
+}
 
 interface RuntimeWorkspaceSession {
   id: string
@@ -70,9 +110,100 @@ type RuntimePlatformPluginConfigInput = Omit<
   maxConcurrentContainers?: number
 }
 
+interface OAuthErrorDetails {
+  message: string
+  cause?: {
+    code?: string
+    errno?: number
+    syscall?: string
+    address?: string
+    port?: number
+  }
+}
+
+function isOAuthCredentialsPayload(
+  value: unknown,
+): value is NonNullable<ProviderConfigEntry["oauthCredentials"]> {
+  if (!value || typeof value !== "object") {
+    return false
+  }
+
+  const candidate = value as {
+    refresh?: unknown
+    access?: unknown
+    expires?: unknown
+  }
+
+  return (
+    typeof candidate.refresh === "string" &&
+    typeof candidate.access === "string" &&
+    typeof candidate.expires === "number" &&
+    Number.isFinite(candidate.expires)
+  )
+}
+
+function getOAuthErrorDetails(error: unknown): OAuthErrorDetails {
+  if (!(error instanceof Error)) {
+    return { message: String(error) }
+  }
+
+  const cause = error.cause as
+    | {
+        code?: string
+        errno?: number
+        syscall?: string
+        address?: string
+        port?: number
+      }
+    | undefined
+
+  return {
+    message: error.message,
+    cause: cause
+      ? {
+          code: cause.code,
+          errno: cause.errno,
+          syscall: cause.syscall,
+          address: cause.address,
+          port: cause.port,
+        }
+      : undefined,
+  }
+}
+
+function formatOAuthErrorMessage(provider: OAuthProviderId, details: OAuthErrorDetails) {
+  if (
+    provider === "github-copilot" &&
+    details.message === "fetch failed" &&
+    details.cause?.address === "127.0.0.1" &&
+    details.cause?.port === 443
+  ) {
+    return "GitHub Copilot OAuth failed: github.com currently resolves to 127.0.0.1:443 in this environment, so device login cannot reach GitHub. Please check DNS/hosts/proxy settings or provide a reachable GitHub Enterprise domain."
+  }
+
+  if (
+    provider === "github-copilot" &&
+    details.message === "fetch failed" &&
+    details.cause?.code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE"
+  ) {
+    return "GitHub Copilot OAuth failed: TLS certificate verification failed (UNABLE_TO_VERIFY_LEAF_SIGNATURE). This usually means your proxy/SSL inspection certificate chain is not trusted by Node.js. Please import the proxy root certificate into Node trust store or disable HTTPS interception for github.com/api.github.com."
+  }
+
+  if (details.cause?.code) {
+    return `${details.message} (${details.cause.code}${
+      details.cause.address ? ` ${details.cause.address}:${String(details.cause.port ?? "")}` : ""
+    })`
+  }
+
+  return details.message
+}
+
 export class WorkspaceManager {
   private readonly runtimeSessions = new Map<string, RuntimeWorkspaceSession>()
+  private readonly runtimeSessionLoads = new Map<string, Promise<RuntimeWorkspaceSession>>()
   private readonly solverSessions = new Map<string, SolverWorkspaceSession>()
+  private readonly solverSessionLoads = new Map<string, Promise<SolverWorkspaceSession>>()
+  private readonly oauthLoginSessions = new Map<string, OAuthLoginSession>()
 
   constructor(
     private readonly registry: WorkspaceRegistryStore,
@@ -139,6 +270,293 @@ export class WorkspaceManager {
 
     const session = await this.requireRuntimeSession(workspaceId)
     return toProviderCatalog(session.workspace.listModelPoolCatalog())
+  }
+
+  listOAuthProviders(): OAuthProviderId[] {
+    return [...OAUTH_PROVIDERS]
+  }
+
+  async startOAuthLogin(provider: string): Promise<OAuthLoginSessionSnapshot> {
+    const oauthProvider = this.normalizeOAuthProvider(provider)
+    this.pruneOAuthLoginSessions()
+
+    const session: OAuthLoginSession = {
+      id: randomUUID(),
+      provider: oauthProvider,
+      status: "pending",
+      awaitingManualInput: false,
+      pollCount: 0,
+      debugEvents: [],
+      manualInputAllowEmpty: false,
+      updatedAt: Date.now(),
+    }
+    this.oauthLoginSessions.set(session.id, session)
+    this.appendOAuthDebug(session, "created", { provider: oauthProvider, pid: process.pid })
+
+    const manualCodePromise = new Promise<string>((resolve) => {
+      session.resolveManualCode = resolve
+    })
+
+    void this.executeOAuthLogin(session, manualCodePromise).catch((error) => {
+      session.status = "error"
+      session.awaitingManualInput = false
+      session.error = error instanceof Error ? error.message : String(error)
+      session.updatedAt = Date.now()
+      this.appendOAuthDebug(session, "execute failed unexpectedly", {
+        error: session.error,
+      })
+    })
+
+    return this.toOAuthLoginSessionSnapshot(session)
+  }
+
+  getOAuthLoginSession(sessionId: string): OAuthLoginSessionSnapshot {
+    const session = this.oauthLoginSessions.get(sessionId)
+    if (!session) {
+      throw new Error(`OAuth login session not found: ${sessionId}`)
+    }
+
+    session.pollCount += 1
+    if (session.pollCount <= 3 || session.pollCount % 10 === 0) {
+      this.appendOAuthDebug(session, "polled", {
+        pollCount: session.pollCount,
+        status: session.status,
+        awaitingManualInput: session.awaitingManualInput,
+        hasAuthUrl: Boolean(session.authUrl),
+      })
+    }
+
+    return this.toOAuthLoginSessionSnapshot(session)
+  }
+
+  submitOAuthManualCode(sessionId: string, code: string): OAuthLoginSessionSnapshot {
+    const session = this.oauthLoginSessions.get(sessionId)
+    if (!session) {
+      throw new Error(`OAuth login session not found: ${sessionId}`)
+    }
+
+    const normalizedCode = code.trim()
+    if (!normalizedCode && !session.manualInputAllowEmpty) {
+      throw new Error("OAuth manual code is required")
+    }
+
+    session.resolveManualCode?.(normalizedCode)
+    session.resolveManualCode = undefined
+    session.awaitingManualInput = false
+    session.updatedAt = Date.now()
+    this.appendOAuthDebug(session, "manual code submitted", {
+      codeLength: normalizedCode.length,
+      allowEmpty: session.manualInputAllowEmpty,
+    })
+
+    return this.toOAuthLoginSessionSnapshot(session)
+  }
+
+  private async executeOAuthLogin(session: OAuthLoginSession, manualCodePromise: Promise<string>) {
+    session.status = "running"
+    session.updatedAt = Date.now()
+    this.appendOAuthDebug(session, "execute started")
+
+    const onAuth = (
+      auth: { url: string; instructions?: string } | string,
+      instructions?: string,
+    ) => {
+      if (typeof auth === "string") {
+        session.authUrl = auth
+        session.instructions = instructions
+      } else {
+        session.authUrl = auth.url
+        session.instructions = auth.instructions
+      }
+      session.status = "awaiting_auth"
+      session.awaitingManualInput = false
+      session.manualInputAllowEmpty = false
+      session.manualInputPlaceholder = undefined
+      session.updatedAt = Date.now()
+      this.appendOAuthDebug(session, "auth url ready", {
+        hasInstructions: Boolean(session.instructions),
+      })
+    }
+    const onProgress = (message: string) => {
+      session.progressMessage = message
+      if (session.status === "pending") {
+        session.status = "running"
+      }
+      session.updatedAt = Date.now()
+      this.appendOAuthDebug(session, "progress", { message })
+    }
+    const onPrompt = async (prompt: OAuthPrompt) => {
+      session.status = "awaiting_auth"
+      session.awaitingManualInput = true
+      session.instructions = prompt.message
+      session.manualInputPlaceholder = prompt.placeholder
+      session.manualInputAllowEmpty = Boolean(prompt.allowEmpty)
+      session.updatedAt = Date.now()
+      this.appendOAuthDebug(session, "manual input requested via prompt", {
+        message: prompt.message,
+        allowEmpty: session.manualInputAllowEmpty,
+        placeholder: session.manualInputPlaceholder,
+      })
+      return manualCodePromise
+    }
+    const onManualCodeInput = async () => {
+      if (!session.awaitingManualInput) {
+        session.status = "awaiting_auth"
+        session.awaitingManualInput = true
+        if (!session.instructions) {
+          session.instructions = "Paste the authorization code or full redirect URL."
+        }
+        session.manualInputAllowEmpty = false
+        session.manualInputPlaceholder = undefined
+        session.updatedAt = Date.now()
+        this.appendOAuthDebug(session, "manual input requested via callback")
+      }
+      return manualCodePromise
+    }
+
+    try {
+      let credentials: OAuthCredentials
+
+      switch (session.provider) {
+        case "anthropic": {
+          credentials = await loginAnthropic({
+            onAuth,
+            onPrompt,
+            onProgress,
+            onManualCodeInput,
+          })
+          break
+        }
+        case "openai-codex": {
+          credentials = await loginOpenAICodex({
+            onAuth,
+            onPrompt,
+            onProgress,
+            onManualCodeInput,
+          })
+          break
+        }
+        case "github-copilot": {
+          credentials = await loginGitHubCopilot({
+            onAuth: (url: string, nextInstructions?: string) => onAuth(url, nextInstructions),
+            onPrompt,
+            onProgress,
+          })
+          break
+        }
+        case "google-gemini-cli": {
+          credentials = await loginGeminiCli(onAuth, onProgress, onManualCodeInput)
+          break
+        }
+        case "google-antigravity": {
+          credentials = await loginAntigravity(onAuth, onProgress, onManualCodeInput)
+          break
+        }
+      }
+
+      const apiKeyResult = await getOAuthApiKey(session.provider, {
+        [session.provider]: credentials,
+      })
+      if (!apiKeyResult) {
+        throw new Error(`OAuth login did not return credentials for provider ${session.provider}`)
+      }
+
+      session.status = "success"
+      session.awaitingManualInput = false
+      session.manualInputAllowEmpty = false
+      session.manualInputPlaceholder = undefined
+      session.credentials = this.toProviderOAuthCredentials(apiKeyResult.newCredentials)
+      session.apiKey = apiKeyResult.apiKey
+      session.error = undefined
+      session.updatedAt = Date.now()
+      session.resolveManualCode = undefined
+      this.appendOAuthDebug(session, "login succeeded", {
+        hasApiKey: Boolean(session.apiKey),
+      })
+    } catch (error) {
+      const details = getOAuthErrorDetails(error)
+      session.status = "error"
+      session.awaitingManualInput = false
+      session.manualInputAllowEmpty = false
+      session.manualInputPlaceholder = undefined
+      session.error = formatOAuthErrorMessage(session.provider, details)
+      session.updatedAt = Date.now()
+      session.resolveManualCode = undefined
+      this.appendOAuthDebug(session, "login failed", {
+        error: session.error,
+        rawError: details,
+      })
+    }
+  }
+
+  private normalizeOAuthProvider(provider: string): OAuthProviderId {
+    const normalized = provider.trim() as OAuthProviderId
+    if (OAUTH_PROVIDERS.includes(normalized)) {
+      return normalized
+    }
+
+    throw new Error(`Unsupported OAuth provider: ${provider}`)
+  }
+
+  private toProviderOAuthCredentials(
+    credentials: OAuthCredentials,
+  ): NonNullable<ProviderConfigEntry["oauthCredentials"]> {
+    const payload = credentials as Record<string, unknown>
+    return {
+      ...payload,
+      refresh: String(credentials.refresh),
+      access: String(credentials.access),
+      expires: Number(credentials.expires),
+    }
+  }
+
+  private toOAuthLoginSessionSnapshot(session: OAuthLoginSession): OAuthLoginSessionSnapshot {
+    return {
+      id: session.id,
+      provider: session.provider,
+      status: session.status,
+      awaitingManualInput: session.awaitingManualInput,
+      manualInputPlaceholder: session.manualInputPlaceholder,
+      manualInputAllowEmpty: session.manualInputAllowEmpty,
+      debugEvents: [...session.debugEvents],
+      authUrl: session.authUrl,
+      instructions: session.instructions,
+      progressMessage: session.progressMessage,
+      error: session.error,
+      apiKey: session.apiKey,
+      credentials: session.credentials,
+      updatedAt: session.updatedAt,
+    }
+  }
+
+  private pruneOAuthLoginSessions() {
+    const maxAgeMs = 15 * 60 * 1000
+    const now = Date.now()
+    for (const [sessionId, session] of this.oauthLoginSessions.entries()) {
+      if (now - session.updatedAt > maxAgeMs) {
+        this.oauthLoginSessions.delete(sessionId)
+      }
+    }
+  }
+
+  private appendOAuthDebug(
+    session: OAuthLoginSession,
+    event: string,
+    payload?: Record<string, unknown>,
+  ) {
+    const entry = `${new Date().toISOString()} ${event}${
+      payload ? ` ${JSON.stringify(payload)}` : ""
+    }`
+    session.debugEvents.push(entry)
+    if (session.debugEvents.length > 80) {
+      session.debugEvents.splice(0, session.debugEvents.length - 80)
+    }
+
+    if (payload) {
+      console.log(`[misuzu-oauth][${session.id}] ${event}`, payload)
+      return
+    }
+    console.log(`[misuzu-oauth][${session.id}] ${event}`)
   }
 
   async getPluginReadme(pluginId: string): Promise<PluginReadmeResponse> {
@@ -770,12 +1188,24 @@ export class WorkspaceManager {
       return existing
     }
 
+    const loading = this.runtimeSessionLoads.get(workspaceId)
+    if (loading) {
+      return loading
+    }
+
     const entry = this.registry.getEntry(workspaceId)
     if (!entry || entry.kind !== "ctf-runtime") {
       throw new Error(`Runtime workspace not found: ${workspaceId}`)
     }
 
-    return this.createRuntimeSession(entry)
+    const next = this.createRuntimeSession(entry)
+    this.runtimeSessionLoads.set(workspaceId, next)
+
+    try {
+      return await next
+    } finally {
+      this.runtimeSessionLoads.delete(workspaceId)
+    }
   }
 
   private async requireSolverSession(workspaceId: string) {
@@ -784,23 +1214,37 @@ export class WorkspaceManager {
       return existing
     }
 
+    const loading = this.solverSessionLoads.get(workspaceId)
+    if (loading) {
+      return loading
+    }
+
     const entry = this.registry.getEntry(workspaceId)
     if (!entry || entry.kind !== "solver") {
       throw new Error(`Solver workspace not found: ${workspaceId}`)
     }
 
-    const workspace = await createSolverWorkspace({ rootDir: entry.rootDir })
-    workspace.bootstrap()
-    const session: SolverWorkspaceSession = {
-      id: entry.id,
-      workspace,
-      entry,
+    const next = (async () => {
+      const workspace = await createSolverWorkspace({ rootDir: entry.rootDir })
+      workspace.bootstrap()
+      const session: SolverWorkspaceSession = {
+        id: entry.id,
+        workspace,
+        entry,
+      }
+
+      this.solverSessions.set(entry.id, session)
+      this.bindSolverMainAgent(session)
+
+      return session
+    })()
+
+    this.solverSessionLoads.set(workspaceId, next)
+    try {
+      return await next
+    } finally {
+      this.solverSessionLoads.delete(workspaceId)
     }
-
-    this.solverSessions.set(entry.id, session)
-    this.bindSolverMainAgent(session)
-
-    return session
   }
 
   private async initializeRuntimeInternal(
@@ -937,15 +1381,34 @@ export class WorkspaceManager {
       return this.ensureEnvironmentAgent(session)
     }
 
-    const solver = session.workspace.getSolverById(agentId)
+    let ensureError: unknown
+    const workspaceWithLazySolver = session.workspace as CTFRuntimeWorkspace & {
+      ensureSolverById?: (solverId: string) => Promise<SolverAgent | undefined>
+    }
+    const solver = await (async () => {
+      try {
+        return workspaceWithLazySolver.ensureSolverById
+          ? await workspaceWithLazySolver.ensureSolverById(agentId)
+          : session.workspace.getSolverById(agentId)
+      } catch (error) {
+        ensureError = error
+        return undefined
+      }
+    })()
     if (solver) {
+      this.bindRuntimeSolverAgents(session)
       return solver
     }
 
     // Fallback to persisted solver workspace so solved/detached solvers can still expose history.
     const solverWorkspace = await session.workspace.deriveSolverWorkspace(agentId)
     if (solverWorkspace.mainAgent) {
+      this.bindRuntimeSolverAgents(session)
       return solverWorkspace.mainAgent
+    }
+
+    if (ensureError) {
+      throw ensureError
     }
 
     throw new Error(`Runtime agent not found: ${agentId}`)
@@ -1066,10 +1529,6 @@ export class WorkspaceManager {
     }
 
     for (const challenge of challenges) {
-      if (!session.workspace.getSolverById(challenge.solverId)) {
-        continue
-      }
-
       agents.push({
         id: challenge.solverId,
         name: challenge.title,
@@ -1087,6 +1546,7 @@ export class WorkspaceManager {
         ? (session.workspace.getPersistedRuntimeOptions()?.pluginId ??
           session.entry.runtime?.pluginId)
         : session.entry.runtime?.pluginId,
+      platformBaseUrl: session.workspace.getPersistedRuntimeOptions()?.pluginConfig.baseUrl,
       paused: session.workspace.isTaskDispatchPaused(),
       queue: session.workspace.getSchedulerState(),
       modelPool: session.workspace.getModelPoolState(),
@@ -1121,6 +1581,7 @@ export class WorkspaceManager {
       thinkingLevel: agent.state.thinkingLevel,
       isRunning: isAgentRunning(agent),
       messages: agent.state.messages.map((message) => {
+        // @ts-ignore
         const parts = extractMessageParts(message.content)
         return {
           role: message.role,
@@ -1420,6 +1881,17 @@ export class WorkspaceManager {
           return typeof provider === "string" && provider.trim().length > 0
         })
         .map((item) => ({
+          providerType:
+            item.providerType === "custom_provider" ||
+            item.providerType === "normal_provider" ||
+            item.providerType === "oauth_provider"
+              ? item.providerType
+              : isOAuthCredentialsPayload(item.oauthCredentials) ||
+                  (typeof item.oauthProvider === "string" && item.oauthProvider.trim().length > 0)
+                ? "oauth_provider"
+                : typeof item.baseProvider === "string" && item.baseProvider.trim().length > 0
+                  ? "custom_provider"
+                  : "normal_provider",
           provider: item.provider.trim(),
           baseProvider:
             typeof item.baseProvider === "string" && item.baseProvider.trim().length > 0
@@ -1434,6 +1906,20 @@ export class WorkspaceManager {
             typeof item.api_key === "string" && item.api_key.trim().length > 0
               ? item.api_key.trim()
               : undefined,
+          oauthProvider:
+            typeof item.oauthProvider === "string" && item.oauthProvider.trim().length > 0
+              ? item.oauthProvider.trim()
+              : undefined,
+          oauthEnterpriseDomain:
+            typeof item.oauthEnterpriseDomain === "string" &&
+            item.oauthEnterpriseDomain.trim().length > 0
+              ? item.oauthEnterpriseDomain.trim()
+              : undefined,
+          oauthCredentials: isOAuthCredentialsPayload(item.oauthCredentials)
+            ? item.oauthCredentials
+            : undefined,
+          oauthAutoRefresh:
+            typeof item.oauthAutoRefresh === "boolean" ? item.oauthAutoRefresh : undefined,
           modelIds: Array.isArray(item.modelIds)
             ? item.modelIds.filter((value): value is string => typeof value === "string")
             : undefined,
@@ -1457,6 +1943,17 @@ export class WorkspaceManager {
     const normalizedEntries = entries
       .filter((entry) => typeof entry.provider === "string" && entry.provider.trim().length > 0)
       .map((entry) => ({
+        providerType:
+          entry.providerType === "custom_provider" ||
+          entry.providerType === "normal_provider" ||
+          entry.providerType === "oauth_provider"
+            ? entry.providerType
+            : isOAuthCredentialsPayload(entry.oauthCredentials) ||
+                (typeof entry.oauthProvider === "string" && entry.oauthProvider.trim().length > 0)
+              ? "oauth_provider"
+              : typeof entry.baseProvider === "string" && entry.baseProvider.trim().length > 0
+                ? "custom_provider"
+                : "normal_provider",
         provider: entry.provider.trim(),
         baseProvider:
           typeof entry.baseProvider === "string" && entry.baseProvider.trim().length > 0
@@ -1471,6 +1968,20 @@ export class WorkspaceManager {
           typeof entry.api_key === "string" && entry.api_key.trim().length > 0
             ? entry.api_key.trim()
             : undefined,
+        oauthProvider:
+          typeof entry.oauthProvider === "string" && entry.oauthProvider.trim().length > 0
+            ? entry.oauthProvider.trim()
+            : undefined,
+        oauthEnterpriseDomain:
+          typeof entry.oauthEnterpriseDomain === "string" &&
+          entry.oauthEnterpriseDomain.trim().length > 0
+            ? entry.oauthEnterpriseDomain.trim()
+            : undefined,
+        oauthCredentials: isOAuthCredentialsPayload(entry.oauthCredentials)
+          ? entry.oauthCredentials
+          : undefined,
+        oauthAutoRefresh:
+          typeof entry.oauthAutoRefresh === "boolean" ? entry.oauthAutoRefresh : undefined,
         modelIds:
           Array.isArray(entry.modelIds) && entry.modelIds.length > 0
             ? entry.modelIds
@@ -1519,8 +2030,20 @@ export class WorkspaceManager {
             : undefined,
       }))
       .map((entry) => {
-        if (!entry.baseProvider) {
+        if (entry.providerType === "oauth_provider") {
           return {
+            providerType: entry.providerType,
+            provider: entry.provider,
+            oauthProvider: entry.oauthProvider,
+            oauthEnterpriseDomain: entry.oauthEnterpriseDomain,
+            oauthCredentials: entry.oauthCredentials,
+            oauthAutoRefresh: entry.oauthAutoRefresh,
+          }
+        }
+
+        if (entry.providerType === "normal_provider") {
+          return {
+            providerType: entry.providerType,
             provider: entry.provider,
             apiKeyEnvVar: entry.apiKeyEnvVar,
             api_key: entry.api_key,
@@ -1528,6 +2051,7 @@ export class WorkspaceManager {
         }
 
         return {
+          providerType: entry.providerType,
           provider: entry.provider,
           baseProvider: entry.baseProvider,
           baseUrl: entry.baseUrl,
@@ -1653,7 +2177,7 @@ function buildRuntimeWriteupDocument(input: {
   ).length
 
   const lines: string[] = [
-    `# ${input.workspaceName} Dashboard Writeups`,
+    `# ${input.workspaceName} Writeups`,
     "",
     "## Overview",
     `- Workspace: ${input.workspaceName} (${input.workspaceId})`,
@@ -1679,9 +2203,6 @@ function buildRuntimeWriteupDocument(input: {
       lines.push("")
     }
 
-    if (archivedSections.length > 0) {
-      lines.push("### Archived Solver Writeups", "")
-    }
     for (const section of archivedSections) {
       const inferredTitle = extractWriteupTitle(section.markdown)
       if (section.challenge) {
@@ -1709,14 +2230,9 @@ function buildRuntimeWriteupDocument(input: {
     lines.push("")
   }
 
-  lines.push("## Consolidated Writeups", "")
   if (input.sections.length === 0) {
     lines.push("No WriteUp.md files found in solver workspaces.")
     return lines.join("\n")
-  }
-
-  if (matchedSections.length > 0) {
-    lines.push("### Tracked Challenge Writeups", "")
   }
 
   for (const section of matchedSections) {
@@ -1725,8 +2241,9 @@ function buildRuntimeWriteupDocument(input: {
         stripLeadingTitleHeading(section.markdown, section.challenge.title),
       )
       lines.push(
-        `<a id="challenge-${String(section.challenge.challengeId)}"></a>\n`,
-        `### #${String(section.challenge.challengeId)} ${section.challenge.title}`,
+        `<a id="challenge-${String(section.challenge.challengeId)}"></a>`,
+        "",
+        `## #${String(section.challenge.challengeId)} ${section.challenge.title}`,
         "",
         `- Category: ${section.challenge.category}`,
         `- Score: ${String(section.challenge.score)}`,

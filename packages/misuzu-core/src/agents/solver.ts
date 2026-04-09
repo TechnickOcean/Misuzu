@@ -5,6 +5,7 @@ import {
 } from "./featured.ts"
 import { createBaseTools } from "../tools/index.ts"
 import { CTF_SANDBOX_IMAGE, CTF_SANDBOX_TOOLS } from "../tools/misuzu/sandbox/tool-catalog.ts"
+import { createDockerTools } from "../tools/misuzu/docker.ts"
 
 export type SolverAgentOptions = FeaturedAgentOptions
 
@@ -32,7 +33,10 @@ function buildSolverPrompt(basePrompt: string | undefined) {
 
 export class SolverAgent extends FeaturedAgent {
   constructor(deps: FeaturedAgentDependencies, options: SolverAgentOptions = {}) {
-    const tools = options.tools ?? createBaseTools(deps.cwd)
+    const tools = options.tools ?? [
+      ...createBaseTools(deps.cwd),
+      ...createDockerTools(deps.cwd).dockerTools,
+    ]
     const systemPrompt = buildSolverPrompt(options.initialState?.systemPrompt)
 
     super(deps, {

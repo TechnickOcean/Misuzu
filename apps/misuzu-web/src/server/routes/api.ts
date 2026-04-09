@@ -1,5 +1,7 @@
 import { Hono } from "hono"
 import type {
+  OAuthLoginManualCodeRequest,
+  OAuthLoginStartRequest,
   RuntimeConfigUpdateRequest,
   PromptRequest,
   RuntimeCreateRequest,
@@ -241,6 +243,31 @@ export function registerApiRoutes(app: Hono, manager: WorkspaceManager) {
     const workspaceId = c.req.query("workspaceId")
     const items = await manager.listProviderCatalog(workspaceId)
     return c.json({ items })
+  })
+
+  api.get("/providers/oauth", (c) => {
+    c.header("Cache-Control", "no-store")
+    return c.json({ providers: manager.listOAuthProviders() })
+  })
+
+  api.post("/providers/oauth/login", async (c) => {
+    c.header("Cache-Control", "no-store")
+    const request = await c.req.json<OAuthLoginStartRequest>()
+    const session = await manager.startOAuthLogin(request.provider)
+    return c.json({ session })
+  })
+
+  api.get("/providers/oauth/login/:sessionId", async (c) => {
+    c.header("Cache-Control", "no-store")
+    const session = manager.getOAuthLoginSession(c.req.param("sessionId"))
+    return c.json({ session })
+  })
+
+  api.post("/providers/oauth/login/:sessionId/manual-code", async (c) => {
+    c.header("Cache-Control", "no-store")
+    const request = await c.req.json<OAuthLoginManualCodeRequest>()
+    const session = manager.submitOAuthManualCode(c.req.param("sessionId"), request.code)
+    return c.json({ session })
   })
 
   api.get("/plugins/:pluginId/readme", async (c) => {

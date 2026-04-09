@@ -62,7 +62,10 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
         )
         this.misuzuState.mainAgent.agentState.messages = messages
       } catch (error) {
-        this.logger.error("Failed to load agent messages", error)
+        this.logger.error(
+          "Failed to load agent messages",
+          JSON.stringify((error as Error)?.message),
+        )
         throw error
       }
     }
@@ -139,7 +142,7 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
 
     this.debounceTimer = setTimeout(() => {
       this.flushImmediate().catch((error) => {
-        this.logger.error("Failed to flush changes", error)
+        this.logger.error("Failed to flush changes", JSON.stringify((error as Error)?.message))
       })
     }, 500)
   }
@@ -249,7 +252,7 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return null
       }
-      this.logger.warn("Failed to load state file", error)
+      this.logger.warn("Failed to load state file", JSON.stringify((error as Error)?.message))
       return null
     }
   }
@@ -281,7 +284,7 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
       await fs.writeFile(stateFilePath, JSON.stringify(stateToSave, null, 2), "utf-8")
       this.logger.debug("Saved workspace state")
     } catch (error) {
-      this.logger.error("Failed to save state file", error)
+      this.logger.error("Failed to save state file", JSON.stringify((error as Error)?.message))
       throw error
     }
   }
@@ -309,7 +312,10 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
         fileIndices.push(fileIndex)
         messageCounts.push(chunk.length)
       } catch (error) {
-        this.logger.error(`Failed to save message chunk ${fileIndex}`, error)
+        this.logger.error(
+          `Failed to save message chunk ${fileIndex}`,
+          JSON.stringify((error as Error)?.message),
+        )
         throw error
       }
     }
@@ -339,7 +345,10 @@ export class JsonFilePersistenceAdapter implements PersistenceStore {
         const chunk = JSON.parse(content) as AgentMessage[]
         messages.push(...chunk)
       } catch (error) {
-        this.logger.error(`Failed to load message chunk ${fileIndex}`, error)
+        this.logger.error(
+          `Failed to load message chunk ${fileIndex}`,
+          JSON.stringify((error as Error)?.message),
+        )
         throw error
       }
     }

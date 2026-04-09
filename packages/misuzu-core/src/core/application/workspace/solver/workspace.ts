@@ -100,7 +100,6 @@ export class SolverWorkspace extends BaseWorkspace {
       }
 
       this.logger.info("Restoring workspace state from persistence")
-
       if (persistedState.mainAgent) {
         const model = this.validateAndResolvePersistedModel(persistedState.mainAgent)
         const restoredBaseOptions = persistedState.mainAgent
@@ -130,7 +129,10 @@ export class SolverWorkspace extends BaseWorkspace {
         })
       }
     } catch (error) {
-      this.logger.error("Failed to restore workspace state", error)
+      this.logger.error(
+        "Failed to restore workspace state",
+        JSON.stringify((error as Error)?.message),
+      )
       throw error
     }
   }
@@ -202,16 +204,16 @@ export class SolverWorkspace extends BaseWorkspace {
 
     const model = this.providers.getModel(provider, modelId)
     if (!model) {
-      throw new Error(
-        `Corrupted workspace state: model not found in registry (provider: "${provider}", modelId: "${modelId}"). ` +
+      this.logger.warn(
+        `Model not found in registry (provider: "${provider}", modelId: "${modelId}"). ` +
           "The model may have been removed from the provider registry or API.",
       )
+    } else {
+      this.logger.debug("Agent state validation passed", {
+        modelId: persistedAgent.modelId,
+        model: `${model.provider}/${model.id}`,
+      })
     }
-
-    this.logger.debug("Agent state validation passed", {
-      modelId: persistedAgent.modelId,
-      model: `${model.provider}/${model.id}`,
-    })
 
     return model
   }

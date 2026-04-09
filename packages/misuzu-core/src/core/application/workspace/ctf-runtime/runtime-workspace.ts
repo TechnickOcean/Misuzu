@@ -253,6 +253,10 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
       ?.solver
   }
 
+  async ensureSolverById(solverId: string) {
+    return this.solverHub.ensureSolverById(solverId)
+  }
+
   getChallengeDetail(challengeId: number) {
     return this.solverHub.getChallenge(challengeId)
   }
@@ -276,6 +280,8 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
   async initializeRuntime(options: RuntimeInitOptions) {
     // Only restore scheduler/hub snapshot when plugin identity matches current runtime config.
     const restoreSnapshot = this.getMatchingPendingRuntimeSnapshot(options)
+    const restoreMode = Boolean(restoreSnapshot)
+    this.solverHub.setHydrationDeferred(Boolean(restoreSnapshot))
     this.restoreSolverHubFromSnapshot(restoreSnapshot)
     this.restoreQueueFromSnapshot(restoreSnapshot)
     this.restoreSchedulerFromSnapshot(restoreSnapshot)
@@ -284,6 +290,8 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     await this.orchestrator.initialize(
       {
         ...options,
+        skipContextWarmup: options.skipContextWarmup ?? restoreMode,
+        skipInitialChallengeSync: options.skipInitialChallengeSync ?? restoreMode,
         restore: this.buildRuntimeRestoreContext(restoreSnapshot),
       },
       this.getRuntimeScheduler(),
@@ -390,6 +398,10 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
 
   cancelInflightTask(taskId: string): SolverTaskCancelResult | undefined {
     return this.queue.cancelTask(taskId)
+  }
+
+  async destroyChallengeContainer(challengeId: number) {
+    return this.solverHub.destroyChallengeContainer(challengeId)
   }
 
   abortAllRunningTasks() {
@@ -632,7 +644,10 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
     this.persistRuntimeTimer = setTimeout(() => {
       this.persistRuntimeTimer = undefined
       this.persistRuntimeState().catch((error) => {
-        this.logger.warn("Failed to persist runtime state", error)
+        this.logger.warn(
+          "Failed to persist runtime state",
+          JSON.stringify((error as Error)?.message),
+        )
       })
     }, 600)
     this.persistRuntimeTimer.unref?.()
@@ -857,7 +872,13 @@ export class CTFRuntimeWorkspace extends BaseWorkspace {
   private getRuntimeScheduler() {
     return {
       registerCronJob: (name: string, intervalMs: number, handler: () => Promise<void>) => {
-        this.registerCronJob(name, intervalMs, handler)
+        this.registerCronJob(name, intervalMs, async () => {
+          if (this.isTaskDispatchPaused()) {
+            return
+          }
+
+          await handler()
+        })
       },
     }
   }

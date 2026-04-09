@@ -91,11 +91,11 @@ export class WorkspaceLogger implements Logger {
   }
 
   warn(message: string, data?: unknown, error?: unknown) {
-    this.log("warn", message, data, error)
+    this.log("warn", message, data, JSON.stringify((error as Error)?.message))
   }
 
   error(message: string, data?: unknown, error?: unknown) {
-    this.log("error", message, data, error)
+    this.log("error", message, data, JSON.stringify((error as Error)?.message))
   }
 
   private shouldWrite(level: LogLevel) {

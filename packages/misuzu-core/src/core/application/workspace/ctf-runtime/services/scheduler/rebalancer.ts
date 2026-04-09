@@ -5,9 +5,11 @@ import {
   RANK_HARD_CAP_MS,
   RANK_HARD_COOLDOWN_MS,
   RANK_REBALANCE_INTERVAL_MS,
+  RANK_MIN_RUN_SLICE_MS,
   RANK_STOP_BURST_LIMIT,
   RANK_STOP_COOLDOWN_MS,
   RANK_STOP_RECOVERY_WINDOW_MS,
+  RANK_SWAP_MARGIN,
   type ChallengeRankState,
   type RankedCandidate,
   computeChallengeBaseRank,
@@ -52,9 +54,15 @@ export interface RuntimeRankOrchestratorHost {
   listInflightDispatchTasks(): DispatchTask[]
   runDispatchTask(task: DispatchTask): Promise<SolverTaskResult>
   cancelInflightTask(taskId: string): SolverTaskCancelResult | undefined
+  destroyChallengeContainer(challengeId: number): Promise<boolean>
   abortAllRunningTasks(): void
   setUnexpectedSolverStopListener(listener: (event: UnexpectedSolverStopEvent) => void): void
   notifyStateChanged(): void
+}
+
+interface PendingContainerTeardown {
+  inFlight: boolean
+  retryAfter?: number
 }
 
 export class RuntimeRankOrchestrator {
@@ -74,6 +82,7 @@ export class RuntimeRankOrchestrator {
       reject: (error: unknown) => void
     }
   >()
+  private readonly pendingContainerTeardowns = new Map<number, PendingContainerTeardown>()
 
   constructor(private readonly host: RuntimeRankOrchestratorHost) {}
 
@@ -318,6 +327,7 @@ export class RuntimeRankOrchestrator {
     const inflightTasks = this.host.listInflightDispatchTasks()
     const inflightByChallengeId = new Set(inflightTasks.map((task) => task.challengeId))
     const inflightTaskIds = new Set(inflightTasks.map((task) => task.taskId))
+    this.flushPendingContainerTeardowns(now, inflightByChallengeId)
     const availableSlots = this.resolveAvailableDispatchSlots({
       candidateCount: this.rankByChallenge.size,
       inflightCount: inflightTasks.length,
@@ -328,6 +338,9 @@ export class RuntimeRankOrchestrator {
         .filter((challenge) => challenge.containerActive === true)
         .map((challenge) => challenge.challengeId),
     )
+    for (const challengeId of this.pendingContainerTeardowns.keys()) {
+      reservedContainerChallenges.add(challengeId)
+    }
     const inflightContainerCount = this.countInflightContainerTasks(
       inflightTasks,
       requiresContainerByChallengeId,
@@ -346,6 +359,12 @@ export class RuntimeRankOrchestrator {
     this.preemptLongRunningTasks(now, inflightTasks)
 
     if (availableSlots <= 0) {
+      this.tryPreemptForHigherRankPendingIntent({
+        now,
+        inflightTasks,
+        inflightByChallengeId,
+        requiresContainerByChallengeId,
+      })
       return
     }
 
@@ -376,7 +395,17 @@ export class RuntimeRankOrchestrator {
 
       const requiresContainer = requiresContainerByChallengeId.get(intent.challengeId) ?? true
       const hasActiveContainer = containerActiveByChallengeId.get(intent.challengeId) ?? false
+      if (requiresContainer && this.isContainerTeardownPending(intent.challengeId, now)) {
+        continue
+      }
       if (requiresContainer && !hasActiveContainer && availableContainerSlots <= 0) {
+        this.tryPreemptForContainerSlot({
+          now,
+          incomingIntent: intent,
+          inflightTasks,
+          requiresContainerByChallengeId,
+          containerActiveByChallengeId,
+        })
         continue
       }
 
@@ -499,6 +528,179 @@ export class RuntimeRankOrchestrator {
 
       this.expectedStopTaskIds.add(task.taskId)
       this.host.cancelInflightTask(task.taskId)
+      const managed = this.host
+        .listManagedChallenges()
+        .find((challenge) => challenge.challengeId === task.challengeId)
+      if (managed && managed.requiresContainer !== false && managed.containerActive === true) {
+        this.requestContainerTeardown(task.challengeId)
+      }
+    }
+  }
+
+  private tryPreemptForHigherRankPendingIntent(input: {
+    now: number
+    inflightTasks: DispatchTask[]
+    inflightByChallengeId: Set<number>
+    requiresContainerByChallengeId: Map<number, boolean>
+  }) {
+    const pendingIntents = this.listPendingIntentsSnapshot()
+    for (const intent of pendingIntents) {
+      if (input.inflightByChallengeId.has(intent.challengeId)) {
+        continue
+      }
+
+      const incomingRank = this.resolveChallengeRank(intent.challengeId, input.now)
+      if (incomingRank === undefined) {
+        continue
+      }
+
+      const victim = this.selectPreemptableVictim(input.now, input.inflightTasks, incomingRank)
+      if (!victim) {
+        continue
+      }
+
+      this.expectedStopTaskIds.add(victim.taskId)
+      this.host.cancelInflightTask(victim.taskId)
+      const victimNeedsContainer =
+        input.requiresContainerByChallengeId.get(victim.challengeId) ?? true
+      if (victimNeedsContainer) {
+        this.requestContainerTeardown(victim.challengeId)
+      }
+      this.host.notifyStateChanged()
+      return
+    }
+  }
+
+  private tryPreemptForContainerSlot(input: {
+    now: number
+    incomingIntent: DispatchIntent
+    inflightTasks: DispatchTask[]
+    requiresContainerByChallengeId: Map<number, boolean>
+    containerActiveByChallengeId: Map<number, boolean>
+  }) {
+    const incomingRank = this.resolveChallengeRank(input.incomingIntent.challengeId, input.now)
+    if (incomingRank === undefined) {
+      return
+    }
+
+    const containerVictims = input.inflightTasks.filter((task) => {
+      const requiresContainer = input.requiresContainerByChallengeId.get(task.challengeId) ?? true
+      const containerActive = input.containerActiveByChallengeId.get(task.challengeId) ?? false
+      return requiresContainer && containerActive
+    })
+
+    const victim = this.selectPreemptableVictim(input.now, containerVictims, incomingRank)
+    if (!victim) {
+      return
+    }
+
+    this.expectedStopTaskIds.add(victim.taskId)
+    this.host.cancelInflightTask(victim.taskId)
+    this.requestContainerTeardown(victim.challengeId)
+    this.host.notifyStateChanged()
+  }
+
+  private selectPreemptableVictim(
+    now: number,
+    inflightTasks: DispatchTask[],
+    incomingRank: number,
+  ) {
+    let selected: { task: DispatchTask; rank: number } | undefined
+    for (const task of inflightTasks) {
+      const rankState = this.rankByChallenge.get(task.challengeId)
+      if (!rankState?.activeSince) {
+        continue
+      }
+
+      const activeDurationMs = now - rankState.activeSince
+      if (activeDurationMs < RANK_MIN_RUN_SLICE_MS) {
+        continue
+      }
+
+      const activeRank = computeChallengeRank(rankState, now, true)
+      if (incomingRank < activeRank + RANK_SWAP_MARGIN) {
+        continue
+      }
+
+      if (!selected || activeRank < selected.rank) {
+        selected = {
+          task,
+          rank: activeRank,
+        }
+      }
+    }
+
+    return selected?.task
+  }
+
+  private resolveChallengeRank(challengeId: number, now: number) {
+    const rankState = this.rankByChallenge.get(challengeId)
+    if (!rankState) {
+      return undefined
+    }
+
+    return computeChallengeRank(rankState, now, rankState.queuedSince !== undefined)
+  }
+
+  private isContainerTeardownPending(challengeId: number, now: number) {
+    const teardown = this.pendingContainerTeardowns.get(challengeId)
+    if (!teardown) {
+      return false
+    }
+
+    if (teardown.retryAfter && teardown.retryAfter <= now && !teardown.inFlight) {
+      return true
+    }
+
+    return true
+  }
+
+  private requestContainerTeardown(challengeId: number) {
+    if (this.pendingContainerTeardowns.has(challengeId)) {
+      return
+    }
+
+    this.pendingContainerTeardowns.set(challengeId, { inFlight: false })
+  }
+
+  private flushPendingContainerTeardowns(now: number, inflightByChallengeId: Set<number>) {
+    for (const [challengeId, teardown] of this.pendingContainerTeardowns) {
+      if (inflightByChallengeId.has(challengeId)) {
+        continue
+      }
+
+      if (teardown.inFlight) {
+        continue
+      }
+
+      if (teardown.retryAfter && teardown.retryAfter > now) {
+        continue
+      }
+
+      teardown.inFlight = true
+      void this.host
+        .destroyChallengeContainer(challengeId)
+        .then((destroyed) => {
+          if (destroyed) {
+            this.pendingContainerTeardowns.delete(challengeId)
+            return
+          }
+
+          this.pendingContainerTeardowns.set(challengeId, {
+            inFlight: false,
+            retryAfter: Date.now() + 3_000,
+          })
+        })
+        .catch(() => {
+          this.pendingContainerTeardowns.set(challengeId, {
+            inFlight: false,
+            retryAfter: Date.now() + 3_000,
+          })
+        })
+        .finally(() => {
+          this.host.notifyStateChanged()
+          this.scheduleRebalance(true)
+        })
     }
   }
 
@@ -506,6 +708,9 @@ export class RuntimeRankOrchestrator {
     const now = Date.now()
     const managedChallenges = this.host.listManagedChallenges()
     const managedChallengeIds = new Set<number>()
+    const pendingChallengeIds = new Set(
+      [...this.pendingIntents.values()].map((intent) => intent.challengeId),
+    )
 
     for (const challenge of managedChallenges) {
       managedChallengeIds.add(challenge.challengeId)
@@ -552,8 +757,12 @@ export class RuntimeRankOrchestrator {
       if (activeChallengeIds.has(challengeId)) {
         rankState.activeSince ??= now
         rankState.queuedSince ??= now
+      } else if (pendingChallengeIds.has(challengeId)) {
+        rankState.activeSince = undefined
+        rankState.queuedSince ??= now
       } else {
         rankState.activeSince = undefined
+        rankState.queuedSince = undefined
       }
     }
   }

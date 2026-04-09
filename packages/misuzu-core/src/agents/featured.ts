@@ -53,7 +53,7 @@ export class FeaturedAgent {
     this.agent = new Agent({
       ...opts,
       getApiKey: async (provider) => {
-        const proxyProviderApiKey = deps.providers.getApiKey(provider)
+        const proxyProviderApiKey = await deps.providers.getApiKeyAsync(provider)
         if (proxyProviderApiKey !== undefined) {
           return proxyProviderApiKey
         }
@@ -139,7 +139,11 @@ export class FeaturedAgent {
       await this.agent.prompt(...args)
       this.logger.info(`Prompt finished, duration(ms): ${Date.now() - startTime}`)
     } catch (error) {
-      this.logger.error("Agent prompt failed", summarizeUnknownError(error), error)
+      this.logger.error(
+        "Agent prompt failed",
+        summarizeUnknownError(error),
+        JSON.stringify((error as Error)?.message),
+      )
       throw error
     }
   }

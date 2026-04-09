@@ -2,6 +2,7 @@ import { describe, expect, test } from "vite-plus/test"
 import type { PersistedCTFRuntimeManagedChallenge } from "../../state.ts"
 import { RuntimeRankOrchestrator } from "./rebalancer.ts"
 import type { DispatchTask, SolverTaskResult } from "./queue.ts"
+import { RANK_MIN_RUN_SLICE_MS } from "./rank.ts"
 
 interface ProgressState {
   challengeId: number
@@ -65,6 +66,8 @@ function createRebalancerHarness(options: RebalancerHarnessOptions) {
   let maxConcurrentContainers = options.maxConcurrentContainers ?? Number.POSITIVE_INFINITY
 
   const startedChallengeIds: number[] = []
+  const cancelledTaskIds: string[] = []
+  const destroyedContainerChallengeIds: number[] = []
   const inflightTasksById = new Map<string, DispatchTask>()
   const inflightTaskIdByChallengeId = new Map<number, string>()
   const deferredResultsByTaskId = new Map<string, Deferred<SolverTaskResult>>()
@@ -102,6 +105,7 @@ function createRebalancerHarness(options: RebalancerHarnessOptions) {
       })
     },
     cancelInflightTask: (taskId) => {
+      cancelledTaskIds.push(taskId)
       const deferred = deferredResultsByTaskId.get(taskId)
       if (!deferred) {
         return undefined
@@ -109,6 +113,18 @@ function createRebalancerHarness(options: RebalancerHarnessOptions) {
 
       deferred.reject(new Error(`cancelled ${taskId}`))
       return "inflight"
+    },
+    destroyChallengeContainer: async (challengeId) => {
+      destroyedContainerChallengeIds.push(challengeId)
+      managedChallenges = managedChallenges.map((challenge) =>
+        challenge.challengeId === challengeId
+          ? {
+              ...challenge,
+              containerActive: false,
+            }
+          : challenge,
+      )
+      return true
     },
     abortAllRunningTasks: () => {
       for (const [taskId, deferred] of deferredResultsByTaskId) {
@@ -122,6 +138,8 @@ function createRebalancerHarness(options: RebalancerHarnessOptions) {
   return {
     orchestrator,
     startedChallengeIds,
+    cancelledTaskIds,
+    destroyedContainerChallengeIds,
     setManagedChallenges(next: PersistedCTFRuntimeManagedChallenge[]) {
       managedChallenges = [...next]
     },
@@ -373,5 +391,190 @@ describe("runtime rank orchestrator", () => {
 
     expect(harness.startedChallengeIds).toEqual([1, 2, 3])
     harness.orchestrator.dispose()
+  })
+
+  test("preempts lower-rank inflight solver after min slice for higher-ranked pending challenge", async () => {
+    const originalNow = Date.now
+    let now = Date.now()
+    Date.now = () => now
+
+    const harness = createRebalancerHarness({
+      managedChallenges: [
+        createManagedChallenge({ challengeId: 1, category: "misc", requiresContainer: false }),
+        createManagedChallenge({
+          challengeId: 2,
+          category: "web",
+          requiresContainer: false,
+        }),
+      ],
+      registeredSolverCount: 1,
+      modelTotalCapacity: 1,
+      modelTotalAvailable: 1,
+    })
+
+    try {
+      harness.orchestrator.restorePendingIntents([
+        {
+          taskId: "manual-1",
+          challengeId: 1,
+          source: "manual",
+          priority: 10,
+          createdAt: now - 15 * 60_000,
+          payload: { challenge: 1 },
+        },
+        {
+          taskId: "manual-2",
+          challengeId: 2,
+          source: "manual",
+          priority: 10,
+          createdAt: now - 1_000,
+          payload: { challenge: 2 },
+        },
+      ])
+
+      harness.orchestrator.initialize()
+      harness.orchestrator.scheduleRebalance(true)
+      await settleRebalance()
+
+      expect(harness.startedChallengeIds).toEqual([1])
+
+      harness.orchestrator.restorePendingIntents([
+        {
+          taskId: "manual-2",
+          challengeId: 2,
+          source: "manual",
+          priority: 10,
+          createdAt: now - 20 * 60_000,
+          payload: { challenge: 2 },
+        },
+      ])
+      harness.orchestrator.scheduleRebalance(true)
+      await settleRebalance()
+
+      now += RANK_MIN_RUN_SLICE_MS + 1_000
+      harness.orchestrator.scheduleRebalance(true)
+      await settleRebalance()
+
+      expect(harness.cancelledTaskIds.length).toBe(1)
+      harness.orchestrator.dispose()
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  test("preempts running solver when newly queued challenger gets queue boost", async () => {
+    const originalNow = Date.now
+    let now = Date.now()
+    Date.now = () => now
+
+    const challenge1 = createManagedChallenge({
+      challengeId: 1,
+      category: "misc",
+      requiresContainer: false,
+    })
+    const challenge2 = createManagedChallenge({
+      challengeId: 2,
+      category: "misc",
+      requiresContainer: false,
+    })
+
+    const harness = createRebalancerHarness({
+      managedChallenges: [challenge1],
+      registeredSolverCount: 1,
+      modelTotalCapacity: 1,
+      modelTotalAvailable: 1,
+    })
+
+    try {
+      harness.orchestrator.initialize()
+      harness.orchestrator.setDispatchAutoManaged(true)
+      harness.orchestrator.scheduleRebalance(true)
+      await settleRebalance()
+
+      expect(harness.startedChallengeIds).toEqual([1])
+
+      now += RANK_MIN_RUN_SLICE_MS + 5 * 60_000
+      harness.setManagedChallenges([challenge1, challenge2])
+      harness.orchestrator.onManagedChallengesChanged()
+      await settleRebalance()
+
+      // First pass enqueues the newcomer; second pass evaluates boosted queued rank.
+      harness.orchestrator.scheduleRebalance(true)
+      await settleRebalance()
+
+      expect(harness.cancelledTaskIds.length).toBe(1)
+      harness.orchestrator.dispose()
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  test("waits for teardown completion before starting container replacement", async () => {
+    const originalNow = Date.now
+    let now = Date.now()
+    Date.now = () => now
+
+    const harness = createRebalancerHarness({
+      managedChallenges: [
+        createManagedChallenge({
+          challengeId: 1,
+          category: "pwn",
+          requiresContainer: true,
+          containerActive: true,
+        }),
+        createManagedChallenge({
+          challengeId: 2,
+          category: "web",
+          requiresContainer: true,
+          containerActive: false,
+        }),
+      ],
+      registeredSolverCount: 1,
+      modelTotalCapacity: 1,
+      modelTotalAvailable: 1,
+      maxConcurrentContainers: 1,
+    })
+
+    try {
+      harness.orchestrator.restorePendingIntents([
+        {
+          taskId: "manual-1",
+          challengeId: 1,
+          source: "manual",
+          priority: 10,
+          createdAt: now - 15 * 60_000,
+          payload: { challenge: 1 },
+        },
+        {
+          taskId: "manual-2",
+          challengeId: 2,
+          source: "manual",
+          priority: 10,
+          createdAt: now - 20 * 60_000,
+          payload: { challenge: 2 },
+        },
+      ])
+
+      harness.orchestrator.initialize()
+      harness.orchestrator.scheduleRebalance(true)
+      await settleRebalance()
+
+      expect(harness.startedChallengeIds).toEqual([1])
+
+      harness.orchestrator.scheduleRebalance(true)
+      await settleRebalance()
+
+      now += RANK_MIN_RUN_SLICE_MS + 1_000
+      harness.orchestrator.scheduleRebalance(true)
+      await settleRebalance()
+
+      expect(harness.destroyedContainerChallengeIds).toContain(1)
+
+      await settleRebalance()
+      expect(harness.startedChallengeIds).toContain(2)
+      harness.orchestrator.dispose()
+    } finally {
+      Date.now = originalNow
+    }
   })
 })

@@ -257,7 +257,11 @@ export class WorkspaceModelPool {
         return undefined
       }
 
-      this.logger.error("Failed to load model pool config", { path: this.configFilePath }, error)
+      this.logger.error(
+        "Failed to load model pool config",
+        { path: this.configFilePath },
+        JSON.stringify((error as Error)?.message),
+      )
       throw error
     }
   }

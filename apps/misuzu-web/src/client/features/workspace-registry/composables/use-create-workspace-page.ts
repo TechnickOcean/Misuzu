@@ -1,6 +1,11 @@
 import { computed, onMounted, reactive, ref } from "vue"
 import { useRouter } from "vue-router"
-import type { ModelPoolInput, ProviderCatalogItem, ProviderConfigEntry } from "@shared/protocol.ts"
+import type {
+  ModelPoolInput,
+  OAuthLoginSessionSnapshot,
+  ProviderCatalogItem,
+  ProviderConfigEntry,
+} from "@shared/protocol.ts"
 import {
   createDefaultPluginConfigDraft,
   toPluginConfig,
@@ -17,11 +22,13 @@ import {
   useProviderCatalogQuery,
   useStartRuntimeDispatchMutation,
 } from "@/shared/composables/workspace-requests.ts"
+import { useAppServices } from "@/shared/di/app-services.ts"
 
 type ProviderConfigMode = "form" | "upload"
 
 export function useCreateWorkspacePage() {
   const router = useRouter()
+  const { apiClient } = useAppServices()
 
   const providerCatalogQuery = useProviderCatalogQuery()
   providerCatalogQuery.paramsRef.value.workspaceId = ""
@@ -44,6 +51,11 @@ export function useCreateWorkspacePage() {
   const providerConfigDraft = ref<ProviderConfigEntry[]>([])
   const providerConfigSaved = ref(false)
   const providerConfigError = ref("")
+  const oauthProviderCatalog = ref<string[]>([])
+  const oauthPendingIndex = ref<number | null>(null)
+  const oauthActiveSession = ref<OAuthLoginSessionSnapshot | null>(null)
+  const oauthManualInput = ref("")
+  const oauthManualInputSubmitting = ref(false)
 
   const modelPool = ref<ModelPoolRow[]>([createModelPoolRow()])
 
@@ -70,6 +82,23 @@ export function useCreateWorkspacePage() {
       .map((item) => item.provider)
       .sort((left, right) => left.localeCompare(right)),
   )
+  const oauthProviderOptions = computed(() => {
+    const options = new Set(oauthProviderCatalog.value)
+    for (const entry of providerConfigDraft.value) {
+      if (entry.oauthProvider?.trim()) {
+        options.add(entry.oauthProvider.trim())
+      }
+    }
+
+    return [...options].sort((left, right) => left.localeCompare(right))
+  })
+  const oauthNeedsManualInput = computed(() => {
+    if (!oauthActiveSession.value?.awaitingManualInput) {
+      return false
+    }
+
+    return !isGitHubEnterpriseDomainPrompt(oauthActiveSession.value)
+  })
 
   const normalizedModelPool = computed<ModelPoolInput[]>(() => {
     return modelPool.value.map((item) => ({
@@ -80,8 +109,156 @@ export function useCreateWorkspacePage() {
   })
 
   onMounted(async () => {
-    await providerCatalogQuery.refetch(true)
+    await Promise.all([
+      providerCatalogQuery.refetch(true),
+      apiClient.listOAuthProviders().then((items) => {
+        oauthProviderCatalog.value = items
+      }),
+    ])
   })
+
+  async function loginProviderOAuth(payload: { index: number; oauthProvider: string }) {
+    providerConfigError.value = ""
+    oauthPendingIndex.value = payload.index
+    oauthActiveSession.value = null
+    oauthManualInput.value = ""
+
+    try {
+      const started = await apiClient.startOAuthLogin(payload.oauthProvider)
+      let session = started
+      let manualPromptSignature = ""
+      let githubDomainAutoSubmitted = false
+      oauthActiveSession.value = session
+
+      console.log("[misuzu-oauth] create start", {
+        sessionId: session.id,
+        provider: session.provider,
+        status: session.status,
+      })
+
+      for (let i = 0; i < 240; i += 1) {
+        if (i % 5 === 0) {
+          console.log("[misuzu-oauth] create poll", {
+            sessionId: session.id,
+            iteration: i,
+            status: session.status,
+            awaitingManualInput: session.awaitingManualInput,
+            latestEvent: session.debugEvents?.at(-1),
+          })
+        }
+
+        if (session.awaitingManualInput) {
+          if (isGitHubEnterpriseDomainPrompt(session) && !githubDomainAutoSubmitted) {
+            githubDomainAutoSubmitted = true
+            const configuredDomain =
+              providerConfigDraft.value[payload.index]?.oauthEnterpriseDomain?.trim() ?? ""
+            session = await apiClient.submitOAuthManualCode(session.id, configuredDomain)
+            oauthActiveSession.value = session
+            continue
+          }
+
+          const signature = JSON.stringify({
+            id: session.id,
+            instructions: session.instructions,
+            placeholder: session.manualInputPlaceholder,
+            allowEmpty: session.manualInputAllowEmpty,
+          })
+          if (signature !== manualPromptSignature) {
+            manualPromptSignature = signature
+            oauthManualInput.value = session.manualInputPlaceholder ?? ""
+          }
+        }
+
+        if (session.status === "success") {
+          if (!session.credentials) {
+            throw new Error("OAuth completed but credentials were missing")
+          }
+
+          providerConfigDraft.value = providerConfigDraft.value.map((entry, index) => {
+            if (index !== payload.index) {
+              return entry
+            }
+
+            return {
+              ...entry,
+              providerType: "oauth_provider",
+              oauthProvider: payload.oauthProvider,
+              oauthCredentials: session.credentials,
+              oauthAutoRefresh: true,
+              api_key: undefined,
+              apiKeyEnvVar: undefined,
+              baseProvider: undefined,
+              baseUrl: undefined,
+              modelIds: undefined,
+              modelMappings: undefined,
+            }
+          })
+          providerConfigSaved.value = false
+          oauthActiveSession.value = session
+          oauthManualInput.value = ""
+          console.log("[misuzu-oauth] create success", {
+            sessionId: session.id,
+            provider: payload.oauthProvider,
+          })
+          return
+        }
+
+        if (session.status === "error") {
+          oauthActiveSession.value = session
+          console.error("[misuzu-oauth] create error", {
+            sessionId: session.id,
+            provider: payload.oauthProvider,
+            error: session.error,
+            latestEvent: session.debugEvents?.at(-1),
+          })
+          throw new Error(session.error || "OAuth login failed")
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 1200))
+        session = await apiClient.getOAuthLoginSession(session.id)
+        oauthActiveSession.value = session
+      }
+
+      throw new Error("OAuth login timed out, please retry")
+    } catch (error) {
+      providerConfigError.value = error instanceof Error ? error.message : String(error)
+    } finally {
+      oauthPendingIndex.value = null
+    }
+  }
+
+  async function submitOAuthManualInput() {
+    const session = oauthActiveSession.value
+    if (!session?.awaitingManualInput) {
+      return
+    }
+
+    oauthManualInputSubmitting.value = true
+    providerConfigError.value = ""
+    try {
+      const updated = await apiClient.submitOAuthManualCode(session.id, oauthManualInput.value)
+      oauthActiveSession.value = updated
+      oauthManualInput.value = ""
+    } catch (error) {
+      providerConfigError.value = error instanceof Error ? error.message : String(error)
+    } finally {
+      oauthManualInputSubmitting.value = false
+    }
+  }
+
+  function isGitHubEnterpriseDomainPrompt(session: OAuthLoginSessionSnapshot | null) {
+    if (!session) {
+      return false
+    }
+
+    return (
+      session.provider === "github-copilot" &&
+      session.awaitingManualInput === true &&
+      session.manualInputAllowEmpty === true &&
+      !session.authUrl &&
+      (session.instructions ?? "").includes("GitHub Enterprise URL/domain")
+    )
+  }
 
   function listModelsForProvider(provider: string) {
     const builtinModels =
@@ -321,6 +498,12 @@ export function useCreateWorkspacePage() {
     providerConfigDraft,
     providerConfigSaved,
     providerConfigError,
+    oauthProviderOptions,
+    oauthPendingIndex,
+    oauthActiveSession,
+    oauthNeedsManualInput,
+    oauthManualInput,
+    oauthManualInputSubmitting,
     modelPool,
     selectedPluginId,
     pluginDraft,
@@ -337,6 +520,8 @@ export function useCreateWorkspacePage() {
     removeModelPoolRow,
     importProviderConfigFile,
     markProviderConfigDirty,
+    loginProviderOAuth,
+    submitOAuthManualInput,
     saveProviderConfigDraft,
     nextStep,
     previousStep,

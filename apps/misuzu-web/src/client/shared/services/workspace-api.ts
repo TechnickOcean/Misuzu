@@ -1,5 +1,6 @@
 import type {
   AgentStateSnapshot,
+  OAuthLoginSessionSnapshot,
   ProviderCatalogItem,
   PluginCatalogItem,
   PluginReadmeResponse,
@@ -64,6 +65,44 @@ export class WorkspaceApiClient {
       `/api/providers/catalog${suffix ? `?${suffix}` : ""}`,
     )
     return response.items
+  }
+
+  async listOAuthProviders() {
+    const response = await this.request<{ providers: string[] }>("/api/providers/oauth")
+    return response.providers
+  }
+
+  async startOAuthLogin(provider: string) {
+    const response = await this.request<{ session: OAuthLoginSessionSnapshot }>(
+      "/api/providers/oauth/login",
+      {
+        method: "POST",
+        body: JSON.stringify({ provider }),
+      },
+    )
+    return response.session
+  }
+
+  async getOAuthLoginSession(sessionId: string) {
+    const searchParams = new URLSearchParams({ t: String(Date.now()) })
+    const response = await this.request<{ session: OAuthLoginSessionSnapshot }>(
+      `/api/providers/oauth/login/${encodeURIComponent(sessionId)}?${searchParams.toString()}`,
+      {
+        cache: "no-store",
+      },
+    )
+    return response.session
+  }
+
+  async submitOAuthManualCode(sessionId: string, code: string) {
+    const response = await this.request<{ session: OAuthLoginSessionSnapshot }>(
+      `/api/providers/oauth/login/${encodeURIComponent(sessionId)}/manual-code`,
+      {
+        method: "POST",
+        body: JSON.stringify({ code }),
+      },
+    )
+    return response.session
   }
 
   async getPluginReadme(pluginId: string) {

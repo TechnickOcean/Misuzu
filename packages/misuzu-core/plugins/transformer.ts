@@ -168,6 +168,30 @@ function createRateLimitResult(toolName: string, verdict: RateLimitVerdict, rule
   }
 }
 
+function appendContainerOperationHint(result: {
+  content: Array<{ type: "text"; text: string }>
+  details: unknown
+}) {
+  const [firstContent] = result.content
+  if (!firstContent) {
+    return result
+  }
+
+  return {
+    ...result,
+    content: [
+      {
+        ...firstContent,
+        text: [
+          firstContent.text,
+          "Tip: container open/destroy can fail due to platform-side concurrency limits or temporary backend pressure.",
+          "If this happens, wait briefly and retry instead of repeatedly hammering the operation.",
+        ].join("\n\n"),
+      },
+    ],
+  }
+}
+
 function withRateLimit(
   tool: PluginTool,
   limiter: SlidingWindowRateLimiter,
@@ -264,7 +288,9 @@ export function transformPluginToTools(
           description: "Open/start challenge container and return updated challenge detail.",
           parameters: challengeIdSchema,
           async execute(_toolCallId, params) {
-            return createResult(await plugin.openContainer!(params.challengeId as number))
+            return appendContainerOperationHint(
+              createResult(await plugin.openContainer!(params.challengeId as number)),
+            )
           },
         },
         limiter,
@@ -282,7 +308,9 @@ export function transformPluginToTools(
           description: "Destroy challenge container and return updated challenge detail.",
           parameters: challengeIdSchema,
           async execute(_toolCallId, params) {
-            return createResult(await plugin.destroyContainer!(params.challengeId as number))
+            return appendContainerOperationHint(
+              createResult(await plugin.destroyContainer!(params.challengeId as number)),
+            )
           },
         },
         limiter,

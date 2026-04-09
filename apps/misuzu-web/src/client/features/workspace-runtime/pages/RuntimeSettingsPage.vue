@@ -36,6 +36,12 @@ const {
   providerConfigSaving,
   providerConfigError,
   providerConfigNotice,
+  oauthProviderOptions,
+  oauthPendingIndex,
+  oauthActiveSession,
+  oauthNeedsManualInput,
+  oauthManualInput,
+  oauthManualInputSubmitting,
   modelPoolDraft,
   modelPoolSaving,
   modelPoolError,
@@ -64,6 +70,8 @@ const {
   applyModelPool,
   syncModelPoolDraftFromSnapshot,
   loadSettings,
+  loginProviderOAuth,
+  submitOAuthManualInput,
   saveProviderConfig,
   saveRuntimeConfig,
 } = useRuntimeSettingsPage(props.workspaceId)
@@ -148,7 +156,51 @@ const {
               :disabled="providerConfigSaving"
               :provider-options="providerOptions"
               :base-provider-options="baseProviderOptions"
+              :oauth-provider-options="oauthProviderOptions"
+              :oauth-pending-index="oauthPendingIndex"
+              @oauth-login="loginProviderOAuth"
             />
+
+            <div v-if="oauthActiveSession" class="space-y-2 rounded-md border p-3">
+              <div class="flex flex-wrap items-center gap-2 text-xs">
+                <Badge variant="secondary">OAuth · {{ oauthActiveSession.provider }}</Badge>
+                <Badge variant="outline">Status: {{ oauthActiveSession.status }}</Badge>
+              </div>
+
+              <p v-if="oauthActiveSession.instructions" class="text-sm text-muted-foreground">
+                {{ oauthActiveSession.instructions }}
+              </p>
+
+              <div class="flex flex-wrap items-center gap-2">
+                <a
+                  v-if="oauthActiveSession.authUrl"
+                  :href="oauthActiveSession.authUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="inline-flex h-9 items-center rounded-md border px-3 text-sm hover:bg-accent"
+                >
+                  Open Authorization Page
+                </a>
+              </div>
+
+              <div v-if="oauthNeedsManualInput" class="grid gap-2 md:grid-cols-[1fr_auto]">
+                <Input
+                  v-model="oauthManualInput"
+                  :placeholder="
+                    oauthActiveSession.manualInputPlaceholder || 'Paste code or redirect URL'
+                  "
+                />
+                <Button
+                  :disabled="
+                    oauthManualInputSubmitting ||
+                    (!oauthActiveSession.manualInputAllowEmpty && !oauthManualInput.trim())
+                  "
+                  @click="submitOAuthManualInput"
+                >
+                  {{ oauthManualInputSubmitting ? "Submitting..." : "Continue OAuth" }}
+                </Button>
+              </div>
+            </div>
 
             <div class="flex items-center justify-end gap-2">
               <Button :disabled="providerConfigSaving" @click="saveProviderConfig">

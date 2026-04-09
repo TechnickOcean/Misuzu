@@ -42,13 +42,48 @@ export interface ProviderConfigModelMapping {
 }
 
 export interface ProviderConfigEntry {
+  providerType?: "custom_provider" | "normal_provider" | "oauth_provider"
   provider: string
   baseProvider?: string
   baseUrl?: string
   apiKeyEnvVar?: string
   api_key?: string
+  oauthProvider?: string
+  oauthEnterpriseDomain?: string
+  oauthCredentials?: {
+    refresh: string
+    access: string
+    expires: number
+    [key: string]: unknown
+  }
+  oauthAutoRefresh?: boolean
   modelIds?: string[]
   modelMappings?: Array<string | ProviderConfigModelMapping>
+}
+
+export interface OAuthLoginStartRequest {
+  provider: string
+}
+
+export interface OAuthLoginManualCodeRequest {
+  code: string
+}
+
+export interface OAuthLoginSessionSnapshot {
+  id: string
+  provider: string
+  status: "pending" | "awaiting_auth" | "running" | "success" | "error"
+  awaitingManualInput?: boolean
+  manualInputPlaceholder?: string
+  manualInputAllowEmpty?: boolean
+  debugEvents?: string[]
+  authUrl?: string
+  instructions?: string
+  progressMessage?: string
+  error?: string
+  apiKey?: string
+  credentials?: ProviderConfigEntry["oauthCredentials"]
+  updatedAt: number
 }
 
 export interface ProviderCatalogModel {
@@ -130,6 +165,7 @@ export interface RuntimeWorkspaceSnapshot {
   initialized: boolean
   setupPhase: "plugin_pending" | "env_agent_adapting" | "env_agent_ready_for_settings" | "ready"
   pluginId?: string
+  platformBaseUrl?: string
   paused: boolean
   queue: {
     paused: boolean

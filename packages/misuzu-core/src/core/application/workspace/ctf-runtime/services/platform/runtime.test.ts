@@ -83,6 +83,8 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
   private updates: ContestUpdate[] = []
   private readonly detailsByChallengeId = new Map<number, ChallengeDetail>()
   private pollCursor = 0
+  private challengeSyncCount = 0
+  private noticeSyncCount = 0
 
   constructor(private challenges: ChallengeSummary[]) {}
 
@@ -119,6 +121,13 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
     this.updates.push(update)
   }
 
+  getSyncCounters() {
+    return {
+      challengeSyncCount: this.challengeSyncCount,
+      noticeSyncCount: this.noticeSyncCount,
+    }
+  }
+
   async setup(_config: PluginConfig) {}
 
   async login() {
@@ -147,6 +156,8 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
     if (context.session.cookie !== "sid=mock" || context.contestId !== 1) {
       throw new Error("invalid context")
     }
+
+    this.challengeSyncCount += 1
 
     return [...this.challenges]
   }
@@ -189,6 +200,8 @@ class MockPlatformPlugin implements CTFPlatformPlugin {
     if (context.session.cookie !== "sid=mock" || context.contestId !== 1) {
       throw new Error("invalid context")
     }
+
+    this.noticeSyncCount += 1
 
     const updates = [...this.updates]
     this.updates = []
@@ -397,6 +410,45 @@ describe("ctf runtime platform integration", () => {
     workspace.resumeTaskDispatch()
     await pendingTask
     expect(started).toBe(true)
+
+    await workspace.shutdown()
+  })
+
+  test("does not execute runtime cron jobs while dispatch is paused", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const workspace = createCTFRuntimeWorkspaceWithoutPersistence({ rootDir })
+    const plugin = createPlugin([
+      { id: 404, title: "pause-cron", category: "misc", score: 100, solvedCount: 0 },
+    ])
+
+    await workspace.initializeRuntime({
+      plugin,
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" },
+        auth: { mode: "manual" },
+        maxConcurrentContainers: 1,
+      },
+      startPaused: true,
+      skipContextWarmup: true,
+      skipInitialChallengeSync: true,
+      cron: {
+        noticePollIntervalMs: 25,
+        challengeSyncIntervalMs: 25,
+      },
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect(plugin.getSyncCounters()).toEqual({
+      challengeSyncCount: 0,
+      noticeSyncCount: 0,
+    })
+
+    workspace.resumeTaskDispatch()
+    await waitForCondition(() => {
+      const counters = plugin.getSyncCounters()
+      return counters.challengeSyncCount > 0 && counters.noticeSyncCount > 0
+    })
 
     await workspace.shutdown()
   })

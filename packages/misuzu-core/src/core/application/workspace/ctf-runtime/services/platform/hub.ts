@@ -79,6 +79,10 @@ export interface SolverHubDeps {
   modelPool: WorkspaceModelPool
 }
 
+interface EnsureBindingSolverLoadOptions {
+  allowDetailFetch?: boolean
+}
+
 export class SolverHub {
   private platformPlugin?: CTFPlatformPlugin
   private platformPluginId?: string
@@ -97,6 +101,7 @@ export class SolverHub {
   private readonly contestManager: PlatformContestManager
   private onStateChanged: () => void = () => {}
   private onUnexpectedStop: (event: UnexpectedSolverStopEvent) => void = () => {}
+  private hydrationDeferred = false
 
   constructor(deps: SolverHubDeps) {
     this.logger = deps.logger
@@ -117,6 +122,10 @@ export class SolverHub {
 
   setUnexpectedStopListener(listener: (event: UnexpectedSolverStopEvent) => void) {
     this.onUnexpectedStop = listener
+  }
+
+  setHydrationDeferred(deferred: boolean) {
+    this.hydrationDeferred = deferred
   }
 
   async initialize(options: RuntimeInitOptions) {
@@ -146,7 +155,9 @@ export class SolverHub {
     this.platformNoticeCursor = options.restore?.noticeCursor
     this.solverPromptTemplate = options.solverPromptTemplate
 
-    await this.ensureRuntimeContext()
+    if (!options.skipContextWarmup) {
+      await this.ensureRuntimeContext()
+    }
     this.notifyStateChanged()
   }
 
@@ -409,6 +420,16 @@ export class SolverHub {
     })
   }
 
+  async destroyChallengeContainer(challengeId: number) {
+    const binding = this.challengeSolvers.get(challengeId)
+    if (!binding || !isContainerActive(binding.detail)) {
+      return false
+    }
+
+    await this.destroyContainer(challengeId)
+    return true
+  }
+
   snapshotState(): PersistedCTFRuntimeSolverHubState {
     return {
       managedChallenges: [...this.challengeSolvers.values()].map((binding) => ({
@@ -439,7 +460,7 @@ export class SolverHub {
       existing.challenge = challenge
       this.ensureChallengeProgressState(challenge.id, existing.solverId)
 
-      if (!existing.solver && !this.isChallengeSolved(challenge.id)) {
+      if (!existing.solver && !this.isChallengeSolved(challenge.id) && !this.hydrationDeferred) {
         await this.tryHydrateSolverBinding(existing)
       }
 
@@ -469,7 +490,9 @@ export class SolverHub {
     this.ensureChallengeProgressState(challenge.id, solverId)
 
     if (!binding.solver) {
-      await this.tryHydrateSolverBinding(binding)
+      if (!this.hydrationDeferred) {
+        await this.tryHydrateSolverBinding(binding)
+      }
     }
 
     this.registerQueueSolver(binding)
@@ -485,6 +508,10 @@ export class SolverHub {
   }
 
   async refreshUnassignedSolvers() {
+    if (this.hydrationDeferred) {
+      return
+    }
+
     for (const binding of this.challengeSolvers.values()) {
       if (binding.solver || this.isChallengeSolved(binding.challenge.id)) {
         continue
@@ -576,38 +603,6 @@ export class SolverHub {
     return true
   }
 
-  updateChallengeMetadata(challenge: ChallengeSummary) {
-    const existing = this.challengeSolvers.get(challenge.id)
-    if (!existing) {
-      return false
-    }
-
-    const changed =
-      existing.challenge.score !== challenge.score ||
-      existing.challenge.solvedCount !== challenge.solvedCount ||
-      existing.challenge.title !== challenge.title ||
-      existing.challenge.category !== challenge.category
-
-    if (!changed) {
-      return false
-    }
-
-    const previous = existing.challenge
-    existing.challenge = challenge
-    existing.solver?.steer(
-      [
-        `Platform challenge metadata updated for [${challenge.id}] ${challenge.title}.`,
-        `Score: ${previous.score} -> ${challenge.score}`,
-        `Solved count: ${previous.solvedCount} -> ${challenge.solvedCount}`,
-        "Re-check whether this changes exploit assumptions or expected flag path.",
-      ].join("\n"),
-    )
-
-    this.notifyStateChanged()
-
-    return true
-  }
-
   async refreshChallengeDetail(challengeId: number) {
     const binding = this.challengeSolvers.get(challengeId)
     if (!binding) {
@@ -643,6 +638,17 @@ export class SolverHub {
 
   private async createSolver(solverId: string, options: SolverAgentOptions) {
     return this.solverWorkspaces.getOrCreateSolver(solverId, options)
+  }
+
+  async ensureSolverById(solverId: string) {
+    const binding = [...this.challengeSolvers.values()].find((item) => item.solverId === solverId)
+    if (!binding) {
+      return undefined
+    }
+
+    await this.ensureBindingSolverLoaded(binding, undefined, { allowDetailFetch: false })
+    this.registerQueueSolver(binding)
+    return binding.solver
   }
 
   private async solveWithBinding(
@@ -1023,13 +1029,49 @@ export class SolverHub {
   private async ensureBindingSolverLoaded(
     binding: ChallengeSolverBinding,
     initialModel?: Model<Api>,
+    options: EnsureBindingSolverLoadOptions = {},
   ) {
     if (binding.solver) {
       return binding.solver
     }
 
+    const existingWorkspace = await this.solverWorkspaces.getOrCreateWorkspace(binding.solverId)
+    const existingSolver = existingWorkspace.mainAgent
+    if (existingSolver) {
+      existingSolver.setTools([
+        ...createBaseTools(existingWorkspace.rootDir),
+        ...this.createPlatformTools(),
+      ])
+      if (
+        initialModel &&
+        (!existingSolver.state.model ||
+          existingSolver.state.model.provider !== initialModel.provider ||
+          existingSolver.state.model.id !== initialModel.id)
+      ) {
+        existingSolver.setModel(initialModel)
+      }
+
+      binding.solver = existingSolver
+      binding.rootDir = existingWorkspace.rootDir
+      this.notifyStateChanged()
+      return existingSolver
+    }
+
     if (!binding.detail) {
-      binding.detail = await this.getChallenge(binding.challenge.id)
+      if (options.allowDetailFetch === false) {
+        binding.detail = createFallbackChallengeDetail(binding.challenge)
+      } else {
+        try {
+          binding.detail = await this.getChallenge(binding.challenge.id)
+        } catch (error) {
+          this.logger.warn("Failed to refresh challenge detail during solver hydration", {
+            challengeId: binding.challenge.id,
+            solverId: binding.solverId,
+            reason: error instanceof Error ? error.message : String(error),
+          })
+          binding.detail = createFallbackChallengeDetail(binding.challenge)
+        }
+      }
     }
 
     const managedSolver = await this.createSolver(binding.solverId, {
@@ -1084,6 +1126,20 @@ function resolveTaskChallengeId(payload: unknown) {
 
   const challengeId = (payload as { challenge?: unknown }).challenge
   return typeof challengeId === "number" && Number.isFinite(challengeId) ? challengeId : undefined
+}
+
+function createFallbackChallengeDetail(challenge: ChallengeSummary): ChallengeDetail {
+  return {
+    id: challenge.id,
+    title: challenge.title,
+    category: challenge.category,
+    score: challenge.score,
+    content: "",
+    hints: [],
+    requiresContainer: false,
+    attempts: 0,
+    attachments: [],
+  }
 }
 
 function buildChallengeSolverPrompt(

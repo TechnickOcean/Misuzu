@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, test } from "vite-plus/test"
@@ -144,7 +144,112 @@ class PersistenceMockPlugin implements CTFPlatformPlugin {
   }
 }
 
+class CountingChallengeFetchPlugin extends PersistenceMockPlugin {
+  challengeFetchCount = 0
+
+  override async getChallenge(context: {
+    session: { cookie?: string }
+    contestId: number
+    challengeId: number
+  }): Promise<ChallengeDetail> {
+    this.challengeFetchCount += 1
+    return super.getChallenge(context)
+  }
+}
+
+class ThrowingSyncPlugin extends PersistenceMockPlugin {
+  private readonly inner = new PersistenceMockPlugin()
+
+  override readonly meta = this.inner.meta
+
+  override async setup(config: PluginConfig) {
+    await this.inner.setup(config)
+  }
+
+  override async login() {
+    return this.inner.login()
+  }
+
+  override async validateSession(_session: { cookie?: string }) {
+    throw new Error("validateSession should not run during restore-mode initialization")
+  }
+
+  override async listContests(_session: {
+    cookie?: string
+  }): ReturnType<PersistenceMockPlugin["listContests"]> {
+    throw new Error("listContests should not run during restore-mode initialization")
+  }
+
+  override async listChallenges(_context: {
+    session: { cookie?: string }
+    contestId: number
+  }): ReturnType<PersistenceMockPlugin["listChallenges"]> {
+    throw new Error("listChallenges should not run during restore-mode initialization")
+  }
+
+  override async getChallenge(context: {
+    session: { cookie?: string }
+    contestId: number
+    challengeId: number
+  }) {
+    return this.inner.getChallenge(context)
+  }
+
+  override async submitFlagRaw(context: {
+    session: { cookie?: string }
+    contestId: number
+    challengeId: number
+    flag: string
+  }) {
+    return this.inner.submitFlagRaw(context)
+  }
+
+  override async pollUpdates() {
+    return this.inner.pollUpdates()
+  }
+}
+
 describe("ctf runtime workspace persistence", () => {
+  test("falls back to runtime state backup when primary file is corrupted", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const runtimeWorkspace = await createCTFRuntimeWorkspace({ rootDir })
+    const firstPayload = { marker: "from-primary" }
+    const secondPayload = { marker: "from-latest" }
+
+    await runtimeWorkspace.attachRuntime({
+      runtimeId: "ctf-runtime",
+      getPersistedState: () => firstPayload,
+    })
+    await runtimeWorkspace.persistRuntimeState()
+
+    await runtimeWorkspace.attachRuntime({
+      runtimeId: "ctf-runtime",
+      getPersistedState: () => secondPayload,
+    })
+    await runtimeWorkspace.persistRuntimeState()
+
+    const statePath = join(rootDir, ".misuzu", "runtime", "ctf-runtime-state.json")
+    const backupPath = join(rootDir, ".misuzu", "runtime", "ctf-runtime-state.json.bak")
+    const backupRaw = await readFile(backupPath, "utf-8")
+    await writeFile(statePath, "{ invalid-json", "utf-8")
+
+    const restoredWorkspace = await createCTFRuntimeWorkspace({ rootDir })
+    let restoredPayload: Record<string, unknown> | undefined
+    await restoredWorkspace.attachRuntime({
+      runtimeId: "ctf-runtime",
+      getPersistedState: () => ({}),
+      restoreFromPersistedState: async (payload) => {
+        restoredPayload = payload
+      },
+    })
+
+    expect(backupRaw).toContain(firstPayload.marker)
+    expect(restoredPayload).toEqual(firstPayload)
+
+    await runtimeWorkspace.shutdown()
+    await restoredWorkspace.shutdown()
+  })
+
   test("restores attached runtime payload when runtime id matches", async () => {
     const rootDir = await createRuntimeWorkspaceDir()
     const runtimeWorkspace = await createCTFRuntimeWorkspace({ rootDir })
@@ -309,10 +414,94 @@ describe("ctf runtime workspace persistence", () => {
     })
     await restoredWorkspace.setModelPoolItems([resolveDefaultPoolItem(1)])
 
+    expect(restoredWorkspace.getChallengeSolver(901)).toBeUndefined()
+    await restoredWorkspace.ensureSolverById("solver-901")
     expect(restoredWorkspace.getChallengeSolver(901)).toBeDefined()
     expect(restoredWorkspace.listPendingSchedulerTasks().map((task) => task.taskId)).toContain(
       "task-persisted",
     )
+    await restoredWorkspace.shutdown()
+  })
+
+  test("hydrates persisted solver state without refetching challenge detail", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const runtimeOptions = {
+      plugin: new PersistenceMockPlugin(),
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" as const },
+        auth: { mode: "manual" as const },
+        maxConcurrentContainers: 1,
+      },
+      startPaused: true,
+    }
+
+    const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir, runtime: runtimeOptions })
+    await firstWorkspace.setModelPoolItems([resolveDefaultPoolItem(1)])
+    await firstWorkspace.syncChallengesOnce()
+    await firstWorkspace.ensureSolverById("solver-901")
+    await firstWorkspace.shutdown()
+
+    const runtimeStatePath = join(rootDir, ".misuzu", "runtime", "ctf-runtime-state.json")
+    const persisted = JSON.parse(await readFile(runtimeStatePath, "utf-8")) as {
+      runtime?: {
+        solverHub?: {
+          managedChallenges?: Array<Record<string, unknown>>
+        }
+      }
+    }
+
+    const managed = persisted.runtime?.solverHub?.managedChallenges
+    expect(Array.isArray(managed) && managed.length > 0).toBe(true)
+    for (const challenge of managed ?? []) {
+      delete challenge.requiresContainer
+      delete challenge.containerActive
+    }
+
+    await writeFile(runtimeStatePath, `${JSON.stringify(persisted, null, 2)}\n`, "utf-8")
+
+    const countingPlugin = new CountingChallengeFetchPlugin()
+    const restoredWorkspace = await createCTFRuntimeWorkspace({
+      rootDir,
+      runtime: {
+        ...runtimeOptions,
+        plugin: countingPlugin,
+      },
+    })
+
+    const challengeFetchCountBeforeEnsure = countingPlugin.challengeFetchCount
+    await expect(restoredWorkspace.ensureSolverById("solver-901")).resolves.toBeDefined()
+    expect(restoredWorkspace.getChallengeSolver(901)).toBeDefined()
+    expect(countingPlugin.challengeFetchCount).toBe(challengeFetchCountBeforeEnsure)
+    await restoredWorkspace.shutdown()
+  })
+
+  test("restores runtime snapshot without forcing platform sync on reopen", async () => {
+    const rootDir = await createRuntimeWorkspaceDir()
+    const runtimeOptions = {
+      plugin: new PersistenceMockPlugin(),
+      pluginConfig: {
+        baseUrl: "https://example.com",
+        contest: { mode: "auto" as const },
+        auth: { mode: "manual" as const },
+        maxConcurrentContainers: 1,
+      },
+      startPaused: true,
+    }
+
+    const firstWorkspace = await createCTFRuntimeWorkspace({ rootDir, runtime: runtimeOptions })
+    await firstWorkspace.syncChallengesOnce()
+    expect(firstWorkspace.getManagedChallengeIds()).toContain(901)
+    await firstWorkspace.shutdown()
+
+    const restoredWorkspace = await createCTFRuntimeWorkspace({
+      rootDir,
+      runtime: {
+        ...runtimeOptions,
+        plugin: new ThrowingSyncPlugin(),
+      },
+    })
+    expect(restoredWorkspace.getManagedChallengeIds()).toContain(901)
     await restoredWorkspace.shutdown()
   })
 

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs"
+import type { OAuthCredentials } from "@mariozechner/pi-ai/oauth"
 import type { ProviderRegistry, ProxyProviderOptions } from "../../providers/registry.ts"
 import type { Logger } from "../../../infrastructure/logging/types.ts"
 
@@ -11,6 +12,28 @@ interface ProviderConfigEntry {
   apiKey?: string
   modelIds?: string[]
   modelMappings?: ProxyProviderOptions["modelMappings"]
+  oauthProvider?: string
+  oauthCredentials?: OAuthCredentials
+  oauthAutoRefresh?: boolean
+}
+
+function isOAuthCredentials(value: unknown): value is OAuthCredentials {
+  if (!value || typeof value !== "object") {
+    return false
+  }
+
+  const candidate = value as {
+    refresh?: unknown
+    access?: unknown
+    expires?: unknown
+  }
+
+  return (
+    typeof candidate.refresh === "string" &&
+    typeof candidate.access === "string" &&
+    typeof candidate.expires === "number" &&
+    Number.isFinite(candidate.expires)
+  )
 }
 
 export interface ProxyProviderBootstrapOptions {
@@ -73,6 +96,15 @@ export class ProxyProviderBootstrap {
                   typeof item === "string" || (Boolean(item) && typeof item === "object"),
               )
             : undefined,
+          oauthProvider:
+            typeof entry.oauthProvider === "string" && entry.oauthProvider.trim().length > 0
+              ? entry.oauthProvider.trim()
+              : undefined,
+          oauthCredentials: isOAuthCredentials(entry.oauthCredentials)
+            ? entry.oauthCredentials
+            : undefined,
+          oauthAutoRefresh:
+            typeof entry.oauthAutoRefresh === "boolean" ? entry.oauthAutoRefresh : undefined,
         }))
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -128,6 +160,13 @@ export class ProxyProviderBootstrap {
         apiKeyEnvVar: entry.apiKeyEnvVar,
         api_key: entry.api_key,
         apiKey: entry.apiKey,
+      })
+
+      this.providers.registerOAuthCredentials({
+        provider: entry.provider,
+        oauthProvider: entry.oauthProvider,
+        credentials: entry.oauthCredentials,
+        autoRefresh: entry.oauthAutoRefresh,
       })
     }
 

@@ -24,22 +24,29 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
+type ProviderType = "custom_provider" | "normal_provider" | "oauth_provider"
+
 const props = withDefaults(
   defineProps<{
     modelValue: ProviderConfigEntry[]
     disabled?: boolean
     providerOptions?: string[]
     baseProviderOptions?: string[]
+    oauthProviderOptions?: string[]
+    oauthPendingIndex?: number | null
   }>(),
   {
     disabled: false,
     providerOptions: () => [],
     baseProviderOptions: () => [],
+    oauthProviderOptions: () => [],
+    oauthPendingIndex: null,
   },
 )
 
 const emit = defineEmits<{
   (event: "update:modelValue", payload: ProviderConfigEntry[]): void
+  (event: "oauth-login", payload: { index: number; oauthProvider: string }): void
 }>()
 
 const rows = computed(() => props.modelValue)
@@ -48,12 +55,10 @@ function addEntry() {
   emit("update:modelValue", [
     ...rows.value,
     {
+      providerType: "normal_provider",
       provider: "",
-      baseProvider: "",
-      baseUrl: "",
       apiKeyEnvVar: "",
       api_key: "$env:OPENAI_API_KEY",
-      modelMappings: [],
     },
   ])
 }
@@ -80,22 +85,81 @@ function patchEntry(index: number, patch: Partial<ProviderConfigEntry>) {
   emit("update:modelValue", next)
 }
 
-function setEntryMode(index: number, mode: string) {
-  if (mode === "proxy") {
-    patchEntry(index, { baseProvider: rows.value[index]?.baseProvider?.trim() || "openai" })
+function getEntryType(entry: ProviderConfigEntry): ProviderType {
+  if (
+    entry.providerType === "custom_provider" ||
+    entry.providerType === "normal_provider" ||
+    entry.providerType === "oauth_provider"
+  ) {
+    return entry.providerType
+  }
+
+  if (entry.oauthCredentials || entry.oauthProvider) {
+    return "oauth_provider"
+  }
+
+  if (entry.baseProvider) {
+    return "custom_provider"
+  }
+
+  return "normal_provider"
+}
+
+function setEntryType(index: number, nextType: string) {
+  const type: ProviderType =
+    nextType === "custom_provider" || nextType === "oauth_provider" ? nextType : "normal_provider"
+
+  const current = rows.value[index]
+  if (!current) {
+    return
+  }
+
+  if (type === "custom_provider") {
+    patchEntry(index, {
+      providerType: type,
+      baseProvider: current.baseProvider?.trim() || "openai",
+      oauthProvider: undefined,
+      oauthEnterpriseDomain: undefined,
+      oauthCredentials: undefined,
+      oauthAutoRefresh: undefined,
+    })
+    return
+  }
+
+  if (type === "oauth_provider") {
+    const defaultOauthProvider =
+      current.oauthProvider?.trim() ||
+      current.provider?.trim() ||
+      props.oauthProviderOptions[0] ||
+      ""
+
+    patchEntry(index, {
+      providerType: type,
+      baseProvider: undefined,
+      baseUrl: undefined,
+      modelIds: undefined,
+      modelMappings: undefined,
+      apiKeyEnvVar: undefined,
+      api_key: undefined,
+      oauthProvider: defaultOauthProvider,
+      oauthEnterpriseDomain:
+        (defaultOauthProvider === "github-copilot" && current.oauthEnterpriseDomain) || undefined,
+      oauthAutoRefresh: true,
+    })
     return
   }
 
   patchEntry(index, {
+    providerType: type,
     baseProvider: undefined,
     baseUrl: undefined,
     modelIds: undefined,
     modelMappings: undefined,
+    oauthProvider: undefined,
+    oauthEnterpriseDomain: undefined,
+    oauthCredentials: undefined,
+    oauthAutoRefresh: undefined,
   })
-}
-
-function getEntryMode(entry: ProviderConfigEntry) {
-  return entry.baseProvider ? "proxy" : "builtin"
 }
 
 function getMappingsText(entry: ProviderConfigEntry) {
@@ -150,6 +214,68 @@ function listBaseProviderOptions(current: string | undefined) {
 
   return [...options].sort((left, right) => left.localeCompare(right))
 }
+
+function listProviderOptions(current: string | undefined) {
+  const options = new Set(props.providerOptions)
+  const normalized = current?.trim()
+  if (normalized) {
+    options.add(normalized)
+  }
+
+  return [...options].sort((left, right) => left.localeCompare(right))
+}
+
+function listOAuthProviderOptions(current: string | undefined) {
+  const options = new Set(props.oauthProviderOptions)
+  const normalized = current?.trim()
+  if (normalized) {
+    options.add(normalized)
+  }
+
+  return [...options].sort((left, right) => left.localeCompare(right))
+}
+
+function triggerOAuthLogin(index: number, entry: ProviderConfigEntry) {
+  const oauthProvider = entry.oauthProvider?.trim() || entry.provider?.trim()
+  if (!oauthProvider) {
+    return
+  }
+
+  emit("oauth-login", { index, oauthProvider })
+}
+
+function setOAuthProvider(index: number, value: string) {
+  const oauthProvider = value.trim()
+  patchEntry(index, {
+    oauthProvider,
+    oauthEnterpriseDomain:
+      oauthProvider === "github-copilot" ? rows.value[index]?.oauthEnterpriseDomain : undefined,
+  })
+}
+
+function isGitHubCopilotOAuth(entry: ProviderConfigEntry) {
+  return (entry.oauthProvider?.trim() || entry.provider?.trim()) === "github-copilot"
+}
+
+function isEnterpriseDomainConfigVisible(entry: ProviderConfigEntry) {
+  return typeof entry.oauthEnterpriseDomain === "string"
+}
+
+function enableEnterpriseDomainConfig(index: number) {
+  patchEntry(index, { oauthEnterpriseDomain: "" })
+}
+
+function disableEnterpriseDomainConfig(index: number) {
+  patchEntry(index, { oauthEnterpriseDomain: undefined })
+}
+
+function formatExpireTime(expiresAt: number | undefined) {
+  if (!expiresAt || !Number.isFinite(expiresAt)) {
+    return "unknown"
+  }
+
+  return new Date(expiresAt).toLocaleString()
+}
 </script>
 
 <template>
@@ -189,32 +315,65 @@ function listBaseProviderOptions(current: string | undefined) {
       <div class="grid gap-4 md:grid-cols-3">
         <div class="grid gap-2">
           <label class="text-sm font-medium">Provider Name</label>
-          <Input
+          <Combobox
             :model-value="entry.provider"
             :disabled="disabled"
-            list="provider-config-provider-options"
-            placeholder="e.g. openai"
-            @update:model-value="(value) => patchEntry(index, { provider: String(value) })"
-          />
+            @update:model-value="(value) => patchEntry(index, { provider: String(value ?? '') })"
+          >
+            <ComboboxAnchor class="w-full">
+              <ComboboxTrigger as-child>
+                <Button
+                  type="button"
+                  variant="outline"
+                  class="w-full justify-between font-normal"
+                  :disabled="disabled"
+                >
+                  <span class="truncate">{{ entry.provider || "Select provider" }}</span>
+                  <ChevronsUpDownIcon class="size-4 shrink-0 opacity-50" />
+                </Button>
+              </ComboboxTrigger>
+            </ComboboxAnchor>
+
+            <ComboboxList class="w-(--reka-popper-anchor-width) p-0">
+              <ComboboxInput placeholder="Search provider..." />
+              <ComboboxEmpty>No provider found.</ComboboxEmpty>
+              <ComboboxViewport>
+                <ComboboxGroup>
+                  <ComboboxItem
+                    v-for="option in listProviderOptions(entry.provider)"
+                    :key="option"
+                    :value="option"
+                    class="justify-between"
+                  >
+                    <span class="truncate">{{ option }}</span>
+                    <ComboboxItemIndicator>
+                      <CheckIcon class="size-4" />
+                    </ComboboxItemIndicator>
+                  </ComboboxItem>
+                </ComboboxGroup>
+              </ComboboxViewport>
+            </ComboboxList>
+          </Combobox>
         </div>
 
         <div class="grid gap-2">
-          <label class="text-sm font-medium">Type</label>
+          <label class="text-sm font-medium">Provider Type</label>
           <Select
-            :model-value="getEntryMode(entry)"
-            @update:model-value="(value) => setEntryMode(index, value)"
+            :model-value="getEntryType(entry)"
+            @update:model-value="(value) => setEntryType(index, value)"
           >
             <SelectTrigger>
               <SelectValue placeholder="Select provider type" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="builtin">Built-in Provider</SelectItem>
-              <SelectItem value="proxy">Proxy Provider</SelectItem>
+              <SelectItem value="normal_provider">normal_provider</SelectItem>
+              <SelectItem value="custom_provider">custom_provider</SelectItem>
+              <SelectItem value="oauth_provider">oauth_provider</SelectItem>
             </SelectContent>
           </Select>
         </div>
 
-        <template v-if="getEntryMode(entry) === 'proxy'">
+        <template v-if="getEntryType(entry) === 'custom_provider'">
           <div class="grid gap-2">
             <label class="text-sm font-medium">Base Provider</label>
             <Combobox
@@ -260,12 +419,59 @@ function listBaseProviderOptions(current: string | undefined) {
             </Combobox>
           </div>
         </template>
+
+        <template v-if="getEntryType(entry) === 'oauth_provider'">
+          <div class="grid gap-2">
+            <label class="text-sm font-medium">OAuth Provider</label>
+            <Combobox
+              :model-value="entry.oauthProvider ?? ''"
+              :disabled="disabled"
+              @update:model-value="(value) => setOAuthProvider(index, String(value ?? ''))"
+            >
+              <ComboboxAnchor class="w-full">
+                <ComboboxTrigger as-child>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    class="w-full justify-between font-normal"
+                    :disabled="disabled"
+                  >
+                    <span class="truncate">{{
+                      entry.oauthProvider || "Select OAuth provider"
+                    }}</span>
+                    <ChevronsUpDownIcon class="size-4 shrink-0 opacity-50" />
+                  </Button>
+                </ComboboxTrigger>
+              </ComboboxAnchor>
+
+              <ComboboxList class="w-(--reka-popper-anchor-width) p-0">
+                <ComboboxInput placeholder="Search OAuth provider..." />
+                <ComboboxEmpty>No provider found.</ComboboxEmpty>
+                <ComboboxViewport>
+                  <ComboboxGroup>
+                    <ComboboxItem
+                      v-for="oauthProvider in listOAuthProviderOptions(entry.oauthProvider)"
+                      :key="oauthProvider"
+                      :value="oauthProvider"
+                      class="justify-between"
+                    >
+                      <span class="truncate">{{ oauthProvider }}</span>
+                      <ComboboxItemIndicator>
+                        <CheckIcon class="size-4" />
+                      </ComboboxItemIndicator>
+                    </ComboboxItem>
+                  </ComboboxGroup>
+                </ComboboxViewport>
+              </ComboboxList>
+            </Combobox>
+          </div>
+        </template>
       </div>
 
-      <template v-if="getEntryMode(entry) === 'proxy'">
+      <template v-if="getEntryType(entry) === 'custom_provider'">
         <div class="grid gap-2">
           <label class="text-sm font-medium"
-            >Base URL <span class="text-muted-foreground font-normal ml-1">(Optional)</span></label
+            >Base URL <span class="ml-1 font-normal text-muted-foreground">(Optional)</span></label
           >
           <Input
             :model-value="entry.baseUrl"
@@ -276,10 +482,82 @@ function listBaseProviderOptions(current: string | undefined) {
         </div>
       </template>
 
-      <div class="grid gap-4 md:grid-cols-2">
+      <template v-if="getEntryType(entry) === 'oauth_provider'">
+        <div
+          v-if="isGitHubCopilotOAuth(entry)"
+          class="grid gap-2 rounded-md border border-dashed p-3"
+        >
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <p class="text-xs text-muted-foreground">
+              Default uses <code>github.com</code>. Configure enterprise domain only when needed.
+            </p>
+            <Button
+              v-if="!isEnterpriseDomainConfigVisible(entry)"
+              type="button"
+              variant="ghost"
+              size="sm"
+              :disabled="disabled"
+              @click="enableEnterpriseDomainConfig(index)"
+            >
+              Configure Domain
+            </Button>
+            <Button
+              v-else
+              type="button"
+              variant="ghost"
+              size="sm"
+              :disabled="disabled"
+              @click="disableEnterpriseDomainConfig(index)"
+            >
+              Use github.com
+            </Button>
+          </div>
+
+          <div v-if="isEnterpriseDomainConfigVisible(entry)" class="grid gap-2">
+            <label class="text-sm font-medium">GitHub Enterprise Domain</label>
+            <Input
+              :model-value="entry.oauthEnterpriseDomain"
+              :disabled="disabled"
+              placeholder="company.ghe.com"
+              @update:model-value="
+                (value) => patchEntry(index, { oauthEnterpriseDomain: String(value ?? '') })
+              "
+            />
+          </div>
+        </div>
+
+        <div class="grid gap-2 md:grid-cols-[1fr_auto] md:items-end">
+          <div class="text-xs text-muted-foreground">
+            <p v-if="entry.oauthCredentials">
+              OAuth token is ready. Expires at
+              {{ formatExpireTime(entry.oauthCredentials.expires) }}.
+            </p>
+            <p v-else>Click login to authorize this provider.</p>
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            :disabled="
+              disabled || oauthPendingIndex === index || !(entry.oauthProvider || entry.provider)
+            "
+            @click="triggerOAuthLogin(index, entry)"
+          >
+            {{
+              oauthPendingIndex === index
+                ? "Authorizing..."
+                : entry.oauthCredentials
+                  ? "Re-authorize"
+                  : "OAuth Login"
+            }}
+          </Button>
+        </div>
+      </template>
+
+      <div v-if="getEntryType(entry) !== 'oauth_provider'" class="grid gap-4 md:grid-cols-2">
         <div class="grid gap-2">
           <label class="text-sm font-medium"
-            >API Key <span class="text-muted-foreground font-normal ml-1">(Optional)</span></label
+            >API Key <span class="ml-1 font-normal text-muted-foreground">(Optional)</span></label
           >
           <Input
             :model-value="entry.api_key"
@@ -293,7 +571,7 @@ function listBaseProviderOptions(current: string | undefined) {
         <div class="grid gap-2">
           <label class="text-sm font-medium"
             >Env Variable
-            <span class="text-muted-foreground font-normal ml-1">(Optional)</span></label
+            <span class="ml-1 font-normal text-muted-foreground">(Optional)</span></label
           >
           <Input
             :model-value="entry.apiKeyEnvVar"
@@ -304,11 +582,11 @@ function listBaseProviderOptions(current: string | undefined) {
         </div>
       </div>
 
-      <template v-if="getEntryMode(entry) === 'proxy'">
+      <template v-if="getEntryType(entry) === 'custom_provider'">
         <div class="grid gap-2">
-          <label class="text-sm font-medium flex items-center justify-between">
+          <label class="flex items-center justify-between text-sm font-medium">
             <span>Model Mappings</span>
-            <span class="text-xs text-muted-foreground font-normal"
+            <span class="text-xs font-normal text-muted-foreground"
               >Use comma separated values. Map with <code>source:target</code></span
             >
           </label>
@@ -322,12 +600,14 @@ function listBaseProviderOptions(current: string | undefined) {
       </template>
     </article>
 
-    <datalist id="provider-config-provider-options">
-      <option v-for="option in providerOptions" :key="option" :value="option"></option>
-    </datalist>
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <Button type="button" variant="outline" :disabled="disabled" @click="addEntry">
+        Add Provider
+      </Button>
 
-    <Button type="button" variant="outline" :disabled="disabled" @click="addEntry">
-      Add Provider
-    </Button>
+      <div v-if="$slots.actions" class="flex items-center gap-2">
+        <slot name="actions" />
+      </div>
+    </div>
   </div>
 </template>

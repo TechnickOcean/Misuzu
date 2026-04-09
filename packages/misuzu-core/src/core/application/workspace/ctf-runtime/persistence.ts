@@ -12,9 +12,13 @@ import {
 
 const CTF_RUNTIME_STATE_DIR = "runtime"
 const CTF_RUNTIME_STATE_FILE = "ctf-runtime-state.json"
+const CTF_RUNTIME_STATE_BACKUP_FILE = "ctf-runtime-state.json.bak"
+const CTF_RUNTIME_STATE_TEMP_FILE = "ctf-runtime-state.json.tmp"
 
 export class CTFRuntimePersistence {
   private stateFilePath = ""
+  private stateBackupFilePath = ""
+  private stateTempFilePath = ""
   private state: PersistedCTFRuntimeWorkspaceState | null = null
   private initialized = false
 
@@ -28,6 +32,8 @@ export class CTFRuntimePersistence {
     const paths = resolveWorkspacePaths(workspaceRootDir)
     const runtimeDir = join(paths.markerDir, CTF_RUNTIME_STATE_DIR)
     this.stateFilePath = join(runtimeDir, CTF_RUNTIME_STATE_FILE)
+    this.stateBackupFilePath = join(runtimeDir, CTF_RUNTIME_STATE_BACKUP_FILE)
+    this.stateTempFilePath = join(runtimeDir, CTF_RUNTIME_STATE_TEMP_FILE)
 
     await fs.mkdir(runtimeDir, { recursive: true })
     this.state = await this.loadFromDisk()
@@ -74,6 +80,22 @@ export class CTFRuntimePersistence {
         throw error
       }
     }
+
+    try {
+      await fs.unlink(this.stateBackupFilePath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error
+      }
+    }
+
+    try {
+      await fs.unlink(this.stateTempFilePath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error
+      }
+    }
   }
 
   private ensureInitialized() {
@@ -88,8 +110,7 @@ export class CTFRuntimePersistence {
     }
 
     try {
-      const raw = await fs.readFile(this.stateFilePath, "utf-8")
-      const state = JSON.parse(raw) as PersistedCTFRuntimeWorkspaceState
+      const state = await this.readStateFile(this.stateFilePath)
       // Keep loading older snapshots so operators can migrate state manually.
       if (state.version !== CTF_RUNTIME_STATE_VERSION) {
         this.logger.warn("State version mismatch", {
@@ -99,16 +120,62 @@ export class CTFRuntimePersistence {
       }
       return state
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return null
+      const backupState = await this.tryLoadBackupState(error)
+      if (backupState) {
+        return backupState
       }
 
-      this.logger.warn("Failed to load runtime state", error)
+      this.logger.warn("Failed to load runtime state", JSON.stringify((error as Error)?.message))
       return null
     }
   }
 
   private async saveToDisk(state: PersistedCTFRuntimeWorkspaceState) {
-    await fs.writeFile(this.stateFilePath, JSON.stringify(state, null, 2), "utf-8")
+    const serialized = JSON.stringify(state, null, 2)
+    await fs.writeFile(this.stateTempFilePath, serialized, "utf-8")
+
+    try {
+      await fs.copyFile(this.stateFilePath, this.stateBackupFilePath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error
+      }
+    }
+
+    try {
+      await fs.unlink(this.stateFilePath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error
+      }
+    }
+
+    await fs.rename(this.stateTempFilePath, this.stateFilePath)
+  }
+
+  private async readStateFile(filePath: string) {
+    const raw = await fs.readFile(filePath, "utf-8")
+    return JSON.parse(raw) as PersistedCTFRuntimeWorkspaceState
+  }
+
+  private async tryLoadBackupState(loadError: unknown) {
+    if ((loadError as NodeJS.ErrnoException).code === "ENOENT") {
+      return null
+    }
+
+    try {
+      const backup = await this.readStateFile(this.stateBackupFilePath)
+      this.logger.warn("Primary runtime state is unreadable, restored from backup", {
+        primaryPath: this.stateFilePath,
+        backupPath: this.stateBackupFilePath,
+      })
+      return backup
+    } catch (backupError) {
+      this.logger.warn(
+        "Failed to load runtime state backup",
+        JSON.stringify((backupError as Error)?.message),
+      )
+      return null
+    }
   }
 }

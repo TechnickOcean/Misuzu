@@ -38,7 +38,7 @@ const props = withDefaults(
     rank: undefined,
     loading: false,
     compact: false,
-    defaultPromptMode: "followup",
+    defaultPromptMode: "steer",
   },
 )
 
