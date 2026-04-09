@@ -5,7 +5,7 @@ const targets = [
   {
     name: "client",
     color: "\x1b[36m",
-    args: ["run", "dev:client"],
+    args: ["run", "dev:client", "--host"],
   },
   {
     name: "server",

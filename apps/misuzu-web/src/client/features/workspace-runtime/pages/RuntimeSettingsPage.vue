@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { CheckIcon, ChevronsUpDownIcon } from "lucide-vue-next"
+import {
+  CheckIcon,
+  ChevronsUpDownIcon,
+  FileCode2Icon,
+  NetworkIcon,
+  BoxesIcon,
+  TriangleAlertIcon,
+} from "lucide-vue-next"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -99,10 +106,22 @@ const {
 
         <Tabs default-value="runtime" class="space-y-4">
           <TabsList class="grid w-full grid-cols-4">
-            <TabsTrigger value="runtime">Prompt & Plugin</TabsTrigger>
-            <TabsTrigger value="providers">Providers</TabsTrigger>
-            <TabsTrigger value="model-pool">Model Pool</TabsTrigger>
-            <TabsTrigger value="danger">Danger Zone</TabsTrigger>
+            <TabsTrigger value="runtime" class="gap-1.5">
+              <FileCode2Icon class="size-4 shrink-0" />
+              <span class="hidden sm:inline">Prompt & Plugin</span>
+            </TabsTrigger>
+            <TabsTrigger value="providers" class="gap-1.5">
+              <NetworkIcon class="size-4 shrink-0" />
+              <span class="hidden sm:inline">Providers</span>
+            </TabsTrigger>
+            <TabsTrigger value="model-pool" class="gap-1.5">
+              <BoxesIcon class="size-4 shrink-0" />
+              <span class="hidden sm:inline">Model Pool</span>
+            </TabsTrigger>
+            <TabsTrigger value="danger" class="gap-1.5">
+              <TriangleAlertIcon class="size-4 shrink-0" />
+              <span class="hidden sm:inline">Danger Zone</span>
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="runtime" class="space-y-3">

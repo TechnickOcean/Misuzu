@@ -198,28 +198,52 @@ export const defaultBashOperations: BashOperations = {
       let timeoutId: ReturnType<typeof setTimeout> | undefined
       let timedOut = false
       let aborted = false
+      let settled = false
+
+      const settle = (exitCode: number | null, timedOutVal: boolean, abortedVal: boolean) => {
+        if (settled) return
+        settled = true
+        if (timeoutId) clearTimeout(timeoutId)
+        signal?.removeEventListener("abort", onAbort)
+        resolve({ exitCode, timedOut: timedOutVal, aborted: abortedVal })
+      }
+
+      const killProcess = (force: boolean) => {
+        if (!child.pid) return
+        const signalName = force ? "SIGKILL" : "SIGTERM"
+        try {
+          if (isWindows) {
+            const killCmd = force
+              ? `taskkill /PID ${child.pid} /T /F`
+              : `taskkill /PID ${child.pid} /T`
+            spawn("cmd.exe", ["/C", killCmd], { windowsHide: true })
+          } else {
+            try {
+              process.kill(-child.pid, signalName)
+            } catch {
+              child.kill(signalName)
+            }
+          }
+        } catch {
+          try {
+            child.kill(signalName)
+          } catch {}
+        }
+      }
+
       if (timeout) {
         timeoutId = setTimeout(() => {
           timedOut = true
-          if (child.pid) {
-            try {
-              process.kill(-child.pid, "SIGTERM")
-            } catch {
-              child.kill("SIGTERM")
-            }
-          }
+          killProcess(false)
+          setTimeout(() => {
+            if (!settled) killProcess(true)
+          }, 500)
         }, timeout)
       }
 
       const onAbort = () => {
         aborted = true
-        if (child.pid) {
-          try {
-            process.kill(-child.pid, "SIGTERM")
-          } catch {
-            child.kill("SIGTERM")
-          }
-        }
+        killProcess(true)
       }
       if (signal) {
         if (signal.aborted) {
@@ -229,12 +253,12 @@ export const defaultBashOperations: BashOperations = {
       }
 
       child.on("close", (code) => {
-        if (timeoutId) clearTimeout(timeoutId)
-        signal?.removeEventListener("abort", onAbort)
-        resolve({ exitCode: code, timedOut, aborted })
+        settle(code, timedOut, aborted)
       })
 
       child.on("error", (err) => {
+        if (settled) return
+        settled = true
         if (timeoutId) clearTimeout(timeoutId)
         signal?.removeEventListener("abort", onAbort)
         reject(err)
